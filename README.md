@@ -56,3 +56,29 @@ The key advantages of these methods for our use case:
 
 We can experiment with these different approaches to find which one creates the most useful representations for our grid-based program synthesis task. The ideal encoding would cleanly separate different visual attributes while maintaining enough structure to guide the search process.
 
+
+Transformer-based models can also be effectively used for autoencoding:
+
+
+1. Vision Transformer (ViT) Autoencoder
+   - Splits image into patches and uses transformer encoder-decoder architecture
+   - Self-attention helps capture global relationships between patches
+   - Can learn powerful latent representations of visual data
+
+2. VQGAN (Vector Quantized GAN with Transformers)
+   - Combines transformer with vector quantization for discrete latent space
+   - Particularly good at capturing high-level semantic features
+   - Can generate high-quality reconstructions while maintaining semantic structure
+
+3. MAE (Masked Autoencoder)
+   - Randomly masks patches and tries to reconstruct them
+   - Very effective self-supervised learning approach
+   - Creates robust and meaningful latent representations
+
+Key benefits of transformer-based autoencoders:
+- Better at capturing long-range dependencies than CNNs
+- Can handle variable-sized inputs naturally
+- Strong inductive biases for modeling relationships between parts
+- Scale well with more data and compute
+
+These approaches could be particularly valuable for our grid-based task since they excel at modeling structural relationships and patterns across the entire input.

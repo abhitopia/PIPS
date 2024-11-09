@@ -1,0 +1,4 @@
+name: beta_vae
+latent_dim: 128
+beta: 4.0
+hidden_dims: [32, 64, 128, 256] 
