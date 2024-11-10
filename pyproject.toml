@@ -2,7 +2,7 @@
 name = "pips"
 version = "0.1.0"
 description = "Perception Informed Program Synthesis"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["abhitopia@is.me"]
 readme = "README.md"
 packages = [{include = "pips"}]
 

@@ -1,0 +1,6 @@
+[submodule "data/arc_dataset_collection"]
+	path = data/arc_dataset_collection
+	url = git@github.com:neoneye/arc-dataset-collection.git
+[submodule "data/arc_synth_tasks"]
+	path = data/arc_synth_tasks
+	url = git@github.com:abhitopia/ARCSynthTasks.git
