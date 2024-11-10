@@ -17,7 +17,7 @@ app = typer.Typer(
 @app.command()
 def train(
     config_path: Path = typer.Option(
-        "pips/config/config.yaml",
+        "config/config.yaml",
         help="Path to the config file",
         exists=True,
     ),
