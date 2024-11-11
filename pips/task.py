@@ -58,11 +58,41 @@ class ArrayTransform(Enum):
         }[self.name]
 
 
+class Grid:
+    def __init__(self, array: np.ndarray):
+        self.array = np.asarray(array)
+        
+    @property
+    def shape(self):
+        return self.array.shape
+    
+    def __repr__(self):
+        return f"Grid(shape={self.shape})"
+    
+    def flatten(self):
+        return self.array.flatten()
+    
+    def tolist(self):
+        return self.array.tolist()
+    
+    @staticmethod
+    def from_array(array):
+        return Grid(array)
+    
+    def __eq__(self, other):
+        if not isinstance(other, Grid):
+            return False
+        return np.array_equal(self.array, other.array)
+    
+    def __array__(self):
+        return self.array
+
+
 class Example:
     def __init__(self, idx: int, input: np.array, output: np.array, program_id: str, task_id: str, dataset: str, color_perm: str, transform: str, is_test=False):
         self.idx = idx    
-        self.input = input
-        self.output = output
+        self.input = Grid(input)
+        self.output = Grid(output)
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
@@ -85,8 +115,8 @@ class Example:
     def to_dict(self):
         return {
             "idx": self.idx,
-            "input": np.asarray(self.input),
-            "output": np.asarray(self.output),
+            "input": self.input.tolist(),
+            "output": self.output.tolist(),
             "program_id": self.program_id,
             "task_id": self.task_id,
             "dataset": self.dataset,
@@ -97,21 +127,23 @@ class Example:
 
     @staticmethod
     def from_dict(example_dict):
-        return Example(idx=example_dict['idx'],
-                       input=example_dict['input'].tolist(),
-                       output=example_dict['output'].tolist(),
-                       program_id=example_dict['program_id'],
-                       task_id=example_dict['task_id'],
-                       dataset=example_dict['dataset'],
-                       color_perm=example_dict['color_perm'],
-                       transform=example_dict['transform'],
-                       is_test=example_dict['is_test'])
+        return Example(
+            idx=example_dict['idx'],
+            input=np.array(example_dict['input']),
+            output=np.array(example_dict['output']),
+            program_id=example_dict['program_id'],
+            task_id=example_dict['task_id'],
+            dataset=example_dict['dataset'],
+            color_perm=example_dict['color_perm'],
+            transform=example_dict['transform'],
+            is_test=example_dict['is_test']
+        )
 
     def compute_complexity(self):
-        size = max(len(self.input), len(self.output))/(30*30)
-        scale = max(len(self.input)/len(self.output), len(self.output)/len(self.input))/(30*30)
-        hist_inp, _ = np.histogram(self.input.flatten(), bins=np.arange(11), density=True)
-        hist_out, _ = np.histogram(self.output.flatten(), bins=np.arange(11), density=True)
+        size = max(len(self.input.array), len(self.output.array))/(30*30)
+        scale = max(len(self.input.array)/len(self.output.array), len(self.output.array)/len(self.input.array))/(30*30)
+        hist_inp, _ = np.histogram(self.input.array.flatten(), bins=np.arange(11), density=True)
+        hist_out, _ = np.histogram(self.output.array.flatten(), bins=np.arange(11), density=True)
         color_var = np.sqrt(np.square(hist_inp - hist_out).sum())
         complexity = size*4 + scale*2 + color_var
         complexity = np.log(complexity + 1)
@@ -129,8 +161,8 @@ class Example:
 
         cloned = copy.deepcopy(self)
         cloned._is_original = False
-        cloned._original_input = np.copy(self.input)
-        cloned._original_output = np.copy(self.output)
+        cloned._original_input = Grid(self.input.array.copy())
+        cloned._original_output = Grid(self.output.array.copy())
         return cloned
 
     def permute(self, color_perm: Optional[ColorPermutation] = None, arr_transform: Optional[ArrayTransform] = None):
@@ -152,13 +184,13 @@ class Example:
         if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
             return self.permute()
 
-        input = color_perm.transform(self.input)
-        output = color_perm.transform(self.output)
+        input = color_perm.transform(self.input.array)
+        output = color_perm.transform(self.output.array)
         input = arr_transform.transform(input)
         output = arr_transform.transform(output)
 
-        self.input = input
-        self.output = output
+        self.input = Grid(input)
+        self.output = Grid(output)
         self.color_perm = color_perm.name
         self.transform = arr_transform.name
         return self
@@ -489,6 +521,28 @@ class ArcTrainingDataset:
 
         self._train = new_train
         self._test = new_test
+
+    @property
+    def train_grids(self):
+        """Returns a list of all input and output grids from training examples."""
+        if not self._train:
+            self.load()
+        all_grids = []
+        for examples in self._train.values():
+            for example in examples:
+                all_grids.extend([example.input, example.output])
+        return all_grids
+    
+    @property
+    def test_grids(self):
+        """Returns a list of all input and output grids from test examples."""
+        if not self._test:
+            self.load()
+        all_grids = []
+        for examples in self._test.values():
+            for example in examples:
+                all_grids.extend([example.input, example.output])
+        return all_grids
 
 
     
