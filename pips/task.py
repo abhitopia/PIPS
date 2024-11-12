@@ -59,14 +59,34 @@ class ArrayTransform(Enum):
 
 
 class Grid:
-    def __init__(self, array: np.ndarray):
+    def __init__(self, array: np.ndarray, *, 
+                 idx: Optional[int] = None,
+                 program_id: Optional[str] = None,
+                 task_id: Optional[str] = None,
+                 dataset: Optional[str] = None,
+                 color_perm: Optional[str] = None,
+                 transform: Optional[str] = None,
+                 is_test: bool = False,
+                 is_input: bool = True):
         self.array = np.asarray(array)
+        self.idx = idx
+        self.program_id = program_id
+        self.task_id = task_id
+        self.dataset = dataset
+        self.color_perm = color_perm
+        self.transform = transform
+        self.is_test = is_test
+        self.is_input = is_input
         
     @property
     def shape(self):
         return self.array.shape
     
     def __repr__(self):
+        prefix = 'Test' if self.is_test else 'Train'
+        io_type = 'Input' if self.is_input else 'Output'
+        if all(x is not None for x in [self.program_id, self.dataset, self.task_id, self.idx]):
+            return f"{self.program_id} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm}/{self.transform}/{io_type}"
         return f"Grid(shape={self.shape})"
     
     def flatten(self):
@@ -76,23 +96,69 @@ class Grid:
         return self.array.tolist()
     
     @staticmethod
-    def from_array(array):
-        return Grid(array)
+    def from_array(array, **kwargs):
+        return Grid(array, **kwargs)
     
     def __eq__(self, other):
         if not isinstance(other, Grid):
             return False
         return np.array_equal(self.array, other.array)
     
-    def __array__(self):
-        return self.array
+    def __array__(self, dtype=None, copy=False):
+        """Convert grid to numpy array with proper dtype and copy handling."""
+        arr = self.array
+        if dtype:
+            arr = arr.astype(dtype)
+        if copy:
+            arr = arr.copy()
+        return arr
+    
+    def clone(self):
+        """Create a deep copy of the grid."""
+        return Grid(
+            self.array.copy(),
+            idx=self.idx,
+            program_id=self.program_id,
+            task_id=self.task_id,
+            dataset=self.dataset,
+            color_perm=self.color_perm,
+            transform=self.transform,
+            is_test=self.is_test,
+            is_input=self.is_input
+        )
 
+    def permute(self, color_perm: ColorPermutation, arr_transform: ArrayTransform, in_place: bool = False):
+        """Apply color permutation and array transformation to the grid.
+        
+        Args:
+            color_perm: Color permutation to apply
+            arr_transform: Array transformation to apply
+            in_place: If True, modify this grid instance. If False, return a new grid.
+        """
+        array = color_perm.transform(self.array)
+        array = arr_transform.transform(array)
+        
+        if in_place:
+            self.array = array
+            self.color_perm = color_perm.name
+            self.transform = arr_transform.name
+            return self
+        
+        return Grid(
+            array,
+            idx=self.idx,
+            program_id=self.program_id,
+            task_id=self.task_id,
+            dataset=self.dataset,
+            color_perm=color_perm.name,
+            transform=arr_transform.name,
+            is_test=self.is_test,
+            is_input=self.is_input
+        )
 
 class Example:
     def __init__(self, idx: int, input: np.array, output: np.array, program_id: str, task_id: str, dataset: str, color_perm: str, transform: str, is_test=False):
         self.idx = idx    
-        self.input = Grid(input)
-        self.output = Grid(output)
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
@@ -103,7 +169,31 @@ class Example:
         self._is_original = color_perm == ColorPermutation.CPID.name and transform == ArrayTransform.IDENT.name
         self._original_input = None
         self._original_output = None
-
+        
+        # Create Grid objects with full metadata
+        self.input = Grid(
+            input,
+            idx=idx,
+            program_id=program_id,
+            task_id=task_id,
+            dataset=dataset,
+            color_perm=color_perm,
+            transform=transform,
+            is_test=is_test,
+            is_input=True
+        )
+        self.output = Grid(
+            output,
+            idx=idx,
+            program_id=program_id,
+            task_id=task_id,
+            dataset=dataset,
+            color_perm=color_perm,
+            transform=transform,
+            is_test=is_test,
+            is_input=False
+        )
+    
     @property
     def is_original(self):
         return self._is_original
@@ -161,8 +251,8 @@ class Example:
 
         cloned = copy.deepcopy(self)
         cloned._is_original = False
-        cloned._original_input = Grid(self.input.array.copy())
-        cloned._original_output = Grid(self.output.array.copy())
+        cloned._original_input = self.input.clone()
+        cloned._original_output = self.output.clone()
         return cloned
 
     def permute(self, color_perm: Optional[ColorPermutation] = None, arr_transform: Optional[ArrayTransform] = None):
@@ -184,13 +274,8 @@ class Example:
         if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
             return self.permute()
 
-        input = color_perm.transform(self.input.array)
-        output = color_perm.transform(self.output.array)
-        input = arr_transform.transform(input)
-        output = arr_transform.transform(output)
-
-        self.input = Grid(input)
-        self.output = Grid(output)
+        self.input = self.input.permute(color_perm, arr_transform)
+        self.output = self.output.permute(color_perm, arr_transform)
         self.color_perm = color_perm.name
         self.transform = arr_transform.name
         return self
@@ -353,6 +438,7 @@ class ArcTrainingDataset:
         return self._tasks
 
     def load(self):
+        logger.info(f"Loading {len(self.loaders)} loaders")
         for loader in self.loaders:
             for task in loader.tasks:
                 self._train[task.prog_id].extend(task.train)
@@ -596,8 +682,7 @@ aux_collection = [
 ]
 
 
-
-def get_task_loaders(*, train=True, evl=True, aux=True, inv=False, separate_inv_prog=False):
+def get_task_loaders(*, train=True, evl=True, aux=True, inv=False, separate_inv_prog=True):
     loaders = []
     if train:
         loaders.extend(train_collection)
@@ -614,7 +699,7 @@ def get_task_loaders(*, train=True, evl=True, aux=True, inv=False, separate_inv_
     return loaders
 
 
-def load_dataset(*, task_loaders, max_height, max_width, min_test, min_train, max_test, max_train, no_cache=False):
+def load_dataset(*, task_loaders, max_height=30, max_width=30, min_test=1, min_train=1, max_test=100, max_train=100, no_cache=False):
     sorted_loaders = sorted(task_loaders, key=lambda x: x.name)
     loader_hash = hash_string("_".join([loader.name for loader in sorted_loaders]))
 

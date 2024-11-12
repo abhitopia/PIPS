@@ -9,7 +9,8 @@ from pips.task import (
     Example,
     ArcTask,
     ArcTasksLoader,
-    ArcTrainingDataset
+    ArcTrainingDataset,
+    Grid
 )
 
 # Test fixtures
@@ -471,3 +472,161 @@ def test_dataset_complexity_calculation(basic_example):
     # Test that cached complexity is used
     cached_complexity = task.complexity
     assert cached_complexity == complexity
+
+def test_grid_creation_and_properties():
+    # Test basic grid creation
+    array = np.array([[1, 2], [3, 4]])
+    grid = Grid(array, 
+                idx=0,
+                program_id="test_prog",
+                task_id="test_task",
+                dataset="test_dataset",
+                color_perm=ColorPermutation.CPID.name,
+                transform=ArrayTransform.IDENT.name,
+                is_test=False,
+                is_input=True)
+    
+    # Test properties
+    assert grid.shape == (2, 2)
+    assert np.array_equal(grid.array, array)
+    assert grid.idx == 0
+    assert grid.program_id == "test_prog"
+    assert grid.task_id == "test_task"
+    assert grid.dataset == "test_dataset"
+    assert grid.color_perm == ColorPermutation.CPID.name
+    assert grid.transform == ArrayTransform.IDENT.name
+    assert not grid.is_test
+    assert grid.is_input
+
+def test_grid_operations():
+    array = np.array([[1, 2], [3, 4]])
+    grid = Grid(array)
+    
+    # Test flatten
+    assert np.array_equal(grid.flatten(), np.array([1, 2, 3, 4]))
+    
+    # Test tolist
+    assert grid.tolist() == [[1, 2], [3, 4]]
+    
+    # Test equality
+    grid2 = Grid(array.copy())
+    assert grid == grid2
+    assert grid != Grid(np.array([[4, 3], [2, 1]]))
+    
+    # Test array conversion
+    assert np.array_equal(np.array(grid), array)
+
+def test_grid_clone():
+    array = np.array([[1, 2], [3, 4]])
+    original = Grid(array,
+                   idx=0,
+                   program_id="test_prog",
+                   task_id="test_task",
+                   dataset="test_dataset",
+                   color_perm=ColorPermutation.CPID.name,
+                   transform=ArrayTransform.IDENT.name)
+    
+    cloned = original.clone()
+    
+    # Test that arrays are equal but separate
+    assert np.array_equal(cloned.array, original.array)
+    assert cloned.array is not original.array
+    
+    # Test that metadata is preserved
+    assert cloned.idx == original.idx
+    assert cloned.program_id == original.program_id
+    assert cloned.task_id == original.task_id
+    assert cloned.dataset == original.dataset
+    assert cloned.color_perm == original.color_perm
+    assert cloned.transform == original.transform
+
+def test_grid_permute():
+    array = np.array([[1, 2], [3, 4]])
+    grid = Grid(array)
+    
+    # Test permutation without in-place modification
+    permuted = grid.permute(ColorPermutation.CP01, ArrayTransform.RT090)
+    assert permuted is not grid
+    assert permuted.color_perm == ColorPermutation.CP01.name
+    assert permuted.transform == ArrayTransform.RT090.name
+    
+    # Test in-place permutation
+    original_array = grid.array.copy()
+    grid.permute(ColorPermutation.CP01, ArrayTransform.RT090, in_place=True)
+    assert grid.color_perm == ColorPermutation.CP01.name
+    assert grid.transform == ArrayTransform.RT090.name
+    assert not np.array_equal(grid.array, original_array)
+
+def test_example_original_tracking(basic_example):
+    # Test that original example is marked as original
+    assert basic_example.is_original
+    assert basic_example._original_input is None
+    assert basic_example._original_output is None
+    
+    # Test that cloned example is not marked as original and stores original grids
+    cloned = basic_example.clone()
+    assert not cloned.is_original
+    assert isinstance(cloned._original_input, Grid)
+    assert isinstance(cloned._original_output, Grid)
+    
+    # Test that permutation maintains non-original status
+    permuted = cloned.permute()
+    assert not permuted.is_original
+    assert isinstance(permuted._original_input, Grid)
+    assert isinstance(permuted._original_output, Grid)
+
+def test_example_permutation_restrictions(basic_example):
+    # Test that original example cannot be permuted directly
+    with pytest.raises(AssertionError):
+        basic_example.permute()
+    
+    # Test that cloned example can be permuted
+    cloned = basic_example.clone()
+    try:
+        cloned.permute()
+    except AssertionError:
+        pytest.fail("Permutation of cloned example raised AssertionError")
+
+def test_dataset_train_test_grids():
+    # Create a simple dataset with known grids
+    input_array = np.array([[1, 2], [3, 4]])
+    output_array = np.array([[4, 3], [2, 1]])
+    example = Example(
+        idx=0,
+        input=input_array,
+        output=output_array,
+        program_id="test_prog",
+        task_id="test_task",
+        dataset="test_dataset",
+        color_perm=ColorPermutation.CPID.name,
+        transform=ArrayTransform.IDENT.name,
+        is_test=False
+    )
+    
+    task = ArcTask(
+        id="test_task",
+        prog_id="test_prog",
+        train=[example],
+        test=[example],
+        dataset="test_dataset"
+    )
+    
+    class MockLoader:
+        def __init__(self, tasks):
+            self.tasks = tasks
+    
+    mock_loader = MockLoader([task])
+    dataset = ArcTrainingDataset([mock_loader])
+    dataset.load()
+    
+    # Test train_grids
+    train_grids = dataset.train_grids
+    assert len(train_grids) == 2  # One input and one output grid
+    assert isinstance(train_grids[0], Grid)
+    assert isinstance(train_grids[1], Grid)
+    
+    # Test test_grids
+    test_grids = dataset.test_grids
+    assert len(test_grids) == 2  # One input and one output grid
+    assert isinstance(test_grids[0], Grid)
+    assert isinstance(test_grids[1], Grid)
