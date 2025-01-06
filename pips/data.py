@@ -1,16 +1,24 @@
 #%%
 import copy
 from enum import Enum, auto
-import json
 import logging
 from pathlib import Path
 import random
 from typing import List, Optional
 import numpy as np
-
-#%%
+from tqdm import tqdm
+import concurrent.futures
+from functools import partial
 
 logger = logging.getLogger(__name__)
+
+try:
+    import ujson as json
+    logger.info("Using ujson for faster JSON parsing")
+except ImportError:
+    import json
+    logger.warning("ujson not found, falling back to standard json module. Consider installing ujson for better performance: pip install ujson")
+
 
 class ColorPermutation(Enum):
     CPID = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # Identity
@@ -326,8 +334,71 @@ class ArcTask:
             self._complexity = self.compute_complexity()
         return self._complexity
 
+def load_task(task_json, task_id, prog_id, dataset, inverse=False):
+    """Load a single task from JSON data."""
+    train = [
+        Example(
+            idx=idx,
+            input=np.array(ex['output']) if inverse else np.array(ex['input']),
+            output=np.array(ex['input']) if inverse else np.array(ex['output']),
+            program_id=prog_id,
+            task_id=task_id,
+            dataset=dataset,
+            color_perm=ColorPermutation.CPID.name,
+            transform=ArrayTransform.IDENT.name,
+            is_test=False
+        ) for idx, ex in enumerate(task_json['train'])
+    ]
+    
+    test = [
+        Example(
+            idx=idx,
+            input=np.array(ex['output']) if inverse else np.array(ex['input']),
+            output=np.array(ex['input']) if inverse else np.array(ex['output']),
+            program_id=prog_id,
+            task_id=task_id,
+            dataset=dataset,
+            color_perm=ColorPermutation.CPID.name,
+            transform=ArrayTransform.IDENT.name,
+            is_test=True
+        ) for idx, ex in enumerate(task_json['test'])
+    ]
+    
+    return ArcTask(
+        id=task_id,
+        prog_id=prog_id,
+        train=train,
+        test=test,
+        dataset=dataset
+    )
+
+def process_jsonl_file(file_path, name, prog_prefix, identical_task_per_folder, inverse=False):
+    """Process a single JSONL file."""
+    tasks = []
+    with file_path.open('r') as file:
+        for line_num, line in enumerate(file):
+            task_json = json.loads(line.strip())
+            
+            # Create task ID and program ID
+            task_id = f"{name}_{file_path.stem}_{line_num}"
+            prog_id = file_path.parent.stem if identical_task_per_folder else f"{file_path.stem}_{line_num}"
+            if prog_prefix:
+                prog_id = prog_prefix + prog_id
+            
+            tasks.append(load_task(task_json, task_id, prog_id, name, inverse))
+    return tasks
+
+def process_json_file(file_path, name, prog_prefix, identical_task_per_folder, inverse=False):
+    """Process a single JSON file."""
+    task_json = json.load(file_path.open('r'))
+    task_id = f"{name}_{file_path.stem}"
+    prog_id = file_path.parent.stem if identical_task_per_folder else file_path.stem
+    if prog_prefix:
+        prog_id = prog_prefix + prog_id
+    return [load_task(task_json, task_id, prog_id, name, inverse)]
+
 class ArcTasksLoader:
-    def __init__(self, name: str, path: str, prog_prefix='', identical_task_per_folder=False, inverse=False):
+    def __init__(self, name: str, path: str, prog_prefix='', identical_task_per_folder=False, inverse=False, has_jsonlines=False):
         base_path = Path(__file__).resolve().parent.parent    
         self.path = base_path / Path(path)
         assert self.path.exists(), f'Path does not exist: {self.path}'
@@ -338,14 +409,12 @@ class ArcTasksLoader:
         self._train_examples = None
         self._test_examples = None
         self.identical_task_per_folder = identical_task_per_folder
-
-    def json_files(self):
-        return 
+        self.has_jsonlines = has_jsonlines
     
     @property
     def tasks(self):
         if not self._tasks:
-            self.load_from_json_files()
+            self._load_from_json_files()
         return self._tasks
     
     @property
@@ -364,24 +433,6 @@ class ArcTasksLoader:
     def test_grids(self):
         return [grid for example in self.test_examples for grid in (example.input, example.output)]
 
-    def load_examples(self, task_id, prog_id, examples_json, is_test=False) -> List[Example]:
-        examples = []
-        for idx, example in enumerate(examples_json):
-            examples.append(
-                    Example(
-                    idx=idx,
-                    input=np.asarray(example['input']) if not self.inverse else np.asarray(example['output']),
-                    output=np.asarray(example['output']) if not self.inverse else np.asarray(example['input']),
-                    program_id=prog_id,
-                    task_id=task_id,
-                    dataset=self.name,
-                    color_perm=ColorPermutation.CPID.name, # This is the identity transformation
-                    transform=ArrayTransform.IDENT.name,
-                    is_test=is_test
-                    )
-                )
-        return examples
-
     def stats(self):
         logger.info(f"\n\nDataset: {self.name}")
         logger.info(f"Inverse Tasks: {self.inverse}")
@@ -391,37 +442,35 @@ class ArcTasksLoader:
         logger.info(f"Number of test examples: {len(self.test_examples)}")
         logger.info(f"Average train examples per task: {len(self.train_examples)/len(self.tasks)}")
         logger.info(f"Average test examples per task: {len(self.test_examples)/len(self.tasks)}")
-    
-    def load_from_json_files(self) -> None:
-        json_files = sorted([json for json in Path(self.path).glob("**/*.json")])
+
+        
+    def load(self):
+        """Load tasks from either JSON or JSONL files in parallel."""
+        # Determine file pattern and assert files exist
+        file_pattern = "**/*.jsonl" if self.has_jsonlines else "**/*.json"
+        files = sorted([f for f in Path(self.path).glob(file_pattern)])
+        assert len(files) > 0, f"No {file_pattern} files found in {self.path}"
+        
+        # Choose processing function based on file type
+        process_func = process_jsonl_file if self.has_jsonlines else process_json_file
+        
+        # Process files in parallel
         tasks = []
-        train_examples = []
-        test_examples = []
-        for f in json_files:
-            task_json = json.load(f.open('r'))
-            task_id = self.name + "_" + f.stem
-
-            if self.identical_task_per_folder:
-                prog_id = f.parent.stem
-            else:
-                prog_id = f.stem
-
-            if self.prog_prefix:
-                prog_id = self.prog_prefix + prog_id
-
-            train = self.load_examples(task_id, prog_id, task_json['train'], is_test=False)
-            test = self.load_examples(task_id, prog_id, task_json['test'], is_test=True)
-            train_examples.extend(train)
-            test_examples.extend(test)
-            task = ArcTask(
-                    id=task_id,
-                    prog_id=prog_id,
-                    train=train,
-                    test=test,
-                    dataset=self.name
-                )  
-            tasks.append(task)
-
+        with concurrent.futures.ProcessPoolExecutor() as executor:
+            futures = list(tqdm(
+                executor.map(
+                    partial(process_func, inverse=self.inverse),
+                    files,
+                    [self.name] * len(files),
+                    [self.prog_prefix] * len(files),
+                    [self.identical_task_per_folder] * len(files)
+                ),
+                total=len(files),
+                desc=f"Loading {'JSONL' if self.has_jsonlines else 'JSON'} files"
+            ))
+            # Flatten the list of lists
+            tasks = [task for sublist in futures for task in sublist]
+                
         self._tasks = tasks
 
     def __len__(self):
@@ -438,3 +487,23 @@ class ArcTasksLoader:
                     inverse=True)
     
 
+#%%
+
+ARC_1D = ArcTasksLoader(name='ARC_1D', path='data/arc_dataset_collection/dataset/1D-ARC/data')
+BARC_GP4OM_OM = ArcTasksLoader(name='BARC_GP4OM_OM', path='data/barc_tasks/data/100k_gpt4o-mini_generated_problems', has_jsonlines=True)
+BARC_GP4_OM = ArcTasksLoader(name='BARC_GP4_OM', path='data/barc_tasks/data/100k-gpt4-description-gpt4omini-code_generated_problems', has_jsonlines=True)
+BARC_GP4O_OM = ArcTasksLoader(name='BARC_GP4O_OM', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_100k', has_jsonlines=True)
+BARC_GP4O_OM_SUG = ArcTasksLoader(name='BARC_GP4O_OM_SUG', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_suggestfunction_100k', has_jsonlines=True)
+
+
+if __name__ == '__main__':
+    #%%
+    ARC_1D.load()
+    BARC_GP4_OM.load()
+    # %%
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(message)s'  # Simplified format to just show the message
+    )
+    BARC_GP4_OM.stats()
+    # %%

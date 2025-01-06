@@ -2,6 +2,7 @@ import json
 import numpy as np
 import pytest
 from pathlib import Path
+from unittest.mock import patch
 
 from pips.data import (
     ColorPermutation,
@@ -231,7 +232,6 @@ def test_arc_tasks_loader(tmp_path):
     test_dir.mkdir()
     test_file = test_dir / "test_task.json"
     
-    import json
     with open(test_file, 'w') as f:
         json.dump(test_json, f)
     
@@ -241,7 +241,7 @@ def test_arc_tasks_loader(tmp_path):
         prog_prefix="test_"
     )
     
-    loader.load_from_json_files()
+    loader.load()
     assert len(loader.tasks) == 1
     assert len(loader.train_examples) == 1
     assert len(loader.test_examples) == 1
@@ -385,7 +385,7 @@ def test_arc_task_serialization(basic_example):
     assert len(reconstructed.train) == len(task.train)
     assert len(reconstructed.test) == len(task.test)
 
-def test_arc_tasks_loader_inverse(tmp_path): # tmp_path is a pytest fixture
+def test_arc_tasks_loader_inverse(tmp_path):  # tmp_path is a pytest fixture
     # Test inverse loading functionality
     test_json = {
         "train": [
@@ -415,11 +415,11 @@ def test_arc_tasks_loader_inverse(tmp_path): # tmp_path is a pytest fixture
         path=str(test_dir),
         inverse=False
     )
-    normal_loader.load_from_json_files()
+    normal_loader.load()
     
     # Test inverse loading
     inverse_loader = normal_loader.get_inverse_loader()
-    inverse_loader.load_from_json_files()
+    inverse_loader.load()
     
     # Check that input and output are swapped in inverse loader
     normal_example = normal_loader.tasks[0].train[0]
@@ -663,3 +663,89 @@ def test_dataset_train_test_grids():
     assert len(test_grids) == 2  # One input and one output grid
     assert isinstance(test_grids[0], Grid)
     assert isinstance(test_grids[1], Grid)
+
+def test_parallel_loading(tmp_path):
+    # Create multiple JSON files to test parallel loading
+    for i in range(5):
+        test_json = {
+            "train": [
+                {
+                    "input": [[0, 1], [2, 3]],
+                    "output": [[3, 2], [1, 0]]
+                }
+            ],
+            "test": [
+                {
+                    "input": [[0, 1], [2, 3]],
+                    "output": [[3, 2], [1, 0]]
+                }
+            ]
+        }
+        
+        test_file = tmp_path / f"test_task_{i}.json"
+        with open(test_file, 'w') as f:
+            json.dump(test_json, f)
+    
+    loader = ArcTasksLoader(
+        name="test_dataset",
+        path=str(tmp_path)
+    )
+    
+    loader.load()
+    assert len(loader.tasks) == 5
+    assert len(loader.train_examples) == 5
+    assert len(loader.test_examples) == 5
+
+def test_inverse_loading(tmp_path):
+    # Create a test JSON file
+    test_json = {
+        "train": [
+            {
+                "input": [[0, 1], [2, 3]],
+                "output": [[3, 2], [1, 0]]
+            }
+        ],
+        "test": [
+            {
+                "input": [[0, 1], [2, 3]],
+                "output": [[3, 2], [1, 0]]
+            }
+        ]
+    }
+    
+    test_file = tmp_path / "test_task.json"
+    with open(test_file, 'w') as f:
+        json.dump(test_json, f)
+    
+    loader = ArcTasksLoader(
+        name="test_dataset",
+        path=str(tmp_path),
+        inverse=True
+    )
+    
+    loader.load()
+    assert len(loader.tasks) == 1
+    assert len(loader.train_examples) == 1
+    assert len(loader.test_examples) == 1
+    
+    # Check that input and output are swapped
+    example = loader.tasks[0].train[0]
+    np.testing.assert_array_equal(example.input, np.array([[3, 2], [1, 0]]))
+    np.testing.assert_array_equal(example.output, np.array([[0, 1], [2, 3]]))
+
+def test_new_loaders():
+    # Test that new loaders can be instantiated without errors
+    loaders = [
+        ArcTasksLoader(name='ARC_1D', path='data/arc_dataset_collection/dataset/1D-ARC/data'),
+        ArcTasksLoader(name='BARC_GP4OM_OM', path='data/barc_tasks/data/100k_gpt4o-mini_generated_problems', has_jsonlines=True),
+        ArcTasksLoader(name='BARC_GP4_OM', path='data/barc_tasks/data/100k-gpt4-description-gpt4omini-code_generated_problems', has_jsonlines=True),
+        ArcTasksLoader(name='BARC_GP4O_OM', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_100k', has_jsonlines=True),
+        ArcTasksLoader(name='BARC_GP4O_OM_SUG', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_suggestfunction_100k', has_jsonlines=True)
+    ]
+    
+    with patch.object(ArcTasksLoader, 'load', return_value=None):
+        for loader in loaders:
+            try:
+                loader.load()  # This will be mocked
+            except Exception as e:
+                pytest.fail(f"Loader {loader.name} failed to load: {e}")
