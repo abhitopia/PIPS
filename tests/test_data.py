@@ -3,15 +3,16 @@ import numpy as np
 import pytest
 from pathlib import Path
 
-from pips.task import (
+from pips.data import (
     ColorPermutation,
     ArrayTransform,
     Example,
     ArcTask,
     ArcTasksLoader,
-    ArcTrainingDataset,
     Grid
 )
+
+from pips.task_dataset import ArcTrainingDataset
 
 # Test fixtures
 @pytest.fixture
@@ -55,8 +56,10 @@ def test_all_color_permutations():
         'CP09': [2, 0, 3, 8, 4, 6, 1, 9, 5, 7]
     }
     
-    # Test each permutation
+    # Test each permutation except RAND
     for perm in ColorPermutation:
+        if perm == ColorPermutation.RAND:
+            continue
         transform = perm.transform
         result = transform(test_array)
         expected = np.array(expected_results[perm.name])
@@ -65,6 +68,36 @@ def test_all_color_permutations():
             expected,
             err_msg=f"Failed for permutation {perm.name}"
         )
+
+def test_random_color_permutation():
+    # Test array with all possible colors 0-9
+    test_array = np.array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
+    
+    # Get random permutation
+    transform = ColorPermutation.RAND.transform
+    result = transform(test_array)
+    
+    # Test properties of random permutation
+    assert len(result) == len(test_array)  # Same length
+    assert set(result) == set(test_array)  # Same unique values
+    
+    # Test that the same transform gives consistent results
+    result2 = transform(test_array)
+    np.testing.assert_array_equal(result, result2)  # Same transform should give same results
+    
+    # Test that different transforms give different results
+    transform2 = ColorPermutation.RAND.transform
+    result3 = transform2(test_array)
+    assert not np.array_equal(result, result3)  # Different transforms should give different results
+    
+    # Test that the permutation is consistent within one transform
+    test_array2 = np.array([0, 1, 0, 2, 1])  # Array with repeated values
+    result = transform(test_array2)
+    # Check that same input values map to same output values
+    for i in range(len(test_array2)):
+        for j in range(len(test_array2)):
+            if test_array2[i] == test_array2[j]:
+                assert result[i] == result[j]
 
 def test_color_permutation_2d():
     # Test 2D array

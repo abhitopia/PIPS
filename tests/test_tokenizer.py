@@ -6,7 +6,7 @@ from pips.tokenizer import (
     ColorPermutationTokenizer, ArrayTransformTokenizer, ArcTokenizer,
     MODEL_INPUT, MODEL_OUTPUT
 )
-from pips.task import Example, ColorPermutation, ArrayTransform
+from pips.data import Example, ColorPermutation, ArrayTransform
 
 @pytest.fixture
 def basic_tokenizer():
