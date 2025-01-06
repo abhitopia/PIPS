@@ -241,10 +241,10 @@ def test_arc_tasks_loader(tmp_path):
         prog_prefix="test_"
     )
     
-    loader.load()
+    loader.load_from_json_files()
     assert len(loader.tasks) == 1
-    assert len(loader.train) == 1
-    assert len(loader.test) == 1
+    assert len(loader.train_examples) == 1
+    assert len(loader.test_examples) == 1
 
 # Test ArcTrainingDataset
 def test_arc_training_dataset(basic_example):
@@ -415,11 +415,11 @@ def test_arc_tasks_loader_inverse(tmp_path): # tmp_path is a pytest fixture
         path=str(test_dir),
         inverse=False
     )
-    normal_loader.load()
+    normal_loader.load_from_json_files()
     
     # Test inverse loading
     inverse_loader = normal_loader.get_inverse_loader()
-    inverse_loader.load()
+    inverse_loader.load_from_json_files()
     
     # Check that input and output are swapped in inverse loader
     normal_example = normal_loader.tasks[0].train[0]
