@@ -4,3 +4,6 @@
 [submodule "data/arc_synth_tasks"]
 	path = data/arc_synth_tasks
 	url = git@github.com:abhitopia/ARCSynthTasks.git
+[submodule "data/barc_tasks"]
+	path = data/barc_tasks
+	url = git@github.com:abhitopia/BARCTasks.git
