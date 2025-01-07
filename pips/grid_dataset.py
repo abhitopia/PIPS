@@ -4,7 +4,9 @@ from pips.data import ArcTasksLoader, Grid
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, DataLoader
+import torch
+from typing import NamedTuple, List, Dict
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +125,11 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
     return all_data
 
+# Define the NamedTuple for the collate function output
+class GRID_INPUT(NamedTuple):
+    grids: torch.Tensor
+    attributes: List[Dict[str, any]]
+
 class GridDataset(Dataset):
     def __init__(self, loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
         # Load the data using the existing function
@@ -157,6 +164,44 @@ class GridDataset(Dataset):
         
         return grid
 
+    @staticmethod
+    def collate_fn(batch, pad_value=-1, device=torch.device('cpu')) -> GRID_INPUT:
+        """Collate function to process a batch of Grids.
+
+        Args:
+            batch (list of Grid): The batch of Grid objects.
+            pad_value (int): The value to use for padding. Default is -1.
+            device (str or torch.device): The device to move the tensors to. Default is 'cpu'.
+
+        Returns:
+            GRID_INPUT: A named tuple containing the projected grids and their attributes.
+        """
+        projected_grids = []
+        attributes = []
+
+        for grid in batch:
+            # Project each grid to 32x32
+            projected_array = grid.project(new_height=32, new_width=32, pad_value=pad_value)
+            projected_grids.append(projected_array)
+
+            # Collect attributes and convert numpy types to native Python types
+            attributes.append({
+                'idx': int(grid.idx),
+                'program_id': str(grid.program_id),
+                'task_id': str(grid.task_id),
+                'dataset': str(grid.dataset),
+                'color_perm': str(grid.color_perm),
+                'transform': str(grid.transform),
+                'is_test': bool(grid.is_test),
+                'is_input': bool(grid.is_input)
+            })
+
+        # Convert the list of numpy arrays to a single numpy array before converting to a tensor
+        projected_grids = np.array(projected_grids)
+        projected_grids = torch.tensor(projected_grids, dtype=torch.long).to(device, non_blocking=True)
+
+        return GRID_INPUT(grids=projected_grids, attributes=attributes)
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
@@ -164,15 +209,20 @@ if __name__ == '__main__':
     )
 
     dataset = GridDataset(GRID_LOADERS)
-    print(len(dataset))
+    print(f"Total number of samples in dataset: {len(dataset)}")
 
-    for i in tqdm(range(len(dataset))):
-        grid = dataset[i]
-        print(grid)
+    # Create a DataLoader with batch size 32, pad_value 15, and random shuffling
+    dataloader = DataLoader(
+        dataset,
+        batch_size=32,
+        shuffle=True,
+        collate_fn=lambda x: GridDataset.collate_fn(x, pad_value=15, device='cpu'),
+        drop_last=False
+    )
 
-    #%%
-    # ARC_1D.load()
-    # BARC_GP4_OM.load()
- 
-    # BARC_GP4_OM.stats()
-    # %%
+    # Iterate over the DataLoader
+    for batch in dataloader:
+        print(f"Batch grids shape: {batch.grids.shape}")  # Should be (32, 32, 32)
+        print(f"Batch attributes: {batch.attributes}")
+        break  # Just process the first batch for demonstration
+

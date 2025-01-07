@@ -169,6 +169,35 @@ class Grid:
             is_input=self.is_input
         )
 
+    def project(self, new_height: int = 32, new_width: int = 32, pad_value: int = -1):
+        """Project the grid array to a new height and width, padding with pad_value if necessary.
+
+        Args:
+            new_height (int): The desired height of the new array. Default is 32.
+            new_width (int): The desired width of the new array. Default is 32.
+            pad_value (int): The value to use for padding. Default is -1.
+
+        Returns:
+            np.ndarray: The projected array with the specified dimensions.
+        """
+        current_height, current_width = self.array.shape
+        if current_height > new_height or current_width > new_width:
+            raise ValueError("New dimensions must be greater than or equal to current dimensions.")
+
+        # Calculate padding amounts
+        pad_height = new_height - current_height
+        pad_width = new_width - current_width
+
+        # Pad the array
+        padded_array = np.pad(
+            self.array,
+            pad_width=((0, pad_height), (0, pad_width)),
+            mode='constant',
+            constant_values=pad_value
+        )
+
+        return padded_array
+
 class Example:
     def __init__(self, idx: int, input: np.array, output: np.array, program_id: str, task_id: str, dataset: str, color_perm: str, transform: str, is_test=False):
         self.idx = idx    

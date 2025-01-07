@@ -749,3 +749,28 @@ def test_new_loaders():
                 loader.load()  # This will be mocked
             except Exception as e:
                 pytest.fail(f"Loader {loader.name} failed to load: {e}")
+
+def test_grid_project():
+    # Create a simple grid
+    input_array = np.array([[1, 2], [3, 4]])
+    grid = Grid(
+        array=input_array,
+        idx=0,
+        program_id="test_prog",
+        task_id="test_task",
+        dataset="test_dataset",
+        color_perm=ColorPermutation.CPID.name,
+        transform=ArrayTransform.IDENT.name,
+        is_test=False,
+        is_input=True
+    )
+
+    # Project the grid to a new size with padding
+    projected_array = grid.project(new_height=32, new_width=32, pad_value=-1)
+
+    # Check the shape of the projected array
+    assert projected_array.shape == (32, 32)
+
+    # Check the content of the projected array
+    expected_array = np.pad(input_array, ((0, 30), (0, 30)), 'constant', constant_values=-1)
+    np.testing.assert_array_equal(projected_array, expected_array)

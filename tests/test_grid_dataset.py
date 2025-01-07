@@ -1,8 +1,9 @@
 import numpy as np
 from unittest.mock import patch, MagicMock
 import pytest
-from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype
+from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT
 from pips.data import Grid
+import torch
 
 def test_process_grid_loader():
     # Mock a loader with fake grids
@@ -89,3 +90,55 @@ def test_grid_dataset_initialization(mock_load_grid_loaders):
     assert grid.transform == 'transform'
     assert grid.is_test == np.bool_(False)
     assert grid.is_input == np.bool_(True) 
+
+def test_collate_fn():
+    # Create mock Grid objects
+    mock_grids = [
+        MagicMock(spec=Grid, array=np.array([[1, 2], [3, 4]]), idx=0, program_id='prog_id_0', task_id='task_id_0',
+                  dataset='dataset_0', color_perm='color_perm_0', transform='transform_0', is_test=False, is_input=True),
+        MagicMock(spec=Grid, array=np.array([[5, 6], [7, 8]]), idx=1, program_id='prog_id_1', task_id='task_id_1',
+                  dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
+    ]
+
+    # Mock the project method to return a 32x32 array
+    for grid in mock_grids:
+        grid.project.return_value = np.pad(grid.array, ((0, 30), (0, 30)), 'constant', constant_values=-1)
+
+    # Call the collate function
+    result = GridDataset.collate_fn(mock_grids, pad_value=15, device='cpu')
+
+    # Check the type of the result
+    assert isinstance(result, GRID_INPUT)
+
+    # Check the shape of the grids tensor
+    assert result.grids.shape == (2, 32, 32)
+
+    # Check the dtype of the grids tensor
+    assert result.grids.dtype == torch.long
+
+    # Check the attributes
+    expected_attributes = [
+        {
+            'idx': 0,
+            'program_id': 'prog_id_0',
+            'task_id': 'task_id_0',
+            'dataset': 'dataset_0',
+            'color_perm': 'color_perm_0',
+            'transform': 'transform_0',
+            'is_test': False,
+            'is_input': True
+        },
+        {
+            'idx': 1,
+            'program_id': 'prog_id_1',
+            'task_id': 'task_id_1',
+            'dataset': 'dataset_1',
+            'color_perm': 'color_perm_1',
+            'transform': 'transform_1',
+            'is_test': True,
+            'is_input': False
+        }
+    ]
+    assert result.attributes == expected_attributes
+
+# Add more tests as needed... 
