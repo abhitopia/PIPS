@@ -1,6 +1,8 @@
 import numpy as np
 from unittest.mock import patch, MagicMock
-from pips.grid_dataset import process_grid_loader, combined_dtype
+import pytest
+from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype
+from pips.data import Grid
 
 def test_process_grid_loader():
     # Mock a loader with fake grids
@@ -38,4 +40,52 @@ def test_process_grid_loader():
 
         # Check the grid data
         assert np.array_equal(saved_data[0]['grid'][:2, :2], np.array([[1, 2], [3, 4]]))
-        assert np.array_equal(saved_data[1]['grid'][:2, :2], np.array([[5, 6], [7, 8]])) 
+        assert np.array_equal(saved_data[1]['grid'][:2, :2], np.array([[5, 6], [7, 8]]))
+
+# Mock the load_grid_loaders function to return a controlled dataset
+@pytest.fixture
+def mock_load_grid_loaders():
+    with patch('pips.grid_dataset.load_grid_loaders') as mock_loader:
+        # Create a grid of shape (30, 30) with padding
+        grid_data = np.full((30, 30), -1, dtype=np.int8)
+        grid_data[:2, :2] = np.array([[1, 2], [3, 4]])  # Fill in the actual data
+
+        mock_loader.return_value = np.array([
+            (
+                grid_data,  # grid
+                0,  # idx
+                'prog_id',  # program_id
+                'task_id',  # task_id
+                'dataset',  # dataset
+                'color_perm',  # color_perm
+                'transform',  # transform
+                np.bool_(False),  # is_test
+                np.bool_(True),  # is_input
+                (2, 2)  # original_shape
+            )
+        ], dtype=combined_dtype)
+        yield mock_loader
+
+def test_grid_dataset_initialization(mock_load_grid_loaders):
+    # Initialize the GridDataset
+    dataset = GridDataset(loaders=[])
+
+    # Check the length of the dataset
+    assert len(dataset) == 1
+
+    # Retrieve the first item
+    grid = dataset[0]
+
+    # Check that the item is a Grid object
+    assert isinstance(grid, Grid)
+
+    # Check the attributes of the Grid object
+    assert np.array_equal(grid.array, np.array([[1, 2], [3, 4]]))
+    assert grid.idx == 0
+    assert grid.program_id == 'prog_id'
+    assert grid.task_id == 'task_id'
+    assert grid.dataset == 'dataset'
+    assert grid.color_perm == 'color_perm'
+    assert grid.transform == 'transform'
+    assert grid.is_test == np.bool_(False)
+    assert grid.is_input == np.bool_(True) 

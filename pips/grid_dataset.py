@@ -1,9 +1,10 @@
 import logging
 import concurrent.futures
-from pips.data import ArcTasksLoader
+from pips.data import ArcTasksLoader, Grid
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
+from torch.utils.data import Dataset
 
 logger = logging.getLogger(__name__)
 
@@ -122,6 +123,39 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
     return all_data
 
+class GridDataset(Dataset):
+    def __init__(self, loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
+        # Load the data using the existing function
+        self.data = load_grid_loaders(loaders, cache_dir)
+
+    def __len__(self):
+        # Return the number of samples
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        # Retrieve the sample at the given index
+        sample = self.data[idx]
+        
+        # Extract the original shape
+        original_shape = sample['original_shape']
+        
+        # Reshape the grid to its original dimensions
+        grid_array = sample['grid'][:original_shape[0], :original_shape[1]]
+        
+        # Create a Grid object using the attributes from the sample
+        grid = Grid(
+            array=grid_array,
+            idx=sample['idx'],
+            program_id=sample['program_id'],
+            task_id=sample['task_id'],
+            dataset=sample['dataset'],
+            color_perm=sample['color_perm'],
+            transform=sample['transform'],
+            is_test=sample['is_test'],
+            is_input=sample['is_input']
+        )
+        
+        return grid
 
 if __name__ == '__main__':
     logging.basicConfig(
@@ -129,9 +163,12 @@ if __name__ == '__main__':
         format='%(message)s'  # Simplified format to just show the message
     )
 
-    data = load_grid_loaders(GRID_LOADERS)
-    print("Loaded data")
-    print(len(data))
+    dataset = GridDataset(GRID_LOADERS)
+    print(len(dataset))
+
+    for i in tqdm(range(len(dataset))):
+        grid = dataset[i]
+        print(grid)
 
     #%%
     # ARC_1D.load()
