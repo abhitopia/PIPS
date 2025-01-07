@@ -399,22 +399,18 @@ def process_json_file(file_path, name, prog_prefix, identical_task_per_folder, i
 
 class ArcTasksLoader:
     def __init__(self, name: str, path: str, prog_prefix='', identical_task_per_folder=False, inverse=False, has_jsonlines=False):
-        base_path = Path(__file__).resolve().parent.parent    
-        self.path = base_path / Path(path)
-        assert self.path.exists(), f'Path does not exist: {self.path}'
         self.name = name
+        self.path = Path(path)
         self.prog_prefix = prog_prefix
         self.inverse = inverse
-        self._tasks = None
-        self._train_examples = None
-        self._test_examples = None
         self.identical_task_per_folder = identical_task_per_folder
+        self._tasks = None  # Initialize _tasks
         self.has_jsonlines = has_jsonlines
-    
+
     @property
     def tasks(self):
         if not self._tasks:
-            self._load_from_json_files()
+            self.load()
         return self._tasks
     
     @property
@@ -466,12 +462,15 @@ class ArcTasksLoader:
                     [self.identical_task_per_folder] * len(files)
                 ),
                 total=len(files),
-                desc=f"Loading {'JSONL' if self.has_jsonlines else 'JSON'} files"
+                desc=f"Loading {self.name} {'JSONL' if self.has_jsonlines else 'JSON'} files"
             ))
             # Flatten the list of lists
             tasks = [task for sublist in futures for task in sublist]
                 
         self._tasks = tasks
+        logger.info(f"Loaded {len(self._tasks)} tasks for {self.name}.")
+        return self._tasks
+
 
     def __len__(self):
         return len(self.tasks)
@@ -485,25 +484,3 @@ class ArcTasksLoader:
                     prog_prefix=f'INV_{self.prog_prefix}' if separate_prog else self.prog_prefix,
                     identical_task_per_folder=self.identical_task_per_folder, 
                     inverse=True)
-    
-
-#%%
-
-ARC_1D = ArcTasksLoader(name='ARC_1D', path='data/arc_dataset_collection/dataset/1D-ARC/data')
-BARC_GP4OM_OM = ArcTasksLoader(name='BARC_GP4OM_OM', path='data/barc_tasks/data/100k_gpt4o-mini_generated_problems', has_jsonlines=True)
-BARC_GP4_OM = ArcTasksLoader(name='BARC_GP4_OM', path='data/barc_tasks/data/100k-gpt4-description-gpt4omini-code_generated_problems', has_jsonlines=True)
-BARC_GP4O_OM = ArcTasksLoader(name='BARC_GP4O_OM', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_100k', has_jsonlines=True)
-BARC_GP4O_OM_SUG = ArcTasksLoader(name='BARC_GP4O_OM_SUG', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_suggestfunction_100k', has_jsonlines=True)
-
-
-if __name__ == '__main__':
-    #%%
-    ARC_1D.load()
-    BARC_GP4_OM.load()
-    # %%
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(message)s'  # Simplified format to just show the message
-    )
-    BARC_GP4_OM.stats()
-    # %%
