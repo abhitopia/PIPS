@@ -288,7 +288,19 @@ class SelfAttention(nn.Module):
             positions: Optional[Tensor] = None,
             kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
             return_kv_cache: bool = False) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
-        
+        """
+        Computes multi-head self-attention on the input tensor.
+
+        Args:
+            x (Tensor): The input tensor to compute self-attention on.
+            attn_mask (Optional[Tensor]): The attention mask to apply to the attention weights. Expected shape is [B, 1, S] or [1, 1, S], where B is the batch size and S is the sequence length.
+            positions (Optional[Tensor]): The positions to use for RoPE encoding.
+            kv_cache (Optional[Tuple[Tensor, Tensor]]): The cached key and value tensors.
+            return_kv_cache (bool): Whether to return the updated key and value cache.
+
+        Returns:
+            Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]: The output tensor after self-attention and optionally the updated key and value cache.
+        """
         B, T, C = x.size()
         qkv = self.c_attn(x)        # qkv: (B, T, 3 * C)
         q, k, v = qkv.split(self.n_dim, dim=2)
@@ -317,11 +329,8 @@ class SelfAttention(nn.Module):
 
         # Ensure attn_mask is broadcastable to [B, n_head, T, T]
         if attn_mask is not None:
-            if attn_mask.dim() == 2:
-                attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # Expand to [B, 1, 1, S]
-            elif attn_mask.dim() == 3:
+            if attn_mask.dim() == 3:
                 attn_mask = attn_mask.unsqueeze(1)  # Expand to [B, 1, S, S]
-            attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)  # Expand to [B, n_head, T, T]
 
         # attn_output: (B, n_head, T, head_dim)
         attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p)
@@ -331,6 +340,10 @@ class SelfAttention(nn.Module):
 
         # Output projection
         y = self.c_proj(attn_output)
+
+        # Zero out NaN values, so they don't affect future computations
+        # I have also verified that the it doesn't matter what the nan values are set to
+        # y = torch.nan_to_num(y, nan=0.0)
 
         return y, new_kv_cache
     
