@@ -13,7 +13,8 @@ from pips.dvae import (
     GridDVAEConfig,
     DVAE,
     AttentionPool,
-    StackedPooling
+    StackedPooling,
+    Transformer
 )
 import torch.nn.functional as F
 
@@ -302,3 +303,337 @@ def test_stacked_pooling_with_partial_mask():
     output = stacked_pool(x, attn_mask=attn_mask)
     
     assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}" 
+
+def test_create_random_mask_no_mask():
+    dvae = DVAE(GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    ))
+    B, S = 4, 1024
+    mask = dvae.create_random_mask(B, S, mask_percentage=0.0)
+    assert mask is None, "Expected no mask when mask_percentage is 0."
+
+def test_create_random_mask_full_mask():
+    dvae = DVAE(GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    ))
+    B, S = 4, 1024
+    with pytest.raises(ValueError, match="mask_percentage of 1 would mask all tokens, which is not allowed."):
+        dvae.create_random_mask(B, S, mask_percentage=1.0)
+
+def test_create_random_mask_partial_mask():
+    dvae = DVAE(GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    ))
+    B, S = 4, 1024
+    mask_percentage = 0.5
+    mask = dvae.create_random_mask(B, S, mask_percentage=mask_percentage)
+    assert mask is not None, "Expected a mask when mask_percentage is between 0 and 1."
+    assert mask.shape == (B, 1, S), f"Unexpected mask shape: {mask.shape}"
+    # Check that approximately half of the mask is False
+    assert torch.isclose(mask.float().mean(), torch.tensor(1 - mask_percentage), atol=0.1), \
+        "Mask does not have the expected proportion of masked tokens."
+
+def test_dvae_forward_with_mask():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    dvae = DVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+
+    # Test forward pass with no mask
+    output_no_mask = dvae(x, mask_percentage=0.0)
+    assert output_no_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
+        f"Unexpected output shape: {output_no_mask.shape}"
+
+    # Test forward pass with partial mask
+    output_partial_mask = dvae(x, mask_percentage=0.5)
+    assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
+        f"Unexpected output shape: {output_partial_mask.shape}" 
+
+
+def test_attention_pool_masking_effect():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x1 = torch.randn(B, S, dim)
+    x2 = x1.clone()
+
+    # Create a random mask
+    mask_percentage = 0.5
+    mask = torch.rand(1, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    mask = mask.squeeze(1).expand(B, -1)  # Ensure mask is [B, S]
+    x2[~mask, :] = torch.randn(torch.sum(~mask).item(), dim)
+
+    # Initialize AttentionPool
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+
+    # Test forward pass with the same mask
+    output1 = pool(x1, attn_mask=mask.unsqueeze(1))  # Expand mask to [1, 1, S]
+    output2 = pool(x2, attn_mask=mask.unsqueeze(1))
+
+    # Check that the outputs are the same
+    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
+
+def test_attention_pool_masking_effect_batch_mask():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x1 = torch.randn(B, S, dim)
+    x2 = x1.clone()
+
+    # Create a random mask for each batch
+    mask_percentage = 0.5
+    mask = torch.rand(B, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), dim)
+
+    # Initialize AttentionPool
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+
+    # Test forward pass with the same mask
+    output1 = pool(x1, attn_mask=mask)
+    output2 = pool(x2, attn_mask=mask)
+
+    # Check that the outputs are the same
+    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
+
+def test_stacked_pooling_masking_effect_single_mask():
+    dim = 64
+    pool_sizes = [10, 5, 2]
+    B, S = 4, 20
+    x1 = torch.randn(B, S, dim)
+    x2 = x1.clone()
+
+    # Create a random mask
+    mask_percentage = 0.5
+    mask = torch.rand(1, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    mask = mask.squeeze(1).expand(B, -1)  # Ensure mask is [B, S]
+    x2[~mask] = torch.randn(torch.sum(~mask).item(), dim)
+
+    # Initialize StackedPooling
+    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
+
+    # Test forward pass with the same mask
+    output1 = stacked_pool(x1, attn_mask=mask.unsqueeze(1))  # Expand mask to [1, 1, S]
+    output2 = stacked_pool(x2, attn_mask=mask.unsqueeze(1))
+
+    # Check that the outputs are the same
+    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
+
+def test_stacked_pooling_masking_effect_batch_mask():
+    dim = 64
+    pool_sizes = [10, 5, 2]
+    B, S = 4, 20
+    x1 = torch.randn(B, S, dim)
+    x2 = x1.clone()
+
+    # Create a random mask for each batch
+    mask_percentage = 0.5
+    mask = torch.rand(B, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), dim)
+
+    # Initialize StackedPooling
+    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
+
+    # Test forward pass with the same mask
+    output1 = stacked_pool(x1, attn_mask=mask)
+    output2 = stacked_pool(x2, attn_mask=mask)
+
+    # Check that the outputs are the same
+    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
+
+
+def test_transformer_masking_effect():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    transformer = Transformer(config)
+    B, S = 2, config.n_pos
+    x1 = torch.randn(B, S, config.n_dim)
+    x2 = x1.clone()
+
+    # Create a random mask
+    mask_percentage = 0.5
+    mask = torch.rand(B, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), config.n_dim)
+
+    # Create position indices using DVAE.create_grid_position_tensor
+    grid_height = int(S**0.5)
+    grid_width = grid_height
+    positions = DVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
+
+    # Test forward pass with the same mask
+    output1, _ = transformer(x1, attn_mask=mask, positions=positions)
+    output2, _ = transformer(x2, attn_mask=mask, positions=positions)
+
+    # Check that the outputs are the same for unmasked positions
+    assert torch.allclose(output1[mask.squeeze(1)], output2[mask.squeeze(1)], atol=1e-5), \
+        "Outputs differ at unmasked positions."
+
+    # Check that the outputs are different for masked positions
+    assert not torch.allclose(output1[~mask.squeeze(1)], output2[~mask.squeeze(1)], atol=1e-5), \
+        "Outputs are the same at masked positions."
+
+def test_transformer_masking_effect_single_mask():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    transformer = Transformer(config)
+    B, S = 2, config.n_pos
+    x1 = torch.randn(B, S, config.n_dim)
+    x2 = x1.clone()
+
+    # Create a single mask for all batches
+    mask_percentage = 0.5
+    mask = torch.rand(1, 1, S) > mask_percentage
+
+    # Alter x2 at masked positions
+    mask_expanded = mask.expand(B, -1, -1).squeeze(1)  # Expand mask to [B, S]
+    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), config.n_dim)
+
+    # Create position indices using DVAE.create_grid_position_tensor
+    grid_height = int(S**0.5)
+    grid_width = grid_height
+    positions = DVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
+
+    # Test forward pass with the same mask
+    output1, _ = transformer(x1, attn_mask=mask, positions=positions)
+    output2, _ = transformer(x2, attn_mask=mask, positions=positions)
+
+    # Check that the outputs are the same for unmasked positions
+    unmasked_indices = mask.squeeze(0).expand(B, -1)  # Expand mask to [B, S]
+    assert torch.allclose(output1[unmasked_indices], output2[unmasked_indices], atol=1e-5), \
+        "Outputs differ at unmasked positions."
+
+    # Check that the outputs are different for masked positions
+    masked_indices = ~mask.squeeze(0).expand(B, -1)  # Expand mask to [B, S]
+    assert not torch.allclose(output1[masked_indices], output2[masked_indices], atol=1e-5), \
+        "Outputs are the same at masked positions."
+
+
+def test_dvae_masking_effect():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        compression_factor=128,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    dvae = DVAE(config)
+    B = 2
+    S = config.n_pos
+    x1 = torch.randint(0, config.n_vocab, (B, S))
+    x2 = x1.clone()
+
+    # Test with same_mask_for_all=True and hard=False
+    mask_percentage = 0.5
+    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=True)
+
+    if mask is not None:
+        mask_tmp = mask.squeeze(1).expand(B, -1)
+        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+
+    torch.manual_seed(42)
+    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+
+    torch.manual_seed(42)
+    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+
+    assert torch.allclose(code1, code2, atol=1e-5), "Codes differ when only masked positions are changed."
+
+    # Test with same_mask_for_all=False and hard=False
+    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=False)
+
+    if mask is not None:
+        mask_tmp = mask.squeeze(1).expand(B, -1)
+        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+
+    torch.manual_seed(42)
+    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+
+    torch.manual_seed(42)
+    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+
+    assert torch.allclose(code1, code2, atol=1e-5), "Codes differ when only masked positions are changed."
+
+    # Test with same_mask_for_all=True and hard=True
+    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=True)
+
+    if mask is not None:
+        mask_tmp = mask.squeeze(1).expand(B, -1)
+        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+
+    torch.manual_seed(42)
+    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
+
+    torch.manual_seed(42)
+    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
+
+    assert torch.allclose(code1, code2, atol=1e-5), "Codes differ when only masked positions are changed."
+
+    # Test with same_mask_for_all=False and hard=True
+    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=False)
+
+    if mask is not None:
+        mask_tmp = mask.squeeze(1).expand(B, -1)
+        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+
+    torch.manual_seed(42)
+    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
+
+    torch.manual_seed(42)
+    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
+
+    assert torch.allclose(code1, code2, atol=1e-5), "Codes differ when only masked positions are changed."
+
+# Add this test to your existing test suite 

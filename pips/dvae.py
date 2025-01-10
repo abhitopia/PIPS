@@ -282,8 +282,6 @@ class SelfAttention(nn.Module):
         self.n_dim = config.n_dim
         self.dropout = config.dropout
 
-
-
     def forward(self,
             x: Tensor, 
             attn_mask: Optional[Tensor],
@@ -291,12 +289,12 @@ class SelfAttention(nn.Module):
             kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
             return_kv_cache: bool = False) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
         
-        B, T, C = x.size() 
+        B, T, C = x.size()
         qkv = self.c_attn(x)        # qkv: (B, T, 3 * C)
         q, k, v = qkv.split(self.n_dim, dim=2)
 
         # Reshape for multi-head attention, but do not transpose yet!
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_head, T,  head_dim)
+        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_head, T, head_dim)
         k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) 
         v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  
 
@@ -305,9 +303,7 @@ class SelfAttention(nn.Module):
             k = self.rope(k, positions.unsqueeze(1))
             q = self.rope(q, positions.unsqueeze(1))
 
-
-        # # If kv_cache is present, concatenate past keys and values
-        # Assume kv_cache is has rope applied to it already
+        # If kv_cache is present, concatenate past keys and values
         if kv_cache is not None and torch.jit.isinstance(kv_cache, Tuple[Tensor, Tensor]):
             past_k, past_v = kv_cache  # K: (B, n_head, T_past, head_dim)
             k = torch.cat([past_k, k], dim=2)  # Concatenate along sequence length dimension
@@ -319,6 +315,14 @@ class SelfAttention(nn.Module):
         # Compute attention
         dropout_p = self.dropout if self.training else 0.0
 
+        # Ensure attn_mask is broadcastable to [B, n_head, T, T]
+        if attn_mask is not None:
+            if attn_mask.dim() == 2:
+                attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # Expand to [B, 1, 1, S]
+            elif attn_mask.dim() == 3:
+                attn_mask = attn_mask.unsqueeze(1)  # Expand to [B, 1, S, S]
+            attn_mask = attn_mask.expand(-1, self.n_head, -1, -1)  # Expand to [B, n_head, T, T]
+
         # attn_output: (B, n_head, T, head_dim)
         attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p)
 
@@ -327,10 +331,6 @@ class SelfAttention(nn.Module):
 
         # Output projection
         y = self.c_proj(attn_output)
-
-        # Zero out NaN values, so they don't affect future computations
-        # I have also verified that the it doesn't matter what the nan values are set to
-        # y = torch.nan_to_num(y, nan=0.0)
 
         return y, new_kv_cache
     
@@ -475,10 +475,16 @@ class StackedPooling(nn.Module):
         """
         Args:
             x (Tensor): shape [B, S, D] input to the first stage
-            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S] to be applied to the first AttentionPool
+            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S] or [B, 1, S] to be applied to the first AttentionPool
         Returns:
             Tensor: shape [B, final_size, D] after all stages
         """
+        B, S, D = x.shape
+
+        # Assert correct mask shape if provided
+        if attn_mask is not None:
+            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
+
         for i, pool in enumerate(self.pool_layers):
             if i == 0 and attn_mask is not None:
                 # Apply the attention mask only to the first AttentionPool
@@ -622,8 +628,32 @@ class DVAE(nn.Module):
         
         return positions
 
+    def create_random_mask(self, B: int, S: int, mask_percentage: float, same_mask_for_all: bool = False) -> Optional[Tensor]:
+        """
+        Creates a random boolean mask for the input sequence.
 
-    def encode(self, x: Tensor, tau: float = 0.9, hard: bool = True) -> Tensor:
+        Args:
+            B (int): Batch size.
+            S (int): Sequence length.
+            mask_percentage (float): Fraction of tokens to mask (set to False).
+            same_mask_for_all (bool): If True, apply the same mask to all samples in the batch.
+
+        Returns:
+            Optional[Tensor]: A boolean mask of shape [B, 1, S] or [1, 1, S] with True for unmasked and False for masked tokens,
+                              or None if no masking is applied.
+        """
+        if mask_percentage == 0:
+            return None  # No masking
+        if mask_percentage == 1:
+            raise ValueError("mask_percentage of 1 would mask all tokens, which is not allowed.")
+
+        if same_mask_for_all:
+            mask = torch.rand(1, 1, S) > mask_percentage
+        else:
+            mask = torch.rand(B, 1, S) > mask_percentage
+        return mask
+
+    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True) -> Tensor:
         B, S = x.size()
 
         # Convert into x: (B, S, D) using self.embd
@@ -633,18 +663,19 @@ class DVAE(nn.Module):
 
         assert S == self.n_pos, f"Input Sequence must be of length {self.n_pos}"
 
-        # Pass to the encoder network
-        encoded, _ = self.encoder_base(x, None, positions) # (B, S, n_dim)
+        # Pass to the encoder network with the attention mask
+        encoded, _ = self.encoder_base(x, attn_mask, positions)
 
-        # Compress to Codebook Space
-        encoded_compressed = self.encoder_bottleneck(encoded) # (B, n_codes, n_dim)
+
+        # Compress to Codebook Space with the attention mask
+        encoded_compressed = self.encoder_bottleneck(encoded, attn_mask)
 
         # Map n_codes to logits
-        encoded_logits = self.encoder_head(encoded_compressed) # (B, n_codes, codebook_size)
+        encoded_logits = self.encoder_head(encoded_compressed)
 
         # Use gumbel softmax to sample from the Codebook
-        code = F.gumbel_softmax(encoded_logits, tau=tau, hard=hard) #(B, n_codes, codebook_size)
-        
+        code = F.gumbel_softmax(encoded_logits, tau=tau, hard=hard)
+
         return code
 
     def decode(self, code: Tensor) -> Tensor:
@@ -665,8 +696,10 @@ class DVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True) -> Tensor:
-        code = self.encode(x, tau, hard)
+    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0) -> Tensor:
+        # Create a random boolean mask
+        attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
+        code = self.encode(x, attn_mask, tau, hard)
         decoded_logits = self.decode(code)
         return decoded_logits
 
