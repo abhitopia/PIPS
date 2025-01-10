@@ -12,7 +12,8 @@ from pips.dvae import (
     RMSNorm,
     GridDVAEConfig,
     DVAE,
-    AttentionPool
+    AttentionPool,
+    StackedPooling
 )
 import torch.nn.functional as F
 
@@ -266,3 +267,38 @@ def test_attention_pool_mask_shape_B_K_S():
     output = pool(x, attn_mask=attn_mask)
     
     assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}" 
+
+def test_stacked_pooling_no_mask():
+    dim = 64
+    pool_sizes = [10, 5, 2]
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    
+    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
+    output = stacked_pool(x)
+    
+    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}"
+
+def test_stacked_pooling_with_mask():
+    dim = 64
+    pool_sizes = [10, 5, 2]
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    attn_mask = torch.ones(1, 1, S)
+    
+    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
+    output = stacked_pool(x, attn_mask=attn_mask)
+    
+    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}"
+
+def test_stacked_pooling_with_partial_mask():
+    dim = 64
+    pool_sizes = [10, 5, 2]
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    attn_mask = torch.cat([torch.zeros(1, 1, S//2), torch.ones(1, 1, S//2)], dim=-1)
+    
+    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
+    output = stacked_pool(x, attn_mask=attn_mask)
+    
+    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}" 

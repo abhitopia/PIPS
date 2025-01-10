@@ -471,15 +471,20 @@ class StackedPooling(nn.Module):
             AttentionPool(dim, num_queries=size) for size in pool_sizes
         ])
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x (Tensor): shape [B, S, D] input to the first stage
+            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S] to be applied to the first AttentionPool
         Returns:
             Tensor: shape [B, final_size, D] after all stages
         """
-        for pool in self.pool_layers:
-            x = pool(x)  # compress from current S -> next S'
+        for i, pool in enumerate(self.pool_layers):
+            if i == 0 and attn_mask is not None:
+                # Apply the attention mask only to the first AttentionPool
+                x = pool(x, attn_mask=attn_mask)
+            else:
+                x = pool(x)  # compress from current S -> next S'
         return x
 
 
