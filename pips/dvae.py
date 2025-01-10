@@ -416,25 +416,33 @@ class AttentionPool(nn.Module):
         self.q_proj = nn.Linear(dim, dim, bias=False)
         self.out_proj = nn.Linear(dim, dim, bias=False)
         
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x (Tensor): Input tensor of shape [B, S, D]
+            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S], [B, 1, S], or [B, K, S]
         Returns:
             Tensor: Output tensor of shape [B, K, D]
         """
-        B = x.shape[0]
-        
+        B, S, D = x.shape
+        assert D == self.dim, f"Expected input dimension {self.dim}, got {D}."
+
         # Project the queries, keys, and values
         q = self.q_proj(self.queries).unsqueeze(0)  # [1, K, D]
         k = self.k_proj(x)  # [B, S, D]
         v = self.v_proj(x)  # [B, S, D]
-        
+
+        # Check attn_mask dimensions if provided
+        if attn_mask is not None:
+            assert attn_mask.shape in [(1, 1, S), (B, 1, S), (B, self.num_queries, S)], \
+                f"Expected attn_mask shape [(1, 1, S), (B, 1, S), (B, {self.num_queries}, S)], got {attn_mask.shape}"
+
         # Compute attention
         attn_output = F.scaled_dot_product_attention(
             q,                          # [1, K, D]
             k,                          # [B, S, D]
             v,                          # [B, S, D]
+            attn_mask=attn_mask,        # Apply attention mask if provided
             scale=self.dim ** -0.5
         )  # [B, K, D]
         
@@ -610,15 +618,13 @@ class DVAE(nn.Module):
         return positions
 
 
-    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True,):
+    def encode(self, x: Tensor, tau: float = 0.9, hard: bool = True) -> Tensor:
         B, S = x.size()
 
         # Convert into x: (B, S, D) using self.embd
         x = self.embd(x)
 
         positions = self.pos_indices.expand(B, -1, -1)
-        # print(positions.shape)
-        # print(self.pos_indices.shape)
 
         assert S == self.n_pos, f"Input Sequence must be of length {self.n_pos}"
 
@@ -634,6 +640,11 @@ class DVAE(nn.Module):
         # Use gumbel softmax to sample from the Codebook
         code = F.gumbel_softmax(encoded_logits, tau=tau, hard=hard) #(B, n_codes, codebook_size)
         
+        return code
+
+    def decode(self, code: Tensor) -> Tensor:
+        B, n_codes, _ = code.size()
+
         # Lookup Codebook - Matrix multiplication between one-hot codes and codebook
         code_words = torch.einsum('bnc,cd->bnd', code, self.codebook)  # (B, n_codes, n_dim)
 
@@ -641,11 +652,17 @@ class DVAE(nn.Module):
         z_prime = self.decoder_bottleneck(code_words)
 
         # Pass through decoder network
+        positions = self.pos_indices.expand(B, -1, -1)
         decoded, _ = self.decoder_base(z_prime, None, positions)
 
         # Convert to logits
         decoded_logits = self.decoder_head(decoded)
 
+        return decoded_logits
+
+    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True) -> Tensor:
+        code = self.encode(x, tau, hard)
+        decoded_logits = self.decode(code)
         return decoded_logits
 
 

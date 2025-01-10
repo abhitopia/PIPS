@@ -11,7 +11,8 @@ from pips.dvae import (
     SwiGLUFFN,
     RMSNorm,
     GridDVAEConfig,
-    DVAE
+    DVAE,
+    AttentionPool
 )
 import torch.nn.functional as F
 
@@ -218,3 +219,50 @@ def test_dvae():
     # Test that output contains logits (not all zeros or NaNs)
     assert not torch.allclose(output, torch.zeros_like(output))
     assert not torch.any(torch.isnan(output)) 
+
+def test_attention_pool_no_mask():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+    output = pool(x)
+    
+    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
+
+def test_attention_pool_mask_shape_1_1_S():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    attn_mask = torch.ones(1, 1, S)
+    
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+    output = pool(x, attn_mask=attn_mask)
+    
+    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
+
+def test_attention_pool_mask_shape_B_1_S():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    attn_mask = torch.ones(B, 1, S)
+    
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+    output = pool(x, attn_mask=attn_mask)
+    
+    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
+
+def test_attention_pool_mask_shape_B_K_S():
+    dim = 64
+    num_queries = 10
+    B, S = 4, 20
+    x = torch.randn(B, S, dim)
+    attn_mask = torch.ones(B, num_queries, S)
+    
+    pool = AttentionPool(dim=dim, num_queries=num_queries)
+    output = pool(x, attn_mask=attn_mask)
+    
+    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}" 
