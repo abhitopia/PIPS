@@ -140,14 +140,30 @@ class Grid:
             is_input=self.is_input
         )
 
-    def permute(self, color_perm: ColorPermutation, arr_transform: ArrayTransform, in_place: bool = False):
+    def permute(self, color_perm: ColorPermutation = ColorPermutation.RAND, arr_transform: Optional[ArrayTransform] = None, in_place: bool = False):
         """Apply color permutation and array transformation to the grid.
         
         Args:
-            color_perm: Color permutation to apply
-            arr_transform: Array transformation to apply
+            color_perm: Color permutation to apply. Defaults to a random permutation. If None, a random permutation except RAND is chosen.
+            arr_transform: Array transformation to apply. If None, a random transformation is chosen.
             in_place: If True, modify this grid instance. If False, return a new grid.
         """
+        if color_perm is None:
+            cps = list(ColorPermutation)[:-1] # Exclude the random permutation
+            color_perm = random.choice(cps)
+        else:
+            assert isinstance(color_perm, ColorPermutation), "color_perm should be an instance of ColorPermutation"
+
+        if arr_transform is None:
+            ats = list(ArrayTransform)
+            arr_transform = random.choice(ats)
+        else:
+            assert isinstance(arr_transform, ArrayTransform), "arr_transform should be an instance of ArrayTransform"
+
+        # Try again if the identity transformation is selected with the identity color permutation
+        if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
+            return self.permute()
+
         array = color_perm.transform(self.array)
         array = arr_transform.transform(array)
         

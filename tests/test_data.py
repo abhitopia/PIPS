@@ -774,3 +774,46 @@ def test_grid_project():
     # Check the content of the projected array
     expected_array = np.pad(input_array, ((0, 30), (0, 30)), 'constant', constant_values=-1)
     np.testing.assert_array_equal(projected_array, expected_array)
+
+def test_grid_permute_random():
+    # Create a simple grid
+    array = np.array([[1, 2], [3, 4]])
+    grid = Grid(array)
+
+    # Test permutation with default arguments (random permutation)
+    permuted = grid.permute()
+
+    # Ensure the permuted grid is not the same as the original
+    assert not np.array_equal(permuted.array, grid.array), "Permuted grid should not be equal to the original grid"
+
+    # Ensure the color_perm is set to RAND
+    assert permuted.color_perm == ColorPermutation.RAND.name, "Color permutation should be RAND"
+
+    # Allow for the possibility of an identity transformation
+    if permuted.transform == ArrayTransform.IDENT.name:
+        # If the transformation is IDENT, ensure that the color permutation is not identity
+        assert permuted.color_perm != ColorPermutation.CPID.name, "Color permutation should not be identity if transform is IDENT"
+    else:
+        # Otherwise, ensure the transform is not identity
+        assert permuted.transform != ArrayTransform.IDENT.name, "Array transformation should not be identity"
+
+    # Ensure the permuted grid is a valid Grid object
+    assert isinstance(permuted, Grid), "Permuted result should be a Grid instance"
+
+def test_grid_permute_ident_transform():
+    # Create a simple grid
+    array = np.array([[1, 2], [3, 4]])
+    grid = Grid(array)
+
+    # Test permutation with IDENT transform and default color_perm (RAND)
+    permuted = grid.permute(arr_transform=ArrayTransform.IDENT)
+
+    # Ensure the permuted grid is not the same as the original due to color permutation
+    assert not np.array_equal(permuted.array, grid.array), "Permuted grid should not be equal to the original grid due to color permutation"
+
+    # Ensure the color_perm is set to RAND and transform is IDENT
+    assert permuted.color_perm == ColorPermutation.RAND.name, "Color permutation should be RAND"
+    assert permuted.transform == ArrayTransform.IDENT.name, "Array transformation should be IDENT"
+
+    # Ensure the permuted grid is a valid Grid object
+    assert isinstance(permuted, Grid), "Permuted result should be a Grid instance"
