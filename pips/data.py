@@ -148,42 +148,50 @@ class Grid:
             arr_transform: Array transformation to apply. If None, a random transformation is chosen.
             in_place: If True, modify this grid instance. If False, return a new grid.
         """
-        if color_perm is None:
-            cps = list(ColorPermutation)[:-1] # Exclude the random permutation
-            color_perm = random.choice(cps)
-        else:
-            assert isinstance(color_perm, ColorPermutation), "color_perm should be an instance of ColorPermutation"
+        try:
+            if color_perm is None:
+                cps = list(ColorPermutation)[:-1]  # Exclude the random permutation
+                color_perm = random.choice(cps)
+            else:
+                assert isinstance(color_perm, ColorPermutation), "color_perm should be an instance of ColorPermutation"
 
-        if arr_transform is None:
-            ats = list(ArrayTransform)
-            arr_transform = random.choice(ats)
-        else:
-            assert isinstance(arr_transform, ArrayTransform), "arr_transform should be an instance of ArrayTransform"
+            if arr_transform is None:
+                ats = list(ArrayTransform)
+                arr_transform = random.choice(ats)
+            else:
+                assert isinstance(arr_transform, ArrayTransform), "arr_transform should be an instance of ArrayTransform"
 
-        # Try again if the identity transformation is selected with the identity color permutation
-        if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
-            return self.permute()
+            # Try again if the identity transformation is selected with the identity color permutation
+            if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
+                return self.permute()
 
-        array = color_perm.transform(self.array)
-        array = arr_transform.transform(array)
-        
-        if in_place:
-            self.array = array
-            self.color_perm = color_perm.name
-            self.transform = arr_transform.name
-            return self
-        
-        return Grid(
-            array,
-            idx=self.idx,
-            program_id=self.program_id,
-            task_id=self.task_id,
-            dataset=self.dataset,
-            color_perm=color_perm.name,
-            transform=arr_transform.name,
-            is_test=self.is_test,
-            is_input=self.is_input
-        )
+            array = color_perm.transform(self.array)
+            array = arr_transform.transform(array)
+
+            if in_place:
+                self.array = array
+                self.color_perm = color_perm.name
+                self.transform = arr_transform.name
+                return self
+
+            return Grid(
+                array,
+                idx=self.idx,
+                program_id=self.program_id,
+                task_id=self.task_id,
+                dataset=self.dataset,
+                color_perm=color_perm.name,
+                transform=arr_transform.name,
+                is_test=self.is_test,
+                is_input=self.is_input
+            )
+        except Exception as e:
+            # Log all relevant attributes for debugging
+            logger.error(f"Error during permutation: {e}")
+            logger.error(f"Grid attributes: idx={self.idx}, program_id={self.program_id}, task_id={self.task_id}, "
+                         f"dataset={self.dataset}, color_perm={self.color_perm}, transform={self.transform}, "
+                         f"is_test={self.is_test}, is_input={self.is_input}, array_shape={self.array.shape}")
+            raise
 
     def project(self, new_height: int = 32, new_width: int = 32, pad_value: int = -1):
         """Project the grid array to a new height and width, padding with pad_value if necessary.

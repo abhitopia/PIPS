@@ -4,6 +4,7 @@ import pytest
 from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT
 from pips.data import Grid
 import torch
+import logging
 
 def test_process_grid_loader():
     # Mock a loader with fake grids
@@ -111,7 +112,105 @@ def test_collate_fn():
     assert isinstance(result, GRID_INPUT)
 
     # Check the shape of the grids tensor
-    assert result.grids.shape == (2, 32, 32)
+    assert result.grids.shape == (2, 32 * 32)
+
+    # Check the dtype of the grids tensor
+    assert result.grids.dtype == torch.long
+
+    # Check the attributes
+    expected_attributes = [
+        {
+            'idx': 0,
+            'program_id': 'prog_id_0',
+            'task_id': 'task_id_0',
+            'dataset': 'dataset_0',
+            'color_perm': 'color_perm_0',
+            'transform': 'transform_0',
+            'is_test': False,
+            'is_input': True
+        },
+        {
+            'idx': 1,
+            'program_id': 'prog_id_1',
+            'task_id': 'task_id_1',
+            'dataset': 'dataset_1',
+            'color_perm': 'color_perm_1',
+            'transform': 'transform_1',
+            'is_test': True,
+            'is_input': False
+        }
+    ]
+    assert result.attributes == expected_attributes
+
+def test_process_grid_loader_empty_grids():
+    # Mock a loader with no grids
+    mock_loader = MagicMock()
+    mock_loader.name = "EMPTY_LOADER"
+    mock_loader.train_grids = []
+    mock_loader.test_grids = []
+
+    # Mock the output file path
+    mock_output_file = MagicMock()
+    mock_output_file.exists.return_value = False
+
+    # Run the process_grid_loader function
+    with patch('pips.grid_dataset.logger') as mock_logger:
+        process_grid_loader(mock_loader, mock_output_file)
+
+        # Check that a warning was logged
+        mock_logger.warning.assert_called_with(f"No grids found for {mock_loader.name}. Check the data source.")
+
+def test_process_grid_loader_valid_grids():
+    # Mock a loader with valid grids
+    mock_loader = MagicMock()
+    mock_loader.name = "VALID_LOADER"
+    mock_loader.train_grids = [MagicMock(array=np.array([[1, 2], [3, 4]]))]
+    mock_loader.test_grids = [MagicMock(array=np.array([[5, 6], [7, 8]]))]
+
+    # Add necessary attributes to mock grids
+    for grid in mock_loader.train_grids + mock_loader.test_grids:
+        grid.idx = 0
+        grid.program_id = "prog_id"
+        grid.task_id = "task_id"
+        grid.dataset = "dataset"
+        grid.color_perm = "color_perm"
+        grid.transform = "transform"
+        grid.is_test = False
+        grid.is_input = True
+
+    # Mock the output file path
+    mock_output_file = MagicMock()
+    mock_output_file.exists.return_value = False
+
+    # Run the process_grid_loader function
+    with patch('numpy.save') as mock_save, patch('pips.grid_dataset.logger') as mock_logger:
+        process_grid_loader(mock_loader, mock_output_file)
+
+        # Check that numpy.save was called once
+        mock_save.assert_called_once()
+
+        # Check that the info log was called for saving grids
+        mock_logger.info.assert_any_call(f"Loaded 2 grids for {mock_loader.name}")
+        mock_logger.info.assert_any_call(f"Saved 2 valid grids to {mock_output_file} for {mock_loader.name}")
+
+def test_collate_fn_different_project_sizes():
+    # Create mock Grid objects
+    mock_grids = [
+        MagicMock(spec=Grid, array=np.array([[1, 2], [3, 4]]), idx=0, program_id='prog_id_0', task_id='task_id_0',
+                  dataset='dataset_0', color_perm='color_perm_0', transform='transform_0', is_test=False, is_input=True),
+        MagicMock(spec=Grid, array=np.array([[5, 6], [7, 8]]), idx=1, program_id='prog_id_1', task_id='task_id_1',
+                  dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
+    ]
+
+    # Mock the project method to return a 16x16 array
+    for grid in mock_grids:
+        grid.project.return_value = np.pad(grid.array, ((0, 14), (0, 14)), 'constant', constant_values=-1)
+
+    # Call the collate function with a different project size
+    result = GridDataset.collate_fn(mock_grids, pad_value=15, device='cpu', project_size=(16, 16))
+
+    # Check the shape of the grids tensor
+    assert result.grids.shape == (2, 16 * 16)
 
     # Check the dtype of the grids tensor
     assert result.grids.dtype == torch.long

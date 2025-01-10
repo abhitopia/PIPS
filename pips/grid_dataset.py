@@ -61,18 +61,30 @@ def process_grid_loader(loader, output_file):
         return
 
     grids = loader.train_grids + loader.test_grids
+
+    # Log the number of grids loaded
+    logger.info(f"Loaded {len(grids)} grids for {loader.name}")
+
+    # Check if grids are empty
+    if not grids:
+        logger.warning(f"No grids found for {loader.name}. Check the data source.")
+        return
+
     combined_data = np.zeros(len(grids), dtype=combined_dtype)
 
+    valid_grid_count = 0
     for i, grid in tqdm(enumerate(grids), total=len(grids), desc=f"Processing grids for {loader.name}"):
         if grid.array.shape[0] > 30 or grid.array.shape[1] > 30:
+            logger.debug(f"Skipping grid {grid.idx} with shape {grid.array.shape} for {loader.name}")
             continue
+
         # Initialize a 30x30 grid with -1
         grid_data = np.full((30, 30), -1, dtype=np.int8)
         
         # Copy the smaller grid into the larger grid
         grid_data[:grid.array.shape[0], :grid.array.shape[1]] = grid.array
 
-        combined_data[i] = (
+        combined_data[valid_grid_count] = (
             grid_data,
             grid.idx,
             grid.program_id,
@@ -84,8 +96,17 @@ def process_grid_loader(loader, output_file):
             grid.is_input,
             grid.array.shape
         )
+        valid_grid_count += 1
+
+    if valid_grid_count == 0:
+        logger.warning(f"No valid grids processed for {loader.name}. Check grid dimensions and filtering criteria.")
+        return
+
+    # Resize combined_data to only include valid grids
+    combined_data = combined_data[:valid_grid_count]
 
     np.save(output_file, combined_data)
+    logger.info(f"Saved {valid_grid_count} valid grids to {output_file} for {loader.name}")
 
 def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
     cache_dir.mkdir(parents=True, exist_ok=True)
@@ -127,7 +148,7 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
 # Define the NamedTuple for the collate function output
 class GRID_INPUT(NamedTuple):
-    grids: torch.Tensor
+    grids: torch.Tensor  # (B, S) where S is the flattened size of the projected grid
     attributes: List[Dict[str, any]]
 
 class GridDataset(Dataset):
@@ -165,13 +186,15 @@ class GridDataset(Dataset):
         return grid
 
     @staticmethod
-    def collate_fn(batch, pad_value=-1, device=torch.device('cpu')) -> GRID_INPUT:
+    def collate_fn(batch, pad_value=-1, device=torch.device('cpu'), permute=False, project_size=(32, 32)) -> GRID_INPUT:
         """Collate function to process a batch of Grids.
 
         Args:
             batch (list of Grid): The batch of Grid objects.
             pad_value (int): The value to use for padding. Default is -1.
             device (str or torch.device): The device to move the tensors to. Default is 'cpu'.
+            permute (bool): Whether to permute the grid before projection. Default is False.
+            project_size (tuple): The desired size for grid projection. Default is (32, 32).
 
         Returns:
             GRID_INPUT: A named tuple containing the projected grids and their attributes.
@@ -180,8 +203,12 @@ class GridDataset(Dataset):
         attributes = []
 
         for grid in batch:
-            # Project each grid to 32x32
-            projected_array = grid.project(new_height=32, new_width=32, pad_value=pad_value)
+            # Optionally permute the grid using the grid.permute method
+            if permute:
+                grid = grid.permute()
+
+            # Project each grid to the specified size
+            projected_array = grid.project(new_height=project_size[0], new_width=project_size[1], pad_value=pad_value)
             projected_grids.append(projected_array)
 
             # Collect attributes and convert numpy types to native Python types
@@ -200,6 +227,9 @@ class GridDataset(Dataset):
         projected_grids = np.array(projected_grids)
         projected_grids = torch.tensor(projected_grids, dtype=torch.long).to(device, non_blocking=True)
 
+        # Flatten the projected grids to shape BSx(project_size[0] * project_size[1])
+        projected_grids = projected_grids.view(projected_grids.size(0), -1)
+
         return GRID_INPUT(grids=projected_grids, attributes=attributes)
 
 if __name__ == '__main__':
@@ -216,7 +246,7 @@ if __name__ == '__main__':
         dataset,
         batch_size=32,
         shuffle=True,
-        collate_fn=lambda x: GridDataset.collate_fn(x, pad_value=15, device='cpu'),
+        collate_fn=lambda x: GridDataset.collate_fn(x, pad_value=15, device='cpu', permute=True),
         drop_last=False
     )
 
