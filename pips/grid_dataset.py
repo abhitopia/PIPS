@@ -7,6 +7,7 @@ from tqdm import tqdm
 from torch.utils.data import Dataset, DataLoader
 import torch
 from typing import NamedTuple, List, Dict
+import hashlib
 
 logger = logging.getLogger(__name__)
 
@@ -32,12 +33,16 @@ ARC_TAMA = ArcTasksLoader(name='ARC_TAMA', path='data/arc_dataset_collection/dat
 ARC_TRAIN = ArcTasksLoader(name='ARC_TRAIN', path='data/arc_dataset_collection/dataset/ARC/data/training')
 ARC_IPARC = ArcTasksLoader(name='ARC_IPARC', path='data/arc_dataset_collection/dataset/IPARC/data')
 
-GRID_LOADERS = [
+TRAIN_GRID_LOADERS = [
     BARC_GP4OM_OM, BARC_GP4_OM, BARC_GP4O_OM, BARC_GP4O_OM_SUG, 
     ARC_1D, ARC_COMMUNITY, ARC_CONCEPT, ARC_DBIGHAM,
-    ARC_DIVA, ARC_EVAL, ARC_MINI, ARC_NOSOUND, ARC_PQA,
+    ARC_DIVA, ARC_MINI, ARC_NOSOUND, ARC_PQA,
     ARC_REARC_EASY, ARC_REARC_HARD, ARC_SEQUENCE, ARC_SORTOF,
     ARC_SYNTH_RIDDLES, ARC_TAMA, ARC_TRAIN, ARC_IPARC
+]
+
+VAL_GRID_LOADERS = [
+    ARC_EVAL
 ]
 
 # Define a structured data type for the combined grid and attributes
@@ -111,16 +116,22 @@ def process_grid_loader(loader, output_file):
 def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    unified_file = cache_dir / 'grid_data.npy'
+    # Sort loaders by name
+    sorted_loaders = sorted(loaders, key=lambda loader: loader.name)
+
+    # Create a hash from the sorted loader names
+    loader_names = ''.join(loader.name for loader in sorted_loaders)
+    unified_file_hash = hashlib.md5(loader_names.encode()).hexdigest()
+    unified_file = cache_dir / f'grid_data_{unified_file_hash}.npy'
 
     if not unified_file.exists():
         output_files = {}
-        for loader in loaders:
+        for loader in sorted_loaders:
             output_file = cache_dir / f"{loader.name}_grid_data.npy"
             output_files[loader.name] = output_file
 
         with concurrent.futures.ProcessPoolExecutor() as executor:
-            futures = {executor.submit(process_grid_loader, loader, output_files[loader.name]): loader for loader in loaders}
+            futures = {executor.submit(process_grid_loader, loader, output_files[loader.name]): loader for loader in sorted_loaders}
 
             for future in concurrent.futures.as_completed(futures):
                 loader = futures[future]
@@ -131,6 +142,7 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
         all_data = []
 
+        logger.info(f"Saving grid data to cache...")
         for loader_name, output_file in output_files.items():
             assert output_file.exists(), f"Output file for {loader_name} does not exist"
             data = np.load(output_file, mmap_mode='r')
@@ -138,7 +150,6 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
         all_data = np.concatenate(all_data, axis=0)
 
-        logger.info(f"Saving grid data to cache...")
         np.save(unified_file, all_data)
     else:
         logger.info(f"Loading grid data from cache...")
@@ -152,8 +163,10 @@ class GRID_INPUT(NamedTuple):
     attributes: List[Dict[str, any]]
 
 class GridDataset(Dataset):
-    def __init__(self, loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
+    def __init__(self, train: bool = True, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
         # Load the data using the existing function
+
+        loaders = TRAIN_GRID_LOADERS if train else VAL_GRID_LOADERS
         self.data = load_grid_loaders(loaders, cache_dir)
 
     def __len__(self):
@@ -238,7 +251,7 @@ if __name__ == '__main__':
         format='%(message)s'  # Simplified format to just show the message
     )
 
-    dataset = GridDataset(GRID_LOADERS)
+    dataset = GridDataset(train=True)
     print(f"Total number of samples in dataset: {len(dataset)}")
 
     # Create a DataLoader with batch size 32, pad_value 15, and random shuffling

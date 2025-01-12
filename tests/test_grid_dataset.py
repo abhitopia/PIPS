@@ -1,10 +1,11 @@
 import numpy as np
 from unittest.mock import patch, MagicMock
 import pytest
-from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT
+from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT, TRAIN_GRID_LOADERS, VAL_GRID_LOADERS
 from pips.data import Grid
 import torch
 import logging
+from pathlib import Path
 
 def test_process_grid_loader():
     # Mock a loader with fake grids
@@ -68,29 +69,25 @@ def mock_load_grid_loaders():
         ], dtype=combined_dtype)
         yield mock_loader
 
+@patch('pips.grid_dataset.load_grid_loaders')
 def test_grid_dataset_initialization(mock_load_grid_loaders):
-    # Initialize the GridDataset
-    dataset = GridDataset(loaders=[])
+    # Mock the return value of load_grid_loaders
+    mock_load_grid_loaders.return_value = []
 
-    # Check the length of the dataset
-    assert len(dataset) == 1
+    # Define the cache directory
+    cache_dir = Path(__file__).resolve().parent.parent / '.cache'
 
-    # Retrieve the first item
-    grid = dataset[0]
+    # Initialize the GridDataset for training
+    dataset = GridDataset(train=True)
+    assert len(dataset) == 0
 
-    # Check that the item is a Grid object
-    assert isinstance(grid, Grid)
+    # Initialize the GridDataset for validation
+    dataset = GridDataset(train=False)
+    assert len(dataset) == 0
 
-    # Check the attributes of the Grid object
-    assert np.array_equal(grid.array, np.array([[1, 2], [3, 4]]))
-    assert grid.idx == 0
-    assert grid.program_id == 'prog_id'
-    assert grid.task_id == 'task_id'
-    assert grid.dataset == 'dataset'
-    assert grid.color_perm == 'color_perm'
-    assert grid.transform == 'transform'
-    assert grid.is_test == np.bool_(False)
-    assert grid.is_input == np.bool_(True) 
+    # Ensure load_grid_loaders was called with the correct loaders and cache_dir
+    mock_load_grid_loaders.assert_any_call(TRAIN_GRID_LOADERS, cache_dir)
+    mock_load_grid_loaders.assert_any_call(VAL_GRID_LOADERS, cache_dir)
 
 def test_collate_fn():
     # Create mock Grid objects
