@@ -11,7 +11,7 @@ from pips.dvae import (
     SwiGLUFFN,
     RMSNorm,
     GridDVAEConfig,
-    DVAE,
+    GridDVAE,
     AttentionPool,
     StackedPooling,
     Transformer
@@ -41,7 +41,7 @@ def test_is_perfect_square():
 
 def test_create_grid_position_tensor():
     # Test 2x2 grid
-    pos_2x2 = DVAE.create_grid_position_tensor(2, 2, requires_grad=False)
+    pos_2x2 = GridDVAE.create_grid_position_tensor(2, 2, requires_grad=False)
     expected_2x2 = torch.tensor([
         [0, 0],  # top-left
         [0, 1],  # top-right
@@ -51,7 +51,7 @@ def test_create_grid_position_tensor():
     assert torch.equal(pos_2x2, expected_2x2)
     
     # Test 3x2 grid
-    pos_3x2 = DVAE.create_grid_position_tensor(3, 2, requires_grad=False)
+    pos_3x2 = GridDVAE.create_grid_position_tensor(3, 2, requires_grad=False)
     expected_3x2 = torch.tensor([
         [0, 0], [0, 1],  # first row
         [1, 0], [1, 1],  # second row
@@ -60,11 +60,11 @@ def test_create_grid_position_tensor():
     assert torch.equal(pos_3x2, expected_3x2)
     
     # Test requires_grad parameter
-    pos_no_grad = DVAE.create_grid_position_tensor(2, 2, requires_grad=False)
+    pos_no_grad = GridDVAE.create_grid_position_tensor(2, 2, requires_grad=False)
     assert not pos_no_grad.requires_grad
     assert pos_no_grad.dtype == torch.long
     
-    pos_with_grad = DVAE.create_grid_position_tensor(2, 2, requires_grad=True)
+    pos_with_grad = GridDVAE.create_grid_position_tensor(2, 2, requires_grad=True)
     assert pos_with_grad.requires_grad
     assert pos_with_grad.dtype == torch.float  # Must be float to support gradients
 
@@ -202,7 +202,7 @@ def test_dvae():
         n_vocab=16
     )
     
-    dvae = DVAE(config)
+    dvae = GridDVAE(config)
     
     # Test forward pass
     batch_size = 2
@@ -304,7 +304,7 @@ def test_stacked_pooling_with_partial_mask():
     assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}" 
 
 def test_create_random_mask_no_mask():
-    dvae = DVAE(GridDVAEConfig(
+    dvae = GridDVAE(GridDVAEConfig(
         n_dim=128,
         n_head=8,
         n_layers=6,
@@ -318,7 +318,7 @@ def test_create_random_mask_no_mask():
     assert mask is None, "Expected no mask when mask_percentage is 0."
 
 def test_create_random_mask_full_mask():
-    dvae = DVAE(GridDVAEConfig(
+    dvae = GridDVAE(GridDVAEConfig(
         n_dim=128,
         n_head=8,
         n_layers=6,
@@ -332,7 +332,7 @@ def test_create_random_mask_full_mask():
         dvae.create_random_mask(B, S, mask_percentage=1.0)
 
 def test_create_random_mask_partial_mask():
-    dvae = DVAE(GridDVAEConfig(
+    dvae = GridDVAE(GridDVAEConfig(
         n_dim=128,
         n_head=8,
         n_layers=6,
@@ -360,7 +360,7 @@ def test_dvae_forward_with_mask():
         n_pos=1024,
         n_vocab=16
     )
-    dvae = DVAE(config)
+    dvae = GridDVAE(config)
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
@@ -499,7 +499,7 @@ def test_transformer_masking_effect():
     # Create position indices using DVAE.create_grid_position_tensor
     grid_height = int(S**0.5)
     grid_width = grid_height
-    positions = DVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
     positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
 
     # Test forward pass with the same mask
@@ -540,7 +540,7 @@ def test_transformer_masking_effect_single_mask():
     # Create position indices using DVAE.create_grid_position_tensor
     grid_height = int(S**0.5)
     grid_width = grid_height
-    positions = DVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
     positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
 
     # Test forward pass with the same mask
@@ -568,7 +568,7 @@ def test_dvae_masking_effect():
         n_pos=1024,
         n_vocab=16
     )
-    dvae = DVAE(config)
+    dvae = GridDVAE(config)
     B = 2
     S = config.n_pos
     x1 = torch.randint(0, config.n_vocab, (B, S))

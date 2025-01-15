@@ -587,7 +587,7 @@ def gumbel_softmax(logits: Tensor, tau: float=1, hard: bool=False, dim: int=-1) 
     return ret
 
 
-class DVAE(nn.Module):
+class GridDVAE(nn.Module):
     def __init__(self, config: GridDVAEConfig):
         super().__init__()
         self.config = config
