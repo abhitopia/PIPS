@@ -513,51 +513,44 @@ class GridDVAEConfig(Config):
     n_dim: int
     n_head: int
     n_layers: int
-    compression_factor: int = 128
+    n_codes: int  # Directly specify the number of codes
     codebook_size: int = 512
-    rope_base: int = 10_000 # Base for geometric progression in angle computation
+    rope_base: int = 10_000
     dropout: float = 0.0
     n_pos: int = 1024
     n_vocab: int = 16
-
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
             raise ValueError("n_dim must be divisible by n_head")
         
-        C = self.n_dim // self.n_head # Pseudo dimension for each head
+        C = self.n_dim // self.n_head
         assert C % 2 == 0, "n_dim // n_head must be divisible by 2"
 
-        head_dim = C // 2  # Actual Head Dimension. This is due to differential attention
+        head_dim = C // 2  # Actual Head Dimension. 
 
         # This is to ensure Rope2D can be applied
         assert head_dim % 2 == 0, "Head dimension must be even"
 
         assert is_power_of_two(self.n_pos), "Number of positions must be a power of 2"
         assert is_perfect_square(self.n_pos), "Number of positions must be a perfect square"
-        assert is_power_of_two(self.compression_factor), "Compression factor must be a power of 2"
-        assert self.n_pos % self.compression_factor == 0, "Number of positions must be divisible by the compression factor"
+        assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"
+        assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
 
-        self.n_codes = int(self.n_pos / self.compression_factor)
-        self.pool_sizes = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor))+1)]
+        self.compression_factor = self.n_pos // self.n_codes
+        self.pool_sizes = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
         self.max_grid_height = int(math.sqrt(self.n_pos))
         self.max_grid_width = int(math.sqrt(self.n_pos))
 
     def __repr__(self) -> str:
-        # Get all the initial attributes
         attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
-        
-        # Add the computed attributes from __post_init__
         computed_attrs = [
-            f"n_codes={self.n_codes}",
+            f"compression_factor={self.compression_factor}",
             f"pool_sizes={self.pool_sizes}",
             f"max_grid_height={self.max_grid_height}",
             f"max_grid_width={self.max_grid_width}"
         ]
-        
-        # Combine all attributes
         all_attrs = attrs + computed_attrs
-        
         return f"DVAEConfig({', '.join(all_attrs)})"
 
 

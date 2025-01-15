@@ -4,7 +4,6 @@ import pytest
 from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT, TRAIN_GRID_LOADERS, VAL_GRID_LOADERS
 from pips.data import Grid
 import torch
-import logging
 from pathlib import Path
 
 def test_process_grid_loader():
