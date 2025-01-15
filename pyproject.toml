@@ -20,6 +20,8 @@ matplotlib = "^3.10.0"
 tqdm = "^4.67.1"
 ujson = "^5.10.0"
 h5py = "^3.12.1"
+wandb = "^0.19.3"
+pytorch-lightning = "^2.5.0.post0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
