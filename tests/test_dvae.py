@@ -583,10 +583,10 @@ def test_dvae_masking_effect():
         x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
 
     torch.manual_seed(42)
-    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
 
     torch.manual_seed(42)
-    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
 
     # Increase the tolerance to account for floating-point precision issues
     assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
@@ -599,10 +599,10 @@ def test_dvae_masking_effect():
         x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
 
     torch.manual_seed(42)
-    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
 
     torch.manual_seed(42)
-    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
 
     # Increase the tolerance to account for floating-point precision issues
     assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
@@ -615,10 +615,10 @@ def test_dvae_masking_effect():
         x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
 
     torch.manual_seed(42)
-    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
+    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
 
     torch.manual_seed(42)
-    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
+    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
 
     # Increase the tolerance to account for floating-point precision issues
     assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
@@ -631,10 +631,10 @@ def test_dvae_masking_effect():
         x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
 
     torch.manual_seed(42)
-    code1 = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
+    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
 
     torch.manual_seed(42)
-    code2 = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
+    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
 
     # Increase the tolerance to account for floating-point precision issues
     assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."

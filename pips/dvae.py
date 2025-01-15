@@ -682,7 +682,7 @@ class GridDVAE(nn.Module):
         # Use gumbel softmax to sample from the Codebook
         code = F.gumbel_softmax(encoded_logits, tau=tau, hard=hard)
 
-        return code
+        return code, encoded_logits
 
     def decode(self, code: Tensor) -> Tensor:
         B, n_codes, _ = code.size()
@@ -705,7 +705,7 @@ class GridDVAE(nn.Module):
     def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0) -> Tensor:
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
-        code = self.encode(x, attn_mask, tau, hard)
+        code, encoded_logits = self.encode(x, attn_mask, tau, hard)
         decoded_logits = self.decode(code)
         return decoded_logits
 
