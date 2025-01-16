@@ -8,6 +8,7 @@
 - [ ] Implement Gumbel Hard Scheduling
 - [ ] Implement Masking Scheduler
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
+- [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)
 
 ## Checkpointing
 - [ ] Save hyperparameters
