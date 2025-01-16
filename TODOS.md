@@ -6,15 +6,22 @@
 - [ ] Implement code usage monitor
 - [ ] Implement Tau Scheduling
 - [ ] Implement Gumbel Hard Scheduling
-- [ ] Implement Throughput Monitor
+- [ ] Implement Masking Scheduler
+- [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
+
+## Checkpointing
 - [ ] Save hyperparameters
+- [ ] Implement Checkpointing
 - [ ] Training Resume
-- [ ] Control WandB initialisation and naming
-- [ ] Implement Masking Schedule
-- [ ] Exponential Weighted Iterate Average for parameters
 
 ## Disentanglement
 - [ ] Implement explicit disentanglement in KLD Loss
+
+
+## Monitoring
+- [ ] Control WandB initialisation and naming
+- [ ] Implement Throughput Monitor
+- [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
 
 ## CLI
