@@ -166,3 +166,8 @@ wandb/
 
 # Checkpoints
 *.ckpt
+
+# MNIST Downloaded Data
+mnist_data/
+
+experiments/
