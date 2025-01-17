@@ -607,9 +607,6 @@ class GridDVAE(nn.Module):
 
         # persistent=False prevents it from saved to statedict
         self.register_buffer('pos_indices', pos_indices, persistent=False)
-        
-        # Initialize q_z_running to maintain the aggregated posterior
-        self.q_z_running = None
 
     @staticmethod
     def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
