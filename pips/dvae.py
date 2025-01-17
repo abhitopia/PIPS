@@ -662,6 +662,10 @@ class GridDVAE(nn.Module):
         return mask
 
     def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, reinMax: bool = False) -> Tensor:
+
+        if reinMax:
+            assert hard, "ReinMax requires hard sampling"
+            
         B, S = x.size()
 
         # Convert into x: (B, S, D) using self.embd
