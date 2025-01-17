@@ -608,6 +608,8 @@ class GridDVAE(nn.Module):
         # persistent=False prevents it from saved to statedict
         self.register_buffer('pos_indices', pos_indices, persistent=False)
 
+        self.q_z_running = None
+
     @staticmethod
     def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
         """
@@ -796,12 +798,10 @@ class GridDVAE(nn.Module):
         # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
         # This provides a smoother estimate of the global q(z) than using the current batch alone.
         # -----------------------------------------------
-        if self.q_z_running is None:
-            self.q_z_running = q_z_current.clone()
-        else:
-            self.q_z_running = momentum * self.q_z_running + (1 - momentum) * q_z_current
 
-        q_z_running = self.q_z_running
+        q_z_running = ( momentum * self.q_z_running + (1 - momentum) * q_z_current ) if self.q_z_running is not None else q_z_current
+
+        self.q_z_running = q_z_running.detach() # Detach the local variable from the graph
         # -----------------------------------------------
         # Define the uniform prior for each latent dimension.
         # Since p(z_j) is assumed to be uniform over C possible codes, each entry is 1/C.
