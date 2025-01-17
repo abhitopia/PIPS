@@ -2,7 +2,8 @@
 
 ## Training
 - [x] Implement KLD Loss
-- [ ] Implement beta-VAE
+- [x] Implement beta-TCVAE
+- [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
 - [ ] Implement code usage monitor
 - [ ] Implement Tau Scheduling
 - [ ] Implement Gumbel Hard Scheduling

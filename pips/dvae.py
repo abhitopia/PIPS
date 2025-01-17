@@ -594,7 +594,7 @@ class GridDVAE(nn.Module):
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.encoder_base = Transformer(config=config)
-        self.encoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[:-1])
+        self.encoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[1:])
         self.encoder_head = nn.Linear(config.n_dim, config.codebook_size)
         self.codebook = nn.Parameter(torch.randn(config.codebook_size, config.n_dim))
         self.decoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[::-1][1:])
@@ -661,7 +661,7 @@ class GridDVAE(nn.Module):
             mask = torch.rand(B, 1, S) > mask_percentage
         return mask
 
-    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True) -> Tensor:
+    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, reinMax: bool = False) -> Tensor:
         B, S = x.size()
 
         # Convert into x: (B, S, D) using self.embd
@@ -674,15 +674,14 @@ class GridDVAE(nn.Module):
         # Pass to the encoder network with the attention mask
         encoded, _ = self.encoder_base(x, attn_mask, positions)
 
-
         # Compress to Codebook Space with the attention mask
         encoded_compressed = self.encoder_bottleneck(encoded, attn_mask)
 
         # Map n_codes to logits
         encoded_logits = self.encoder_head(encoded_compressed)
-
         # Use gumbel softmax to sample from the Codebook
-        soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=True)
+        soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
+
         hard_code = soft_code # Default to soft code
         if hard:
             # Straight through.
@@ -690,7 +689,20 @@ class GridDVAE(nn.Module):
             y_hard = torch.zeros_like(
                 encoded_logits, memory_format=torch.legacy_contiguous_format
             ).scatter_(-1, index, 1.0)
-            hard_code = y_hard - soft_code.detach() + soft_code
+            if reinMax:
+                # ReinMax: Algorithm 2 in https://arxiv.org/pdf/2304.08612
+                # Notice that I use pi_0 from gumbel instead of the softmax, this is deliberate
+                # The noise in gumbel softmax better captures the stochasticity of sampling
+                # For example, even in STE (Algorithm 1), the authors don't use gumbel softmax as pi_0
+                # However, even the official gumbel softmax implementation in PyTorch uses the softmax with gumbel noise
+                pi_0 = soft_code # Step 1
+                D = y_hard # Step 2
+                pi_1 = (D + pi_0) / 2
+                pi_1 = F.softmax((pi_1.log() - encoded_logits).detach() - encoded_logits, dim=-1)
+                pi_2 = 2 * pi_1 - 0.5 * pi_0
+                hard_code = pi_2 - pi_2.detach() + D
+            else:
+                hard_code = y_hard - soft_code.detach() + soft_code
 
         return hard_code, soft_code
 
@@ -712,10 +724,10 @@ class GridDVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0) -> Tensor:
+    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tensor:
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
-        code, soft_code = self.encode(x, attn_mask, tau, hard)
+        code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
 
         # Compute the KL disentanglement loss using the internal q_z_running
         kld_losses = self.kld_disentanglement_loss(soft_code)
