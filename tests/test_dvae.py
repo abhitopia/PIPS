@@ -639,4 +639,109 @@ def test_dvae_masking_effect():
     # Increase the tolerance to account for floating-point precision issues
     assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
 
+# Test reconstruction_loss
+def test_reconstruction_loss():
+    """
+    Test the reconstruction_loss method for correctness by comparing the
+    computed cross-entropy loss with manually calculated loss.
+    """
+    dvae = GridDVAE(GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=4  # Reduced vocab size for simplicity
+    ))
+    
+    # Create dummy decoded logits and target x
+    decoded_logits = torch.tensor([
+        [[2.0, 0.5, 0.3, 0.2],
+         [0.1, 2.0, 0.3, 0.4]],
+        [[0.3, 0.2, 3.0, 0.5],
+         [0.2, 0.1, 0.4, 4.0]]
+    ])  # Shape: (2, 2, 4)
+    
+    x = torch.tensor([
+        [0, 1],
+        [2, 3]
+    ])  # Shape: (2, 2)
+    
+    # Manually compute cross-entropy loss
+    loss_fn = torch.nn.CrossEntropyLoss()
+    expected_loss = loss_fn(decoded_logits.view(-1, 4), x.view(-1))
+    
+    # Compute reconstruction loss using the method
+    computed_loss = dvae.reconstuction_loss(decoded_logits, x)
+    
+    # Assert that the losses are close
+    assert torch.allclose(computed_loss, expected_loss), \
+        f"Expected {expected_loss.item()}, but got {computed_loss.item()}"
+
+# Test kld_disentanglement_loss
+def test_kld_disentanglement_loss():
+    """
+    Test the kld_disentanglement_loss method for correctness by using
+    known distributions and verifying the computed KL divergences.
+    """
+    # Initialize GridDVAE
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=4,  # Reduced for simplicity
+        codebook_size=512,
+        n_pos=16,    # Reduced for simplicity
+        n_vocab=4
+    )
+    dvae = GridDVAE(config)
+    
+    # Create a dummy soft code with known distributions
+    # For simplicity, assume N=2 latent codes and C=4 codebook size
+    code_soft = torch.tensor([
+        [[0.25, 0.25, 0.25, 0.25],
+         [0.25, 0.25, 0.25, 0.25]],
+        [[0.1, 0.2, 0.3, 0.4],
+         [0.4, 0.3, 0.2, 0.1]]
+    ])  # Shape: (2, 2, 4)
+    
+    # Expected q_z_current after mean over batch
+    expected_q_z_current = code_soft.mean(dim=0)  # Shape: (2, 4)
+    
+    # Since momentum=0.99 and initial q_z_running=None, q_z_running should be initialized to q_z_current
+    expected_q_z_running = expected_q_z_current.clone()
+    
+    # Compute disentanglement losses
+    losses = dvae.kld_disentanglement_loss(code_soft, q_z_running=expected_q_z_running)
+    
+    # Manually compute expected Full KL, MI, DWKL, and TC
+    epsilon = 1e-8  # For numerical stability
+    uniform_p = torch.tensor(0.25)
+    
+    # Full KL: sum over N and C KL(q(z_j|x) || p(z_j)), where p(z_j) is uniform (0.25)
+    kl_full = ((code_soft * (torch.log(code_soft + epsilon) - torch.log(uniform_p))).sum(dim=2)).sum(dim=1).mean()
+    
+    # MI: sum over N KL(q(z_j|x) || q(z_j))
+    mi = ((code_soft * (torch.log(code_soft + epsilon) - torch.log(expected_q_z_current + epsilon))).sum(dim=2)).sum(dim=1).mean()
+    
+    # DWKL: sum over N KL(q(z_j) || p(z_j))
+    dwkl = (expected_q_z_current * (torch.log(expected_q_z_current + epsilon) - torch.log(uniform_p))).sum(dim=1).sum()
+    
+    # TC = Full KL - MI - DWKL
+    tc = kl_full - mi - dwkl
+    
+    # Assert computed losses
+    assert torch.allclose(losses["full_kl_loss"], kl_full, atol=1e-6), \
+        f"Full KL loss mismatch: expected {kl_full.item()}, got {losses['full_kl_loss'].item()}"
+    
+    assert torch.allclose(losses["mi_loss"], mi, atol=1e-6), \
+        f"MI loss mismatch: expected {mi.item()}, got {losses['mi_loss'].item()}"
+    
+    assert torch.allclose(losses["dwkl_loss"], dwkl, atol=1e-6), \
+        f"DWKL loss mismatch: expected {dwkl.item()}, got {losses['dwkl_loss'].item()}"
+    
+    assert torch.allclose(losses["tc_loss"], tc, atol=1e-6), \
+        f"TC loss mismatch: expected {tc.item()}, got {losses['tc_loss'].item()}"
+
 # Add this test to your existing test suite 

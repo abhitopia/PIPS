@@ -1,6 +1,6 @@
 #%%
 import math
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -680,9 +680,17 @@ class GridDVAE(nn.Module):
         encoded_logits = self.encoder_head(encoded_compressed)
 
         # Use gumbel softmax to sample from the Codebook
-        code = F.gumbel_softmax(encoded_logits, tau=tau, hard=hard)
+        soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=True)
+        hard_code = soft_code # Default to soft code
+        if hard:
+            # Straight through.
+            index = soft_code.max(dim=-1, keepdim=True)[1]
+            y_hard = torch.zeros_like(
+                encoded_logits, memory_format=torch.legacy_contiguous_format
+            ).scatter_(-1, index, 1.0)
+            hard_code = y_hard - soft_code.detach() + soft_code
 
-        return code, encoded_logits
+        return hard_code, soft_code
 
     def decode(self, code: Tensor) -> Tensor:
         B, n_codes, _ = code.size()
@@ -705,9 +713,166 @@ class GridDVAE(nn.Module):
     def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0) -> Tensor:
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
-        code, encoded_logits = self.encode(x, attn_mask, tau, hard)
+        code, soft_code = self.encode(x, attn_mask, tau, hard)
         decoded_logits = self.decode(code)
         return decoded_logits
+    
+
+    def reconstuction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
+        return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1))
+    
+
+    def kld_disentanglement_loss(self, code_soft, q_z_running=None, momentum=0.99, eps=1e-8):
+        """
+        Compute disentanglement losses—Full KL, Mutual Information (MI), 
+        Dimension-wise KL (DWKL), and Total Correlation (TC)—using an exponential moving 
+        average (EMA) to estimate the aggregated posterior q(z).
+
+        This function assumes:
+        - The latent vector z = (z_1, z_2, ..., z_N) factorizes:
+                q(z|x) = ∏[j=1 to N] q(z_j|x)
+        - The prior also factorizes:
+                p(z) = ∏[j=1 to N] p(z_j)
+
+        Therefore, the full KL (per sample) is defined as:
+            KL(q(z|x) || p(z)) = Σ[j=1 to N] KL(q(z_j|x) || p(z_j))
+
+        Also, following the decomposition:
+            Full KL = MI + TC + DWKL,
+        where:
+            - MI = Σ[j=1 to N] KL(q(z_j|x) || q(z_j))  (averaged over samples),
+            - DWKL = Σ[j=1 to N] KL(q(z_j) || p(z_j))    (computed from an estimate of q(z), 
+                                                        ideally a global quantity),
+            - TC = Full KL - MI - DWKL.
+
+        To ensure consistency, we compute Full KL and MI per sample (summing over latent dimensions, then averaging over the batch) 
+        and compute DWKL from the aggregated marginal. Because a minibatch may not reliably capture the global posterior, 
+        we use an EMA to keep a running estimate of q(z).
+
+        Args:
+            code_soft (Tensor): Soft one-hot distributions from Gumbel-softmax, of shape (B, N, C), where:
+                B = batch size,
+                N = number of discrete latent codes,
+                C = codebook size.
+            q_z_running (Tensor, optional): The running estimate of the aggregated posterior q(z) 
+                from previous minibatches, of shape (N, C). If None, it will be initialized to the current batch's mean.
+            momentum (float): The decay rate for the EMA; typical values are near 0.99.
+            eps (float): A small constant for numerical stability.
+
+        Returns:
+            mi_loss (Tensor): Average Mutual Information loss per sample (sum over latents, then averaged over batch).
+            dwkl_loss (Tensor): Total Dimension-wise KL loss computed from the EMA aggregated posterior (summed over latents).
+            tc_loss (Tensor): Total Correlation loss: TC = Full KL - MI - DWKL.
+            full_kl_loss (Tensor): Average full KL loss per sample (sum over latents, then averaged over batch).
+            q_z_running (Tensor): The updated EMA estimate of the aggregated posterior q(z).
+        """
+        # -----------------------------------------------
+        # Retrieve dimensions.
+        # B: batch size, N: number of latent codes, C: codebook size.
+        # -----------------------------------------------
+        B, N, C = code_soft.shape
+
+        # -----------------------------------------------
+        # Step 1: Compute the current aggregated posterior q(z) from the minibatch.
+        # For each latent dimension j, compute q_z_current[j] as the average over the batch.
+        # q_z_current has shape (N, C). Each row is a valid probability distribution (sums to 1).
+        # -----------------------------------------------
+        q_z_current = code_soft.mean(dim=0)  # Shape: (N, C)
+
+        # -----------------------------------------------
+        # Step 1b: Update the running estimate of q(z) using EMA.
+        # If q_z_running is provided, update it; otherwise, initialize it with q_z_current.
+        # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
+        # This provides a smoother estimate of the global q(z) than using the current batch alone.
+        # -----------------------------------------------
+        if q_z_running is None:
+            q_z_running = q_z_current.clone()  # Initialize EMA with current minibatch.
+        else:
+            q_z_running = momentum * q_z_running + (1 - momentum) * q_z_current
+
+        # -----------------------------------------------
+        # Define the uniform prior for each latent dimension.
+        # Since p(z_j) is assumed to be uniform over C possible codes, each entry is 1/C.
+        # -----------------------------------------------
+        uniform = torch.full_like(q_z_running, 1.0 / C)  # Shape: (N, C)
+
+        # -----------------------------------------------
+        # Step 2: Compute the Full KL Divergence per sample.
+        #
+        # For each sample i and latent dimension j, compute:
+        #   KL(q(z_j|x_i) || p(z_j)) = Σ[c=1 to C] q(z_j=c|x_i) * 
+        #                                ( log(q(z_j=c|x_i)) - log(1/C) )
+        #
+        # This gives a tensor of shape (B, N) (KL per latent, per sample).
+        # Then, sum over the latent dimensions (for each sample) to get the full KL per sample.
+        # Finally, average over the batch to obtain the final full KL loss.
+        # -----------------------------------------------
+        kl_per_latent = (code_soft * (torch.log(code_soft + eps) - torch.log(uniform.unsqueeze(0) + eps))).sum(dim=-1)  # Shape: (B, N)
+        full_kl_sample = kl_per_latent.sum(dim=1)  # Sum over latent dimensions → Shape: (B,)
+        full_kl_loss = full_kl_sample.mean()        # Average over the batch → Scalar
+
+        # -----------------------------------------------
+        # Step 3: Compute Mutual Information (MI) per sample.
+        #
+        # For each sample i and latent dimension j, compute:
+        #   MI_component = KL(q(z_j|x_i) || q(z_j)) = Σ[c=1 to C] q(z_j=c|x_i) * 
+        #                     ( log(q(z_j=c|x_i)) - log(q_z_running[j, c]) )
+        #
+        # q_z_running is the EMA estimate for the aggregated posterior.
+        # This gives a tensor of shape (B, N).
+        # Sum over latent dimensions for each sample, then average over the batch.
+        # -----------------------------------------------
+        mi_per_latent = (code_soft * (torch.log(code_soft + eps) - torch.log(q_z_running.unsqueeze(0) + eps))).sum(dim=-1)  # Shape: (B, N)
+        mi_sample = mi_per_latent.sum(dim=1)  # Sum over latent → Shape: (B,)
+        mi_loss = mi_sample.mean()            # Average over batch → Scalar
+
+        # -----------------------------------------------
+        # Step 4: Compute Dimension-wise KL (DWKL) from aggregated posteriors.
+        #
+        # For each latent dimension j, using the running aggregated posterior q_z_running,
+        # compute:
+        #   DWKL(j) = KL(q(z_j) || p(z_j)) = Σ[c=1 to C] q_z_running[j, c] *
+        #                                   ( log(q_z_running[j, c]) - log(1/C) )
+        #
+        # This yields a tensor of shape (N,), one value per latent dimension.
+        # Sum over all latent dimensions to yield the total DWKL.
+        # -----------------------------------------------
+        dwkl_per_latent = (q_z_running * (torch.log(q_z_running + eps) - torch.log(uniform + eps))).sum(dim=-1)  # Shape: (N,)
+        dwkl_total = dwkl_per_latent.sum()  # Total DWKL (sum over all latent dimensions)
+
+        # -----------------------------------------------
+        # Step 5: Compute Total Correlation (TC) loss.
+        # Estimating TC directly is challenging because it requires the joint distribution of all latent codes.
+        # versus the product of one-dimensional latents, resulting in high variance and computationally more expensive.
+        # According to the theoretical decomposition (on a per-sample basis):
+        #   Full KL (per sample) = MI (per sample) + TC (per sample) + [Sum over latents of DWKL]
+        # Therefore, we can solve for TC:
+        #   TC = Full KL - MI - DWKL_total
+        #
+        # Note:
+        #   - full_kl_loss and mi_loss are computed per sample (by summing over latents) and then
+        #     averaged over the batch.
+        #   - dwkl_total is computed from the running aggregated posterior (q_z_running), which is a global
+        #     estimate (averaged over the batch) and then summed over latent dimensions.
+        # This may lead to scale differences if one does not keep track of them; in practice, one might
+        # apply an additional scaling factor. Here we stick with the direct decomposition.
+        # -----------------------------------------------
+        tc_loss = full_kl_loss - mi_loss - dwkl_total
+
+        # -----------------------------------------------
+        # Return the computed losses and the updated running aggregated posterior.
+        # - mi_loss: Average MI loss (per-sample sum over latents, then averaged over batch).
+        # - dwkl_loss: Total DWKL loss computed from the EMA aggregated posterior (summed over latents).
+        # - tc_loss: Total Correlation loss computed as (Full KL - MI - DWKL_total).
+        # - full_kl_loss: Average full KL loss per sample (sum over latents, then averaged over batch).
+        # - q_z_running: Updated running estimate of q(z) to be used in future batches.
+        # -----------------------------------------------
+
+        return {"mi_loss": mi_loss, 
+                "dwkl_loss": dwkl_total, 
+                "tc_loss": tc_loss, 
+                "full_kl_loss": full_kl_loss}
+
 
 
 #%%
