@@ -730,7 +730,10 @@ class GridDVAE(nn.Module):
     
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
-        return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1))
+        """
+        Compute the reconstruction loss using cross-entropy per sample (and not per token)
+        """
+        return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1), reduction='sum') / x.size(0)
     
 
     def kld_disentanglement_loss(self, code_soft, momentum=0.99, eps=1e-8):

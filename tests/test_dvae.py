@@ -675,8 +675,8 @@ def test_reconstruction_loss():
     ])  # Shape: (2, 2)
     
     # Manually compute cross-entropy loss
-    loss_fn = torch.nn.CrossEntropyLoss()
-    expected_loss = loss_fn(decoded_logits.view(-1, 4), x.view(-1))
+    loss_fn = torch.nn.CrossEntropyLoss(reduction='sum')
+    expected_loss = loss_fn(decoded_logits.view(-1, 4), x.view(-1)) / x.size(0)
     
     # Compute reconstruction loss using the method
     computed_loss = dvae.reconstruction_loss(decoded_logits, x)
