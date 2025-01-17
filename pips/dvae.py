@@ -607,6 +607,9 @@ class GridDVAE(nn.Module):
 
         # persistent=False prevents it from saved to statedict
         self.register_buffer('pos_indices', pos_indices, persistent=False)
+        
+        # Initialize q_z_running to maintain the aggregated posterior
+        self.q_z_running = None
 
     @staticmethod
     def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
@@ -714,15 +717,23 @@ class GridDVAE(nn.Module):
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
         code, soft_code = self.encode(x, attn_mask, tau, hard)
+
+        # Compute the KL disentanglement loss using the internal q_z_running
+        kld_losses = self.kld_disentanglement_loss(soft_code)
+
+        # Compute the reconstruction loss
         decoded_logits = self.decode(code)
-        return decoded_logits
+        reconstruction_loss = self.reconstruction_loss(decoded_logits, x)
+
+        # Return the reconstruction loss and the disentanglement losses
+        return decoded_logits, reconstruction_loss, kld_losses
     
 
-    def reconstuction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
+    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
         return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1))
     
 
-    def kld_disentanglement_loss(self, code_soft, q_z_running=None, momentum=0.99, eps=1e-8):
+    def kld_disentanglement_loss(self, code_soft, momentum=0.99, eps=1e-8):
         """
         Compute disentanglement losses—Full KL, Mutual Information (MI), 
         Dimension-wise KL (DWKL), and Total Correlation (TC)—using an exponential moving 
@@ -785,11 +796,12 @@ class GridDVAE(nn.Module):
         # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
         # This provides a smoother estimate of the global q(z) than using the current batch alone.
         # -----------------------------------------------
-        if q_z_running is None:
-            q_z_running = q_z_current.clone()  # Initialize EMA with current minibatch.
+        if self.q_z_running is None:
+            self.q_z_running = q_z_current.clone()
         else:
-            q_z_running = momentum * q_z_running + (1 - momentum) * q_z_current
+            self.q_z_running = momentum * self.q_z_running + (1 - momentum) * q_z_current
 
+        q_z_running = self.q_z_running
         # -----------------------------------------------
         # Define the uniform prior for each latent dimension.
         # Since p(z_j) is assumed to be uniform over C possible codes, each entry is 1/C.
@@ -867,7 +879,6 @@ class GridDVAE(nn.Module):
         # - full_kl_loss: Average full KL loss per sample (sum over latents, then averaged over batch).
         # - q_z_running: Updated running estimate of q(z) to be used in future batches.
         # -----------------------------------------------
-
         return {"mi_loss": mi_loss, 
                 "dwkl_loss": dwkl_total, 
                 "tc_loss": tc_loss, 

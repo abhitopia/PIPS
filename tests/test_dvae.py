@@ -208,10 +208,16 @@ def test_dvae():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
-    output = dvae(x)
-    
-    # Test output shape
+    output, reconstruction_loss, kld_losses = dvae(x)
+        # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab)
+    assert isinstance(reconstruction_loss, torch.Tensor), "reconstruction_loss should be a tensor."
+    assert reconstruction_loss.dim() == 0, "reconstruction_loss should be a scalar tensor."
+    assert isinstance(kld_losses, dict), "kld_losses should be a dictionary."
+    assert 'mi_loss' in kld_losses, "kld_losses should contain 'mi_loss'."
+    assert 'dwkl_loss' in kld_losses, "kld_losses should contain 'dwkl_loss'."
+    assert 'tc_loss' in kld_losses, "kld_losses should contain 'tc_loss'."
+    assert 'full_kl_loss' in kld_losses, "kld_losses should contain 'full_kl_loss'."
     
     # Convert to probabilities and test
     probs = F.softmax(output, dim=-1)
@@ -365,12 +371,12 @@ def test_dvae_forward_with_mask():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with no mask
-    output_no_mask = dvae(x, mask_percentage=0.0)
+    output_no_mask, _, _ = dvae(x, mask_percentage=0.0)
     assert output_no_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_no_mask.shape}"
 
     # Test forward pass with partial mask
-    output_partial_mask = dvae(x, mask_percentage=0.5)
+    output_partial_mask, _, _ = dvae(x, mask_percentage=0.5)
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
@@ -673,7 +679,7 @@ def test_reconstruction_loss():
     expected_loss = loss_fn(decoded_logits.view(-1, 4), x.view(-1))
     
     # Compute reconstruction loss using the method
-    computed_loss = dvae.reconstuction_loss(decoded_logits, x)
+    computed_loss = dvae.reconstruction_loss(decoded_logits, x)
     
     # Assert that the losses are close
     assert torch.allclose(computed_loss, expected_loss), \
@@ -713,7 +719,7 @@ def test_kld_disentanglement_loss():
     expected_q_z_running = expected_q_z_current.clone()
     
     # Compute disentanglement losses
-    losses = dvae.kld_disentanglement_loss(code_soft, q_z_running=expected_q_z_running)
+    losses = dvae.kld_disentanglement_loss(code_soft)
     
     # Manually compute expected Full KL, MI, DWKL, and TC
     epsilon = 1e-8  # For numerical stability
