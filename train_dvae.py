@@ -43,11 +43,11 @@ class LoggingCallback(pl.Callback):
         # Calculate tokens per second for the training batch
         if self.train_batch_start_time is not None:
             tokens_per_sec = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
-            print(f"[Train] S: {trainer.global_step:6d} | {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            print(f"[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
             outputs['tokens_per_sec'] = tokens_per_sec
         
         # Log loss metrics using the helper method
-        self._log_metrics('train', outputs, batch.size(0), on_step=True, on_epoch=False)
+        self._log_metrics(pl_module, 'train', outputs, batch[0].size(0), on_step=True, on_epoch=False)
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
         # Record the start time of the validation batch
@@ -57,18 +57,17 @@ class LoggingCallback(pl.Callback):
         # Calculate tokens per second for the validation batch
         if self.val_batch_start_time is not None:
             tokens_per_sec = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
-            print(f"[Eval]  S: {trainer.global_step:6d} | {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            print(f"[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
             outputs['tokens_per_sec'] = tokens_per_sec
         
         # Log loss metrics using the helper method
-        self._log_metrics('val', outputs, batch.size(0), on_step=False, on_epoch=True)
+        self._log_metrics(pl_module, 'val', outputs, batch[0].size(0), on_step=False, on_epoch=True)
 
-    def _log_metrics(self, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
+    def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
-            if 'loss' in key:
-                metric_name = f'{phase}/{key}'
-                self.pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size)
+            metric_name = f'{phase}/{key}'
+            pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size)
 
 @dataclass
 class ExperimentConfig:
@@ -330,7 +329,7 @@ def main():
     custom_progress_bar = CustomRichProgressBar()
 
     trainer = pl.Trainer(
-        log_every_n_steps=10,
+        log_every_n_steps=1,
         num_sanity_val_steps=0,
         enable_progress_bar=True,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
