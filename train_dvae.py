@@ -1,17 +1,74 @@
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
-from torch import nn
 from torch.optim import Adam
 from pips.grid_dataset import GridDataset
 from pips.dvae import GridDVAEConfig, GridDVAE
 import torch
 from functools import partial
-import torch.nn.functional as F
-from typing import Callable, Union, Dict
+from typing import Callable, Dict
 import numpy as np
 from dataclasses import dataclass
+import warnings
+import time
+import wandb  # Ensure wandb is imported
 
+warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
+
+import pytorch_lightning as pl
+from pips.misc.custom_progress_bar import CustomRichProgressBar
+
+class LoggingCallback(pl.Callback):
+    
+    def __init__(self):
+        self.train_batch_start_time = None
+        self.val_batch_start_time = None
+
+    def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
+        return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l])
+    
+    def on_train_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
+        # Record the start time of the training batch
+        self.train_batch_start_time = time.monotonic()
+
+    def _calculate_tokens_per_sec(self, start_time, batch):
+        if start_time is not None:
+            elapsed_time = time.monotonic() - start_time
+            x, _ = batch
+            num_tokens = x.size(0) * x.size(1)  # batch_size * tokens_per_batch
+            return num_tokens / elapsed_time if elapsed_time > 0 else 0
+        return 0
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
+        # Calculate tokens per second for the training batch
+        if self.train_batch_start_time is not None:
+            tokens_per_sec = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
+            print(f"[Train] S: {trainer.global_step:6d} | {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            outputs['tokens_per_sec'] = tokens_per_sec
+        
+        # Log loss metrics using the helper method
+        self._log_metrics('train', outputs, batch.size(0), on_step=True, on_epoch=False)
+
+    def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
+        # Record the start time of the validation batch
+        self.val_batch_start_time = time.monotonic()
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
+        # Calculate tokens per second for the validation batch
+        if self.val_batch_start_time is not None:
+            tokens_per_sec = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
+            print(f"[Eval]  S: {trainer.global_step:6d} | {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            outputs['tokens_per_sec'] = tokens_per_sec
+        
+        # Log loss metrics using the helper method
+        self._log_metrics('val', outputs, batch.size(0), on_step=False, on_epoch=True)
+
+    def _log_metrics(self, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
+        """Helper method to log loss metrics."""
+        for key, value in outputs.items():
+            if 'loss' in key:
+                metric_name = f'{phase}/{key}'
+                self.pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size)
 
 @dataclass
 class ExperimentConfig:
@@ -175,14 +232,11 @@ class DVAETrainingModule(pl.LightningModule):
 
         # Compute total loss in a way that maintains the computational graph
         loss_components = {
-            'ce_loss': reconstruction_loss,
-            'mi_loss': kld_losses['mi_loss'] * scheduled_values['beta_mi'],
-            'dwkl_loss': kld_losses['dwkl_loss'] * scheduled_values['beta_dwkl'],
-            'tc_loss': kld_losses['tc_loss'] * scheduled_values['beta_tc']
+            'loss(CE)': reconstruction_loss,
+            'loss(MI)': kld_losses['mi_loss'] * scheduled_values['beta_mi'],
+            'loss(DWKL)': kld_losses['dwkl_loss'] * scheduled_values['beta_dwkl'],
+            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta_tc']
         }
-
-     
-
         
         total_loss = sum(loss_components.values())
 
@@ -196,12 +250,13 @@ class DVAETrainingModule(pl.LightningModule):
         x, _ = batch
         output_dict = self(x)
         
-        # Log all values
-        for key, value in output_dict.items():
-            if 'loss' in key:
-                self.log(f'train/{key}', value, batch_size=x.size(0), prog_bar=True)
-            
-        return output_dict['loss']
+        return output_dict
+    
+    def validation_step(self, batch, batch_idx):
+        x, _ = batch
+        output_dict = self(x)
+    
+        return output_dict
 
     def configure_optimizers(self):
         return Adam(self.parameters(), lr=self.experiment_config.learning_rate)
@@ -237,9 +292,6 @@ def main():
         max_steps=100000
     )
 
-    print(model_config)
-    print(experiment_config)
-
     # Create datasets and dataloaders
     pad_value = 10
     project_size = (32, 32)
@@ -251,7 +303,7 @@ def main():
         batch_size=experiment_config.batch_size, 
         collate_fn=collate_fn_train,
         shuffle=True, 
-        num_workers=0
+        num_workers=0  # It must be 0 because loading the dataset is otherwise too slow
     )
 
     collate_fn_val = partial(GridDataset.collate_fn, pad_value=pad_value, permute=False, project_size=project_size)
@@ -267,16 +319,32 @@ def main():
 
     # Initialize the model and trainer
     model = DVAETrainingModule(model_config, experiment_config)
-    wandb_logger = WandbLogger(project='dvae-training', log_model=True)
+    wandb_logger = WandbLogger(
+        project='dvae-training',
+        log_model='all',
+        save_dir='wandb_logs',
+    )
+
+    # Add the custom logging callback
+    logging_callback = LoggingCallback()
+    custom_progress_bar = CustomRichProgressBar()
 
     trainer = pl.Trainer(
+        log_every_n_steps=10,
+        num_sanity_val_steps=0,
+        enable_progress_bar=True,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=1.0,
-        callbacks=[pl.callbacks.ModelCheckpoint(monitor='val/loss')],
+        callbacks=[
+            pl.callbacks.ModelCheckpoint(monitor='val/loss'),  # Updated to match sanitized key
+            logging_callback, 
+            custom_progress_bar
+        ],
+        max_epochs=-1,
         max_steps=experiment_config.max_steps,
-        limit_train_batches=10,
+        limit_train_batches=1000,
         limit_val_batches=10,
         val_check_interval=5,
     )

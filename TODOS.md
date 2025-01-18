@@ -4,8 +4,8 @@
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
 - [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
-- [ ] Implement code usage monitor
 - [ ] Implement Tau Scheduling
+- [ ] Implement code usage monitor
 - [ ] Implement Gumbel Hard Scheduling
 - [ ] Implement Masking Scheduler
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
@@ -22,7 +22,7 @@
 
 ## Monitoring
 - [ ] Control WandB initialisation and naming
-- [ ] Implement Throughput Monitor
+- [x] Implement Throughput Monitor
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
 
