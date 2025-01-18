@@ -4,6 +4,7 @@
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
 - [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
+- [ ] Codebook Weight Initialisation
 - [ ] Implement Tau Scheduling
 - [ ] Implement code usage monitor
 - [ ] Implement Gumbel Hard Scheduling

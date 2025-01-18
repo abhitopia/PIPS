@@ -66,8 +66,19 @@ class LoggingCallback(pl.Callback):
     def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
-            metric_name = f'{phase}/{key}'
-            pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size)
+            # Check if the key is in the form "metric(category)"
+            if key == 'loss':
+                metric_name = f'{phase}/{key}'  # Default format
+                pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=False)
+
+            if '(' in key and ')' in key:
+                category = key.split('(')[-1].split(')')[0]  # Extract category
+                metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
+            elif key.strip():  # Check if the key is not empty
+                metric_name = f'{key.capitalize()}/{key}_{phase}'  # Format as "METRIC/metric_phase"
+      
+            
+            pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True)
 
 @dataclass
 class ExperimentConfig:
@@ -200,9 +211,9 @@ class DVAETrainingModule(pl.LightningModule):
         
         return {
             'tau': tau_schedule(step),
-            'beta_mi': beta_mi_schedule(step),
-            'beta_tc': beta_tc_schedule(step),
-            'beta_dwkl': beta_dwkl_schedule(step)
+            'beta(MI)': beta_mi_schedule(step),
+            'beta(TC)': beta_tc_schedule(step),
+            'beta(DWKL)': beta_dwkl_schedule(step)
         }
 
     def forward(self, x, train=True):
@@ -232,9 +243,9 @@ class DVAETrainingModule(pl.LightningModule):
         # Compute total loss in a way that maintains the computational graph
         loss_components = {
             'loss(CE)': reconstruction_loss,
-            'loss(MI)': kld_losses['mi_loss'] * scheduled_values['beta_mi'],
-            'loss(DWKL)': kld_losses['dwkl_loss'] * scheduled_values['beta_dwkl'],
-            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta_tc']
+            'loss(MI)': kld_losses['mi_loss'] * scheduled_values['beta(MI)'],
+            'loss(DWKL)': kld_losses['dwkl_loss'] * scheduled_values['beta(DWKL)'],
+            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta(TC)']
         }
         
         total_loss = sum(loss_components.values())
