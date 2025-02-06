@@ -1,24 +1,28 @@
 
 
+## Debug 
+- [ ] Why is TC loss negative?
+
 ## Training
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
 - [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
 - [ ] Codebook Weight Initialisation
-- [ ] Implement Tau Scheduling
+- [x] Implement Tau Scheduling
 - [ ] Implement code usage monitor
 - [ ] Implement Gumbel Hard Scheduling
 - [ ] Implement Masking Scheduler
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
-- [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)
+
 
 ## Checkpointing
 - [ ] Save hyperparameters
 - [ ] Implement Checkpointing
+- [ ] Prevent saving everything or at least deleting unnecessary artifacts
 - [ ] Training Resume
 
 ## Disentanglement
-- [ ] Implement explicit disentanglement in KLD Loss
+- [x] Implement explicit disentanglement in KLD Loss
 
 
 ## Monitoring
@@ -41,3 +45,6 @@
 ## Grokking
 - [ ] Implement Orthograd Optimizer
 - [ ] Use 32bit float CE loss
+
+## Archived
+- [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)

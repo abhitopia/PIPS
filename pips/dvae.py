@@ -1,6 +1,6 @@
 #%%
 import math
-from typing import Dict, List, Optional, Tuple
+from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -608,7 +608,7 @@ class GridDVAE(nn.Module):
         # persistent=False prevents it from saved to statedict
         self.register_buffer('pos_indices', pos_indices, persistent=False)
 
-        self.q_z_running = None
+        self.q_z_marg = None
 
     @staticmethod
     def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
@@ -665,7 +665,7 @@ class GridDVAE(nn.Module):
 
         if reinMax:
             assert hard, "ReinMax requires hard sampling"
-            
+
         B, S = x.size()
 
         # Convert into x: (B, S, D) using self.embd
@@ -751,8 +751,66 @@ class GridDVAE(nn.Module):
         return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1), reduction='sum') / x.size(0)
     
 
-    def kld_disentanglement_loss(self, code_soft, momentum=0.99, eps=1e-8):
+    def kld_disentanglement_loss(self, q_z_x, momentum=0.99, eps=1e-8):
         """
+        The Beta-TCVAE paper(https://arxiv.org/pdf/1802.04942) splits the KLD term as
+
+        1/N KLD(q(z|x) | p(z)) = MI + TC + DWKL
+
+        where, 
+            MI = KLD(q(z,x)|q(z)p(x))
+            TC = KLD(q(z)|∏[j] q(z_j))
+            DWKL = sum_j KLD(q(z_j) | p(z_i))
+
+        Computing q(z, x), q(z) and q(z_i) are all intractable. This happens because the
+        authors compute average across all the dataset which involves p(x_n) and makes life
+        complicated. I suspect, this is useful for when the dataset size is small and fixed.
+        However, I want to operate in the large/infinite data regime. So I will try to compute
+        this first per sample x_n (like it done for VAE) and average for the batch later.
+
+        Using similar derivation as in the paper, we get following
+
+        KL_n(q(z| x_n) | p(z)) = MI_n + TC_n + DWKL_n
+        where 
+            MI_n   = E{q(z|x_n)}[log q(z|x_n)/q(z)]
+            TC_n   = E{q(z|x_n)}[log q(z)/ ∏{j} q(z_j)]
+            DWKL_n = Sum_j E{q(z|x_n)}[log q(z_j)/p(z_j)]
+
+        Notice that since, expectation is a sum over all latents, this will be C^N
+        different values making it intractable. So regular VAE (computing LHS directly),
+        we have to assume assume:
+        - The latent vector z = (z_1, z_2, ..., z_N) factorizes:
+                q(z|x) = ∏[j=1 to N] q(z_j|x)
+        - The prior also factorizes:
+                p(z) = ∏[j=1 to N] p(z_j)
+
+        The encoder gives us access to q(z|x_n), but we don't have access to aggregate posterior
+        q(z), or it's marginal per latent q(z_i) which are global quantities (not dependent on the batch).
+        The original paper uses MWS and MSS sampling to estimate these which are too complicated and ineffecient. 
+
+        We can use Monte Carlo sampling to estimate q(z_i) (And not q(z)) as following
+
+        q(z_i) = sum_n q(z_i |x_n) p(x_n)  # Per mini-batch of size B
+               = 1/ B sum_n q(z_i | x_n)   # (N, C)          
+
+        Because a batch is not a good representation of p(x), we can use EMA to update this over time.
+
+        But both MI_n and TC_n still involve q(z) which remains intractable. We cannot assume that q(z)
+        factorises to prod_j q(z), because if we did, then TC_n would vanish. In fact, this is the term
+        that encourages disentanglement. What should we do?
+
+        My idea here is that we approximate MI_n with the assumption that q(z) factorises, and then use
+        the following identity to estimate TC_n
+
+        TC_n = KL_n - MI_n (approx) - DWKL_n
+
+        where 
+        
+        MI_n (approx) = E{q(z|x_n)}[log q(z|x_n)/∏{j} q(z_j)]
+                      = E{q(z|x_n)}[log ∏{j} (q(z_j|x_n)/ q(z_j)]
+                      = sum_j E{q(z|x_n)} log(q(z_j|x_n) / q(z_j))
+                      = sum_j E{q(z_j|x_n)} log(q(z_j|x_n) / q(z_j))
+
         Compute disentanglement losses—Full KL, Mutual Information (MI), 
         Dimension-wise KL (DWKL), and Total Correlation (TC)—using an exponential moving 
         average (EMA) to estimate the aggregated posterior q(z).
@@ -763,8 +821,32 @@ class GridDVAE(nn.Module):
         - The prior also factorizes:
                 p(z) = ∏[j=1 to N] p(z_j)
 
-        Therefore, the full KL (per sample) is defined as:
+        For specific x, therefore, the full KL (per sample) is defined as:
             KL(q(z|x) || p(z)) = Σ[j=1 to N] KL(q(z_j|x) || p(z_j))
+
+        The paper provides a decomposition of the "average KL" across all samples in the dataset
+        which makes life complicated because we don't have access to p(x_n). Instead, following is the 
+        rederivation of the decomposition (like usually done for VAEs) for each specific sample x_i.
+
+        KL(q(z|x_i) || p(z)) = KL(q(z|x_i) || p(z))
+
+        = E{q(z|x_i)} [log q(z|x_i) - log p(z)]
+
+        = E{q(z|x_i)} [log q(z|x_i) - log ∏ p(z_j) + log q(z) - log q(z) + log ∏ q(z_j) - log ∏ q(z_j) ]
+
+        = E{q(z|x_i)} [log q(z|x_i)/q(z) + log q(z)/∏ q(z_j) + log ∏ q(z_j)/p(z_j) ]
+
+        = Σ{z} [q(z|x_i) * (log q(z|x_i)/log q(z) + log q(z)/∏ q(z_j) + log ∏ q(z_j)/p(z_j) )]
+
+        = Σ{z} [q(z|x_i) * (log q(z|x_i)/log q(z) + log q(z)/∏ q(z_j) + Σ{j} log q(z_j)/p(z_j) )]
+
+        = Σ{z} [q(z|x_i) * (log q(z|x_i)/log q(z) + log q(z)/∏ q(z_j) + Σ{z_j} log q(z_j)/p(z_j) )]
+
+
+        MI = Σ{z} [q(z|x_i) * log q(z|x_i)/log q(z)]
+        TC = Σ{z} [q(z|x_i) * (log q(z) - Σ{j} log q(z_j)]
+        DWKL = Σ{z} [q(z|x_i) * Σ{z_j} log q(z_j)/p(z_j)]
+      
 
         Also, following the decomposition:
             Full KL = MI + TC + DWKL,
@@ -799,30 +881,30 @@ class GridDVAE(nn.Module):
         # Retrieve dimensions.
         # B: batch size, N: number of latent codes, C: codebook size.
         # -----------------------------------------------
-        B, N, C = code_soft.shape
+        B, N, C = q_z_x.shape
 
         # -----------------------------------------------
-        # Step 1: Compute the current aggregated posterior q(z) from the minibatch.
+        # Step 1: Compute the current aggregated marginal posterior q(z_j) from the minibatch.
         # For each latent dimension j, compute q_z_current[j] as the average over the batch.
-        # q_z_current has shape (N, C). Each row is a valid probability distribution (sums to 1).
+        # q_z_marg_current has shape (N, C). Each row is a valid probability distribution (sums to 1).
         # -----------------------------------------------
-        q_z_current = code_soft.mean(dim=0)  # Shape: (N, C)
+        q_z_marg_batch = q_z_x.mean(dim=0)  # Shape: (N, C)
 
         # -----------------------------------------------
-        # Step 1b: Update the running estimate of q(z) using EMA.
-        # If q_z_running is provided, update it; otherwise, initialize it with q_z_current.
+        # Step 1b: Update the running estimate of q(z_j) using EMA.
+        # If q_z_marg_running is provided, update it; otherwise, initialize it with q_z_marg_current.
         # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
         # This provides a smoother estimate of the global q(z) than using the current batch alone.
         # -----------------------------------------------
 
-        q_z_running = ( momentum * self.q_z_running + (1 - momentum) * q_z_current ) if self.q_z_running is not None else q_z_current
+        q_z_marginal = ( momentum * self.q_z_marg + (1 - momentum) * q_z_marg_batch ) if self.q_z_marg is not None else q_z_marg_batch
+        self.q_z_marg = q_z_marginal.detach()                                        # Detach the local variable from the graph
 
-        self.q_z_running = q_z_running.detach() # Detach the local variable from the graph
-        # -----------------------------------------------
-        # Define the uniform prior for each latent dimension.
+
+        # Compute log probabilities
+        log_q_z_x = torch.log(q_z_x + eps)  # Shape: (B, N, C)
         # Since p(z_j) is assumed to be uniform over C possible codes, each entry is 1/C.
-        # -----------------------------------------------
-        uniform = torch.full_like(q_z_running, 1.0 / C)  # Shape: (N, C)
+        log_uniform = torch.full_like(log_q_z_x, -math.log(C))  # Shape: (1, N, C)
 
         # -----------------------------------------------
         # Step 2: Compute the Full KL Divergence per sample.
@@ -835,13 +917,32 @@ class GridDVAE(nn.Module):
         # Then, sum over the latent dimensions (for each sample) to get the full KL per sample.
         # Finally, average over the batch to obtain the final full KL loss.
         # -----------------------------------------------
-        kl_per_latent = (code_soft * (torch.log(code_soft + eps) - torch.log(uniform.unsqueeze(0) + eps))).sum(dim=-1)  # Shape: (B, N)
-        full_kl_sample = kl_per_latent.sum(dim=1)  # Sum over latent dimensions → Shape: (B,)
-        full_kl_loss = full_kl_sample.mean()        # Average over the batch → Scalar
+        kl_per_latent = (q_z_x * (log_q_z_x - log_uniform)).sum(dim=-1)  # Shape: (B, N)
+        full_kl_batch = kl_per_latent.sum(dim=1)  # Sum over latent dimensions → Shape: (B,)
+
 
         # -----------------------------------------------
-        # Step 3: Compute Mutual Information (MI) per sample.
+        # Step 3: Compute Dimension-wise KL (DWKL) from aggregated posteriors.
+        #   DWKL_n = Σ[j=1 to N] E{q(z|x_n)}[log q(z_j)/p(z_j)]
+        #          = Σ[j=1 to N] E{q(z_j |x_n)}[log q(z_j)/p(z_j)]   (others sum to 1)
+        log_q_z_marg = torch.log(q_z_marginal + eps).unsqueeze(0)  # Shape: (1, N, C)
+
+        # For each latent dimension j, using the running aggregated posterior marginal q_z_running,
+        # compute:
+        #   DWKL(j) = KL(q(z_j) || p(z_j)) = Σ[c=1 to C] q_z_x[j, c] *
+        #                                   ( log(q_z[j, c]) - log(1/C) )
         #
+        # This yields a tensor of shape (N,), one value per latent dimension.
+        # Sum over all latent dimensions to yield the total DWKL.
+        # -----------------------------------------------
+        dwkl_per_latent  = (q_z_x * (log_q_z_marg - log_uniform)).sum(dim=-1)  # Shape: (B, N)
+        dwkl_batch = dwkl_per_latent.sum(dim=-1)  #  (B,) 
+
+        # -----------------------------------------------
+        # Step 3: Compute Mutual Information (MI)
+        # NOTE: As explained above, assume here that q(z) factorises into q(z_j)
+        log_q_z = torch.log(q_z_marginal + eps)  # Shape: (N, C) (Assume q(z) factorises)
+
         # For each sample i and latent dimension j, compute:
         #   MI_component = KL(q(z_j|x_i) || q(z_j)) = Σ[c=1 to C] q(z_j=c|x_i) * 
         #                     ( log(q(z_j=c|x_i)) - log(q_z_running[j, c]) )
@@ -850,55 +951,26 @@ class GridDVAE(nn.Module):
         # This gives a tensor of shape (B, N).
         # Sum over latent dimensions for each sample, then average over the batch.
         # -----------------------------------------------
-        mi_per_latent = (code_soft * (torch.log(code_soft + eps) - torch.log(q_z_running.unsqueeze(0) + eps))).sum(dim=-1)  # Shape: (B, N)
-        mi_sample = mi_per_latent.sum(dim=1)  # Sum over latent → Shape: (B,)
-        mi_loss = mi_sample.mean()            # Average over batch → Scalar
+        mi_per_latent = (q_z_x * (log_q_z_x - log_q_z.unsqueeze(0))).sum(dim=-1)  # Shape: (B, N)
+        mi_batch = mi_per_latent.sum(dim=1)  # Sum over latent → Shape: (B,)
 
-        # -----------------------------------------------
-        # Step 4: Compute Dimension-wise KL (DWKL) from aggregated posteriors.
-        #
-        # For each latent dimension j, using the running aggregated posterior q_z_running,
-        # compute:
-        #   DWKL(j) = KL(q(z_j) || p(z_j)) = Σ[c=1 to C] q_z_running[j, c] *
-        #                                   ( log(q_z_running[j, c]) - log(1/C) )
-        #
-        # This yields a tensor of shape (N,), one value per latent dimension.
-        # Sum over all latent dimensions to yield the total DWKL.
-        # -----------------------------------------------
-        dwkl_per_latent = (q_z_running * (torch.log(q_z_running + eps) - torch.log(uniform + eps))).sum(dim=-1)  # Shape: (N,)
-        dwkl_total = dwkl_per_latent.sum()  # Total DWKL (sum over all latent dimensions)
 
         # -----------------------------------------------
         # Step 5: Compute Total Correlation (TC) loss.
         # Estimating TC directly is challenging because it requires the joint distribution of all latent codes.
-        # versus the product of one-dimensional latents, resulting in high variance and computationally more expensive.
-        # According to the theoretical decomposition (on a per-sample basis):
-        #   Full KL (per sample) = MI (per sample) + TC (per sample) + [Sum over latents of DWKL]
-        # Therefore, we can solve for TC:
-        #   TC = Full KL - MI - DWKL_total
-        #
-        # Note:
-        #   - full_kl_loss and mi_loss are computed per sample (by summing over latents) and then
-        #     averaged over the batch.
-        #   - dwkl_total is computed from the running aggregated posterior (q_z_running), which is a global
-        #     estimate (averaged over the batch) and then summed over latent dimensions.
-        # This may lead to scale differences if one does not keep track of them; in practice, one might
-        # apply an additional scaling factor. Here we stick with the direct decomposition.
+        # But we cannot also use the approximation q(z) = prod_j q(z_j) as otherwise TC will vanish
+        # We can solve for TC:
+        #   TC_n = KL_n - MI_n - DWKL_n
         # -----------------------------------------------
-        tc_loss = full_kl_loss - mi_loss - dwkl_total
-
+        tc_batch = full_kl_batch - mi_batch - dwkl_batch  # (B,) for each sample
+       
         # -----------------------------------------------
-        # Return the computed losses and the updated running aggregated posterior.
-        # - mi_loss: Average MI loss (per-sample sum over latents, then averaged over batch).
-        # - dwkl_loss: Total DWKL loss computed from the EMA aggregated posterior (summed over latents).
-        # - tc_loss: Total Correlation loss computed as (Full KL - MI - DWKL_total).
-        # - full_kl_loss: Average full KL loss per sample (sum over latents, then averaged over batch).
-        # - q_z_running: Updated running estimate of q(z) to be used in future batches.
+        # Return the computed losses (averaged per sample over batch) and the updated running aggregated posterior.
         # -----------------------------------------------
-        return {"mi_loss": mi_loss, 
-                "dwkl_loss": dwkl_total, 
-                "tc_loss": tc_loss, 
-                "full_kl_loss": full_kl_loss}
+        return {"mi_loss": mi_batch.mean(), 
+                "dwkl_loss": dwkl_batch.mean(), 
+                "tc_loss": tc_batch.mean(), 
+                "full_kl_loss": full_kl_batch.mean()}
 
 
 
