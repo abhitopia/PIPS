@@ -2,6 +2,7 @@
 
 ## Debug 
 - [ ] Why is TC loss negative?
+- [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook
 
 ## Training
 - [x] Implement KLD Loss
