@@ -8,6 +8,7 @@
 - [x] Implement Gumbel Hard Scheduling
 - [x] Implement Masking Scheduler
 - [x] Add KL to the Loss along with the schedule
+- [ ] PAD/EOS value to be determined automatically from Model Config
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
@@ -28,7 +29,8 @@
 ## Monitoring
 - [x] Monitor masking percentage
 - [x] Implement Throughput Monitor
-- [ ] Control WandB initialisation and naming
+- [x] Control WandB initialisation and naming
+- [ ] Add parameter to disable logging to WANDB (may be ligthning internal)
 - [ ] Implement disentanglement monitor
 - [ ] Non EOS token accuracy as well for validation
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set

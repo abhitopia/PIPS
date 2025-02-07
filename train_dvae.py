@@ -4,6 +4,7 @@ from torch.utils.data import DataLoader
 from torch.optim import Adam
 from pips.grid_dataset import GridDataset
 from pips.dvae import GridDVAEConfig, GridDVAE
+from pips.utils import generate_friendly_name
 import torch
 from functools import partial
 from typing import Callable, Dict
@@ -326,6 +327,9 @@ class DVAETrainingModule(pl.LightningModule):
 
 
 def main():
+    run_name = generate_friendly_name()
+
+
     # Model configuration
     model_config = GridDVAEConfig(
         n_dim=256,
@@ -387,8 +391,11 @@ def main():
     model = DVAETrainingModule(model_config, experiment_config)
     wandb_logger = WandbLogger(
         project='dvae-training',
+        name=run_name,
+        id=run_name,
         log_model='all',
         save_dir='wandb_logs',
+        reinit=True, # Allows multiple runs from the same script one after another
     )
 
     # Add the custom logging callback
