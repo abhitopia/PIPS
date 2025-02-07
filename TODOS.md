@@ -30,7 +30,7 @@
 - [x] Monitor masking percentage
 - [x] Implement Throughput Monitor
 - [x] Control WandB initialisation and naming
-- [ ] Add parameter to disable logging to WANDB (may be ligthning internal)
+- [x] Add debug mode to disable logging to WANDB (may be ligthning internal)
 - [ ] Implement disentanglement monitor
 - [ ] Non EOS token accuracy as well for validation
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set

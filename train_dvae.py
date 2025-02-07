@@ -328,7 +328,7 @@ class DVAETrainingModule(pl.LightningModule):
 
 def main():
     run_name = generate_friendly_name()
-
+    debug_mode = False
 
     # Model configuration
     model_config = GridDVAEConfig(
@@ -396,11 +396,13 @@ def main():
         log_model='all',
         save_dir='wandb_logs',
         reinit=True, # Allows multiple runs from the same script one after another
+        mode="disabled" if debug_mode else "online"
     )
 
     # Add the custom logging callback
     logging_callback = LoggingCallback()
     custom_progress_bar = CustomRichProgressBar()
+
 
     trainer = pl.Trainer(
         log_every_n_steps=1,
@@ -417,9 +419,9 @@ def main():
         ],
         max_epochs=-1,
         max_steps=experiment_config.max_steps,
-        limit_train_batches=1000,
-        limit_val_batches=10,
-        val_check_interval=5,
+        limit_train_batches=50 if debug_mode else None,
+        limit_val_batches=10 if debug_mode else None,
+        val_check_interval=5 if debug_mode else 1000,
     )
 
     trainer.fit(model, train_loader, val_loader)
