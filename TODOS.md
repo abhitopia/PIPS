@@ -1,9 +1,5 @@
 
 
-## Debug 
-- [ ] Why is TC loss negative?
-- [ ] Relu out the negative losses
-
 ## Training
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
@@ -26,6 +22,7 @@
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss
+- [x] Relu out the negative losses (probably due to approximation)
 
 
 ## Monitoring
@@ -50,6 +47,10 @@
 ## Grokking
 - [ ] Implement Orthograd Optimizer
 - [ ] Use 32bit float CE loss
+
+## Debug/Issues
+- [ ] Why is TC loss negative?
+    - Come back to it when training. Probably due to approximation, large batch size may fix it.
 
 ## Archived
 - [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)

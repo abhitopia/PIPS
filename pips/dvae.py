@@ -967,10 +967,12 @@ class GridDVAE(nn.Module):
         # -----------------------------------------------
         # Return the computed losses (averaged per sample over batch) and the updated running aggregated posterior.
         # -----------------------------------------------
-        return {"mi_loss": mi_batch.mean(), 
-                "dwkl_loss": dwkl_batch.mean(), 
-                "tc_loss": tc_batch.mean(), 
-                "kl_loss": full_kl_batch.mean()}
+        return {
+            "mi_loss": F.relu(mi_batch.mean()), 
+            "dwkl_loss": F.relu(dwkl_batch.mean()), 
+            "tc_loss": F.relu(tc_batch.mean()), 
+            "kl_loss": F.relu(full_kl_batch.mean())
+        }
 
 
 

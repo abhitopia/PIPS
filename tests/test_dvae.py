@@ -921,3 +921,91 @@ def test_reinmax_output_consistency():
     hard_code2, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
 
     assert torch.allclose(hard_code1, hard_code2), "ReinMax outputs differ across runs with the same seed."
+
+def test_kld_losses_non_negative():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+    
+    # Run forward pass multiple times with different random inputs
+    for _ in range(5):
+        x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+        _, _, kld_losses = dvae(x)
+        
+        # Check that all losses are non-negative
+        assert kld_losses["mi_loss"] >= 0, "MI loss should be non-negative"
+        assert kld_losses["dwkl_loss"] >= 0, "DWKL loss should be non-negative"
+        assert kld_losses["tc_loss"] >= 0, "TC loss should be non-negative"
+        assert kld_losses["kl_loss"] >= 0, "KL loss should be non-negative"
+        
+        # Check that losses are not all zero
+        assert not torch.allclose(kld_losses["kl_loss"], torch.tensor(0.0)), \
+            "KL loss should not be zero"
+
+def test_kld_losses_extreme_inputs():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    
+    # Test with all zeros
+    x_zeros = torch.zeros((batch_size, config.n_pos), dtype=torch.long)
+    _, _, kld_losses_zeros = dvae(x_zeros)
+    
+    # Test with all same value
+    x_same = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab-1, dtype=torch.long)
+    _, _, kld_losses_same = dvae(x_same)
+    
+    # Check that all losses remain non-negative for both cases
+    for losses in [kld_losses_zeros, kld_losses_same]:
+        assert losses["mi_loss"] >= 0, "MI loss should be non-negative"
+        assert losses["dwkl_loss"] >= 0, "DWKL loss should be non-negative"
+        assert losses["tc_loss"] >= 0, "TC loss should be non-negative"
+        assert losses["kl_loss"] >= 0, "KL loss should be non-negative"
+
+def test_kld_losses_numerical_stability():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        n_pos=1024,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+    
+    # Test with different temperature values
+    temperatures = [0.1, 0.5, 1.0, 2.0, 5.0]
+    
+    for temp in temperatures:
+        _, _, kld_losses = dvae(x, tau=temp)
+        
+        # Check that all losses are finite and non-negative
+        assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["dwkl_loss"]), f"DWKL loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["tc_loss"]), f"TC loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["kl_loss"]), f"KL loss not finite at temperature {temp}"
+        
+        assert kld_losses["mi_loss"] >= 0, f"MI loss negative at temperature {temp}"
+        assert kld_losses["dwkl_loss"] >= 0, f"DWKL loss negative at temperature {temp}"
+        assert kld_losses["tc_loss"] >= 0, f"TC loss negative at temperature {temp}"
+        assert kld_losses["kl_loss"] >= 0, f"KL loss negative at temperature {temp}"
