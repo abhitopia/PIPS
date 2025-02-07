@@ -1,3 +1,11 @@
+from functools import partial
+from typing import Callable, Dict
+import numpy as np
+from dataclasses import dataclass
+import warnings
+import torch
+import time
+import wandb  # Ensure wandb is imported
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
@@ -6,19 +14,10 @@ from torch.optim import Adam
 from pips.grid_dataset import GridDataset
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.utils import generate_friendly_name
-import torch
-from functools import partial
-from typing import Callable, Dict
-import numpy as np
-from dataclasses import dataclass
-import warnings
-import time
-import wandb  # Ensure wandb is imported
-
+from pips.misc.custom_progress_bar import CustomRichProgressBar
+from pips.misc.schedule import Schedule  # Add this import
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
 
-import pytorch_lightning as pl
-from pips.misc.custom_progress_bar import CustomRichProgressBar
 
 class LoggingCallback(pl.Callback):
     
@@ -90,6 +89,8 @@ class LoggingCallback(pl.Callback):
 @dataclass
 class ExperimentConfig:
     """Configuration for training hyperparameters and schedules"""
+    # Model configuration
+    model_config: GridDVAEConfig
 
     # Sampling parameters
     hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
@@ -129,67 +130,11 @@ class ExperimentConfig:
         elif self.hard_from < 0:
             raise ValueError("hard_from must be None, 0, or a positive integer")
 
-class Schedule:
-    """Generic scheduler for parameter annealing or decay"""
-    
-    @staticmethod
-    def get_schedule(
-        initial_value: float, 
-        target_value: float, 
-        warmup_steps: int,
-        schedule_type: str = 'linear'
-    ) -> Callable[[int], float]:
-        """
-        Returns a schedule function that takes global_step as input and returns the current value.
-        
-        Args:
-            initial_value: Starting value
-            target_value: Final value
-            warmup_steps: Number of steps to reach target value
-            schedule_type: Type of schedule ('linear', 'exponential', 'cosine_decay', or 'cosine_anneal')
-        """
-        if schedule_type == 'linear':
-            def schedule(step: int) -> float:
-                if step >= warmup_steps:
-                    return target_value
-                return initial_value + (target_value - initial_value) * (step / warmup_steps)
-                
-        elif schedule_type == 'exponential':
-            decay_rate = -np.log(target_value / initial_value) / warmup_steps
-            def schedule(step: int) -> float:
-                if step >= warmup_steps:
-                    return target_value
-                return initial_value * np.exp(-decay_rate * step)
-                
-        elif schedule_type == 'cosine_decay':
-            def schedule(step: int) -> float:
-                if step >= warmup_steps:
-                    return target_value
-                progress = step / warmup_steps
-                cosine_decay = 0.5 * (1 + np.cos(np.pi * progress))
-                return target_value + (initial_value - target_value) * cosine_decay
-                
-        elif schedule_type == 'cosine_anneal':
-            def schedule(step: int) -> float:
-                if step >= warmup_steps:
-                    return target_value
-                progress = step / warmup_steps
-                cosine_anneal = 0.5 * (1 - np.cos(np.pi * progress))
-                return initial_value + (target_value - initial_value) * cosine_anneal
-        elif schedule_type == 'threshold':
-            def schedule(step: int) -> float:
-                return target_value if step >= warmup_steps else initial_value
-        else:
-            raise ValueError(f"Unknown schedule type: {schedule_type}")
-            
-        return schedule
-
-
 class DVAETrainingModule(pl.LightningModule):
-    def __init__(self, model_config: GridDVAEConfig, experiment_config: ExperimentConfig):
+    def __init__(self, experiment_config: ExperimentConfig):
         super(DVAETrainingModule, self).__init__()
-        self.model_config = model_config
         self.experiment_config = experiment_config
+        self.model_config = experiment_config.model_config
         self.model = self.build_model()
         self.save_hyperparameters()
 
@@ -329,7 +274,8 @@ class DVAETrainingModule(pl.LightningModule):
 
 def main():
     run_name = generate_friendly_name()
-    debug_mode = False
+    debug_mode = True
+    logging_enable = True
 
     # Model configuration
     model_config = GridDVAEConfig(
@@ -346,6 +292,7 @@ def main():
 
     # Experiment configuration
     experiment_config = ExperimentConfig(
+        model_config=model_config,  # Pass model_config as an attribute
         initial_tau=0.9,
         min_tau=0.1,
         initial_beta_mi=0.0,
@@ -389,7 +336,7 @@ def main():
     )
 
     # Initialize the model and trainer
-    model = DVAETrainingModule(model_config, experiment_config)
+    model = DVAETrainingModule(experiment_config)
     wandb_logger = WandbLogger(
         project='dvae-training',
         name=run_name,
@@ -398,7 +345,7 @@ def main():
         log_model='all',  # Uploads all checkpoints created by ModelCheckpoint
         save_dir='./runs',
         reinit=True, # Allows multiple runs from the same script one after another
-        mode="disabled" if debug_mode else "online"
+        mode="disabled" if debug_mode and not logging_enable else "online"
     )
 
     # Add the custom logging callback
