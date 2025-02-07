@@ -101,15 +101,18 @@ class ExperimentConfig:
     target_beta_dwkl: float = 1.0
     
     # Schedule parameters
-    warmup_steps: int = 5000
+    warmup_steps: int = 10000
     tau_schedule_type: str = 'cosine_decay'
     beta_schedule_type: str = 'cosine_anneal'
     
     # Training parameters
     batch_size: int = 4
     learning_rate: float = 1e-3
-    max_steps: int = 100000
+    max_steps: int = 1000000
 
+    # Add max_mask_pct parameter
+    max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
+    mask_schedule_type: str = 'linear'
 
 class Schedule:
     """Generic scheduler for parameter annealing or decay"""
@@ -209,25 +212,39 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.beta_schedule_type
         )
         
+        # Add max mask percentage schedule
+        max_mask_pct_schedule = Schedule.get_schedule(
+            initial_value=0.0,
+            target_value=cfg.max_mask_pct,
+            warmup_steps=cfg.warmup_steps,
+            schedule_type='cosine_anneal'
+        )
+        
         return {
             'tau': tau_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
-            'beta(DWKL)': beta_dwkl_schedule(step)
+            'beta(DWKL)': beta_dwkl_schedule(step),
+            'max_mask_pct': max_mask_pct_schedule(step),
         }
 
     def forward(self, x, train=True):
-        mask_percentage = 0.0 if train else 0.0
         hard = self.experiment_config.hard
         reinMax = self.experiment_config.reinMax
         
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         
+        # Sample mask percentage for this batch
+        mask_pct = 0.0  # No masking during validation
+        if train:
+            max_mask_pct = scheduled_values['max_mask_pct']
+            mask_pct = np.random.uniform(0.0, max_mask_pct)
+        
         # Forward pass with current scheduled values
         _, reconstruction_loss, kld_losses = self.model.forward(
             x, 
-            mask_percentage=mask_percentage, 
+            mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
             tau=scheduled_values['tau']
@@ -253,18 +270,19 @@ class DVAETrainingModule(pl.LightningModule):
         return {
             'loss': total_loss,
             **{k: v.detach() for k, v in loss_components.items()},
-            **{k: v for k, v in scheduled_values.items()}  # Include scheduled values
+            **{k: v for k, v in scheduled_values.items()},  # Include scheduled values
+            'mask_pct': mask_pct
         }
 
     def training_step(self, batch, batch_idx):
         x, _ = batch
-        output_dict = self(x)
+        output_dict = self(x, train=True)
         
         return output_dict
     
     def validation_step(self, batch, batch_idx):
         x, _ = batch
-        output_dict = self(x)
+        output_dict = self(x, train=False)
     
         return output_dict
 
@@ -299,7 +317,8 @@ def main():
         warmup_steps=5000,
         batch_size=4,
         learning_rate=1e-3,
-        max_steps=100000
+        max_steps=100000,
+        max_mask_pct=0.5  # Set maximum masking percentage
     )
 
     # Create datasets and dataloaders

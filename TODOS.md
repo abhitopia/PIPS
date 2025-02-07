@@ -2,17 +2,18 @@
 
 ## Debug 
 - [ ] Why is TC loss negative?
-- [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook
 
 ## Training
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
 - [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
 - [ ] Codebook Weight Initialisation
+- [ ] Codebook regularization (to bound it)
 - [x] Implement Tau Scheduling
 - [ ] Implement code usage monitor
 - [ ] Implement Gumbel Hard Scheduling
-- [ ] Implement Masking Scheduler
+- [x] Implement Masking Scheduler
+- [ ] Add KL to the Loss along with the schedule
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
 
 
@@ -31,6 +32,8 @@
 - [x] Implement Throughput Monitor
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
+- [ ] Non EOS token accuracy as well for validation
+- [x] Monitor masking percentage
 
 ## CLI
 - [ ] Add Seeding Everything
@@ -49,3 +52,4 @@
 
 ## Archived
 - [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)
+- [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook (Should not be needed as queries in pooler should double up as positional encodings)
