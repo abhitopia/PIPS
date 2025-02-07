@@ -99,11 +99,13 @@ class ExperimentConfig:
     initial_beta_mi: float = 0.0
     initial_beta_tc: float = 0.0
     initial_beta_dwkl: float = 0.0
+    initial_beta_kl: float = 0.0  # Add initial beta for KL
     
     # Target values
     target_beta_mi: float = 1.0
     target_beta_tc: float = 1.0
     target_beta_dwkl: float = 1.0
+    target_beta_kl: float = 1.0   # Add target beta for KL
     
     # Schedule parameters
     warmup_steps: int = 10000
@@ -234,6 +236,14 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.beta_schedule_type
         )
         
+        # Add KL beta schedule
+        beta_kl_schedule = Schedule.get_schedule(
+            initial_value=cfg.initial_beta_kl,
+            target_value=cfg.target_beta_kl,
+            warmup_steps=cfg.warmup_steps,
+            schedule_type=cfg.beta_schedule_type
+        )
+        
         # Add max mask percentage schedule
         max_mask_pct_schedule = Schedule.get_schedule(
             initial_value=0.0,
@@ -248,6 +258,7 @@ class DVAETrainingModule(pl.LightningModule):
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
             'beta(DWKL)': beta_dwkl_schedule(step),
+            'beta(KL)': beta_kl_schedule(step),  # Add KL beta
             'max_mask_pct': max_mask_pct_schedule(step),
         }
 
@@ -285,7 +296,8 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(CE)': reconstruction_loss,
             'loss(MI)': kld_losses['mi_loss'] * scheduled_values['beta(MI)'],
             'loss(DWKL)': kld_losses['dwkl_loss'] * scheduled_values['beta(DWKL)'],
-            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta(TC)']
+            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta(TC)'],
+            'loss(KL)': kld_losses['kl_loss'] * scheduled_values['beta(KL)']  # Add KL loss component
         }
         
         total_loss = sum(loss_components.values())
@@ -334,9 +346,11 @@ def main():
         initial_beta_mi=0.0,
         initial_beta_tc=0.0,
         initial_beta_dwkl=0.0,
+        initial_beta_kl=0.0,    # Add initial beta for KL
         target_beta_mi=1.0,
         target_beta_tc=1.0,
         target_beta_dwkl=1.0,
+        target_beta_kl=1.0,     # Add target beta for KL
         warmup_steps=5000,
         batch_size=4,
         learning_rate=1e-3,

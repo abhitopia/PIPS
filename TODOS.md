@@ -2,18 +2,19 @@
 
 ## Debug 
 - [ ] Why is TC loss negative?
+- [ ] Relu out the negative losses
 
 ## Training
 - [x] Implement KLD Loss
 - [x] Implement beta-TCVAE
 - [x] Implement ReinMax as an alternative to Gumbel Hard (Algorithm 2)
-- [ ] Codebook Weight Initialisation
-- [ ] Codebook regularization (to bound it)
 - [x] Implement Tau Scheduling
-- [ ] Implement code usage monitor
 - [x] Implement Gumbel Hard Scheduling
 - [x] Implement Masking Scheduler
-- [ ] Add KL to the Loss along with the schedule
+- [x] Add KL to the Loss along with the schedule
+- [ ] Codebook Weight Initialisation
+- [ ] Codebook regularization (to bound it)
+- [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
 
 
@@ -28,12 +29,12 @@
 
 
 ## Monitoring
-- [ ] Control WandB initialisation and naming
+- [x] Monitor masking percentage
 - [x] Implement Throughput Monitor
-- [ ] Monitoring number of different codes in pair of input and output grids from eval set
+- [ ] Control WandB initialisation and naming
 - [ ] Implement disentanglement monitor
 - [ ] Non EOS token accuracy as well for validation
-- [x] Monitor masking percentage
+- [ ] Monitoring number of different codes in pair of input and output grids from eval set
 
 ## CLI
 - [ ] Add Seeding Everything

@@ -970,7 +970,7 @@ class GridDVAE(nn.Module):
         return {"mi_loss": mi_batch.mean(), 
                 "dwkl_loss": dwkl_batch.mean(), 
                 "tc_loss": tc_batch.mean(), 
-                "full_kl_loss": full_kl_batch.mean()}
+                "kl_loss": full_kl_batch.mean()}
 
 
 

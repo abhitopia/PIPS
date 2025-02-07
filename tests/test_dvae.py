@@ -217,7 +217,7 @@ def test_dvae():
     assert 'mi_loss' in kld_losses, "kld_losses should contain 'mi_loss'."
     assert 'dwkl_loss' in kld_losses, "kld_losses should contain 'dwkl_loss'."
     assert 'tc_loss' in kld_losses, "kld_losses should contain 'tc_loss'."
-    assert 'full_kl_loss' in kld_losses, "kld_losses should contain 'full_kl_loss'."
+    assert 'kl_loss' in kld_losses, "kld_losses should contain 'kl_loss'."
     
     # Convert to probabilities and test
     probs = F.softmax(output, dim=-1)
@@ -738,8 +738,8 @@ def test_kld_disentanglement_loss():
     tc = kl_full - mi - dwkl
     
     # Assert computed losses
-    assert torch.allclose(losses["full_kl_loss"], kl_full, atol=1e-6), \
-        f"Full KL loss mismatch: expected {kl_full.item()}, got {losses['full_kl_loss'].item()}"
+    assert torch.allclose(losses["kl_loss"], kl_full, atol=1e-6), \
+        f"Full KL loss mismatch: expected {kl_full.item()}, got {losses['kl_loss'].item()}"
     
     assert torch.allclose(losses["mi_loss"], mi, atol=1e-6), \
         f"MI loss mismatch: expected {mi.item()}, got {losses['mi_loss'].item()}"
@@ -809,7 +809,7 @@ def test_dvae_forward_with_reinmax():
     assert 'mi_loss' in kld_losses, "kld_losses should contain 'mi_loss'."
     assert 'dwkl_loss' in kld_losses, "kld_losses should contain 'dwkl_loss'."
     assert 'tc_loss' in kld_losses, "kld_losses should contain 'tc_loss'."
-    assert 'full_kl_loss' in kld_losses, "kld_losses should contain 'full_kl_loss'."
+    assert 'kl_loss' in kld_losses, "kld_losses should contain 'kl_loss'."
 
     # Convert to probabilities and test
     probs = F.softmax(output, dim=-1)
