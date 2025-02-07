@@ -171,3 +171,5 @@ wandb/
 mnist_data/
 
 experiments/
+
+runs/

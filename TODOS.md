@@ -16,9 +16,9 @@
 
 
 ## Checkpointing
+- [x] Implement Checkpointing
+- [x] Prevent saving everything or at least deleting unnecessary artifacts
 - [ ] Save hyperparameters
-- [ ] Implement Checkpointing
-- [ ] Prevent saving everything or at least deleting unnecessary artifacts
 - [ ] Training Resume
 
 ## Disentanglement

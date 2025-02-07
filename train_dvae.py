@@ -1,4 +1,5 @@
 import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
 from torch.optim import Adam
@@ -393,8 +394,9 @@ def main():
         project='dvae-training',
         name=run_name,
         id=run_name,
-        log_model='all',
-        save_dir='wandb_logs',
+        version=run_name, # Used for naming on the local file system
+        log_model='all',  # Uploads all checkpoints created by ModelCheckpoint
+        save_dir='./runs',
         reinit=True, # Allows multiple runs from the same script one after another
         mode="disabled" if debug_mode else "online"
     )
@@ -402,7 +404,6 @@ def main():
     # Add the custom logging callback
     logging_callback = LoggingCallback()
     custom_progress_bar = CustomRichProgressBar()
-
 
     trainer = pl.Trainer(
         log_every_n_steps=1,
@@ -413,7 +414,24 @@ def main():
         logger=wandb_logger,
         gradient_clip_val=1.0,
         callbacks=[
-            pl.callbacks.ModelCheckpoint(monitor='val/loss'),  # Updated to match sanitized key
+            # Best model checkpoint - saves only when reconstruction loss improves
+            ModelCheckpoint(
+                monitor='CE/loss_val',  # Monitor reconstruction loss
+                save_top_k=3,
+                mode='min',
+                auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
+                filename='best-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
+                save_last='link', # This will create a symbolic link to the latest checkpoint
+            ),
+            # Periodic backup checkpoint every 10000 steps
+            ModelCheckpoint(
+                monitor='step',  # Monitor step count
+                mode='max',      # Save latest steps
+                save_top_k=2,    # Keep only 2 latest periodic backups
+                every_n_train_steps=5 if debug_mode else 10000,
+                auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
+                filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
+            ),
             logging_callback, 
             custom_progress_bar
         ],
