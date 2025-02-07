@@ -11,7 +11,7 @@
 - [ ] Codebook regularization (to bound it)
 - [x] Implement Tau Scheduling
 - [ ] Implement code usage monitor
-- [ ] Implement Gumbel Hard Scheduling
+- [x] Implement Gumbel Hard Scheduling
 - [x] Implement Masking Scheduler
 - [ ] Add KL to the Loss along with the schedule
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)

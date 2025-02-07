@@ -66,26 +66,31 @@ class LoggingCallback(pl.Callback):
     def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
-            # Check if the key is in the form "metric(category)"
+            # Handle the main loss separately
             if key == 'loss':
                 metric_name = f'{phase}/{key}'  # Default format
                 pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=False)
+                continue
 
+            # Handle metrics with categories - loss(CE), loss(MI), etc.
             if '(' in key and ')' in key:
                 category = key.split('(')[-1].split(')')[0]  # Extract category
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
-            elif key.strip():  # Check if the key is not empty
-                metric_name = f'{key.capitalize()}/{key}_{phase}'  # Format as "METRIC/metric_phase"
-      
+            # Handle special parameters like 'hard', 'tau', 'beta', etc.
+            elif key in ['hard', 'tau', 'beta', 'mask_pct']:
+                metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
+            # Handle any remaining metrics
+            elif key.strip():
+                metric_name = f'{key.capitalize()}/{key}_{phase}'
             
-            pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True)
+            pl_module.log(metric_name, float(value), on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True)
 
 @dataclass
 class ExperimentConfig:
     """Configuration for training hyperparameters and schedules"""
 
     # Sampling parameters
-    hard: bool = True
+    hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
     reinMax: bool = True
 
     # Initial values
@@ -113,6 +118,12 @@ class ExperimentConfig:
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
     mask_schedule_type: str = 'linear'
+
+    def __post_init__(self):
+        if self.hard_from is None:
+            self.hard_from = self.warmup_steps
+        elif self.hard_from < 0:
+            raise ValueError("hard_from must be None, 0, or a positive integer")
 
 class Schedule:
     """Generic scheduler for parameter annealing or decay"""
@@ -161,6 +172,9 @@ class Schedule:
                 progress = step / warmup_steps
                 cosine_anneal = 0.5 * (1 - np.cos(np.pi * progress))
                 return initial_value + (target_value - initial_value) * cosine_anneal
+        elif schedule_type == 'threshold':
+            def schedule(step: int) -> float:
+                return target_value if step >= warmup_steps else initial_value
         else:
             raise ValueError(f"Unknown schedule type: {schedule_type}")
             
@@ -181,6 +195,14 @@ class DVAETrainingModule(pl.LightningModule):
     def get_scheduled_values(self, step: int) -> Dict[str, float]:
         """Returns all scheduled values for the current step."""
         cfg = self.experiment_config
+        
+        # Hard sampling threshold schedule (0.0 = soft, 1.0 = hard)
+        hard_schedule = Schedule.get_schedule(
+            initial_value=False,
+            target_value=True,
+            warmup_steps=cfg.hard_from,
+            schedule_type='threshold'  # Immediate step from 0 to 1 at warmup_steps
+        )
         
         # Temperature schedule
         tau_schedule = Schedule.get_schedule(
@@ -221,6 +243,7 @@ class DVAETrainingModule(pl.LightningModule):
         )
         
         return {
+            'hard': hard_schedule(step),  # Convert to boolean
             'tau': tau_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
@@ -229,12 +252,12 @@ class DVAETrainingModule(pl.LightningModule):
         }
 
     def forward(self, x, train=True):
-        hard = self.experiment_config.hard
         reinMax = self.experiment_config.reinMax
         
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
-        
+        hard = scheduled_values['hard']
+
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
         if train:
