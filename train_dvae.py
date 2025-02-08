@@ -350,46 +350,56 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
 
     return train_loader, val_loader
 
+def create_fresh_config(debug_mode: bool = True) -> ExperimentConfig:
+    """Create a fresh experiment configuration with default parameters.
+    
+    Args:
+        debug_mode: If True, uses reduced steps for debugging
+    
+    Returns:
+        ExperimentConfig: New configuration instance
+    """
+    # Model configuration
+    model_config = GridDVAEConfig(
+        n_dim=256,
+        n_head=8,
+        n_layers=6,
+        n_codes=16,
+        codebook_size=512,
+        rope_base=10000,
+        dropout=0.0,
+        n_pos=32 * 32,
+        n_vocab=16
+    )
+
+    # Experiment configuration
+    return ExperimentConfig(
+        model_config=model_config,
+        initial_tau=0.9,
+        min_tau=0.1,
+        initial_beta_mi=0.0,
+        initial_beta_tc=0.0,
+        initial_beta_dwkl=0.0,
+        initial_beta_kl=0.0,
+        target_beta_mi=1.0,
+        target_beta_tc=1.0,
+        target_beta_dwkl=1.0,
+        target_beta_kl=1.0,
+        warmup_steps=5000,
+        batch_size=4,
+        learning_rate=1e-3,
+        weight_decay=0.01,
+        max_steps=100000 if not debug_mode else 1000,
+        max_mask_pct=0.5
+    )
+
 def main(resume_checkpoint: str | None = None):
     if resume_checkpoint is None:
         # Normal training initialization
         run_name = generate_friendly_name()
         debug_mode = True
         logging_enable = True
-
-        # Model configuration
-        model_config = GridDVAEConfig(
-            n_dim=256,
-            n_head=8,
-            n_layers=6,
-            n_codes=16,
-            codebook_size=512,
-            rope_base=10000,
-            dropout=0.0,
-            n_pos=32 * 32,
-            n_vocab=16
-        )
-
-        # Experiment configuration
-        experiment_config = ExperimentConfig(
-            model_config=model_config,
-            initial_tau=0.9,
-            min_tau=0.1,
-            initial_beta_mi=0.0,
-            initial_beta_tc=0.0,
-            initial_beta_dwkl=0.0,
-            initial_beta_kl=0.0,
-            target_beta_mi=1.0,
-            target_beta_tc=1.0,
-            target_beta_dwkl=1.0,
-            target_beta_kl=1.0,
-            warmup_steps=5000,
-            batch_size=4,
-            learning_rate=1e-3,
-            weight_decay=0.01,  # Add weight decay
-            max_steps=100000,
-            max_mask_pct=0.5
-        )
+        experiment_config = create_fresh_config(debug_mode=debug_mode)
     else:
         # When resuming, load config from checkpoint
         run_name = Path(resume_checkpoint).parent.parent.name
