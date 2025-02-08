@@ -311,6 +311,44 @@ class DVAETrainingModule(pl.LightningModule):
             }
         }
 
+def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = False):
+    """Create train and validation dataloaders based on experiment configuration.
+    
+    Args:
+        experiment_config: Configuration containing batch_size and padding_idx
+        debug_mode: If True, uses reduced workers for debugging
+    
+    Returns:
+        tuple: (train_loader, val_loader)
+    """
+    project_size = (32, 32)
+    padding_idx = experiment_config.padding_idx
+    batch_size = experiment_config.batch_size
+
+    # Create training dataloader
+    collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
+    train_dataset = GridDataset(train=True)
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        collate_fn=collate_fn_train,
+        shuffle=True, 
+        num_workers=0 if debug_mode else 0
+    )
+
+    # Create validation dataloader
+    collate_fn_val = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=False, project_size=project_size)
+    val_dataset = GridDataset(train=False)
+    val_loader = DataLoader(
+        val_dataset, 
+        batch_size=batch_size,
+        collate_fn=collate_fn_val,
+        shuffle=False, 
+        num_workers=0 if debug_mode else 4,
+        persistent_workers=not debug_mode
+    )
+
+    return train_loader, val_loader
 
 def main(resume_checkpoint: str | None = None):
     if resume_checkpoint is None:
@@ -366,41 +404,8 @@ def main(resume_checkpoint: str | None = None):
     model = DVAETrainingModule(experiment_config)
     max_steps = experiment_config.max_steps
 
-    # Create datasets and dataloaders
-    # Note: These still need to be created as they're not saved in checkpoint
-    project_size = (32, 32)
-    
-    if resume_checkpoint is None:
-        # Use experiment_config from new training
-        padding_idx = experiment_config.padding_idx
-        batch_size = experiment_config.batch_size
-    else:
-        # Load checkpoint to get config values needed for data loading
-        ckpt = torch.load(resume_checkpoint)
-        experiment_config = ckpt['hyper_parameters']['experiment_config']
-        padding_idx = experiment_config.padding_idx
-        batch_size = experiment_config.batch_size
-    
-    collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
-    train_dataset = GridDataset(train=True)
-    train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
-        collate_fn=collate_fn_train,
-        shuffle=True, 
-        num_workers=0
-    )
-
-    collate_fn_val = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=False, project_size=project_size)
-    val_dataset = GridDataset(train=False)
-    val_loader = DataLoader(
-        val_dataset, 
-        batch_size=batch_size,
-        collate_fn=collate_fn_val,
-        shuffle=False, 
-        num_workers=4,
-        persistent_workers=True
-    )
+    # Create dataloaders using the new function
+    train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
     # Initialize wandb logger
     wandb_logger = WandbLogger(
