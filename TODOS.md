@@ -8,6 +8,8 @@
 - [x] Implement Gumbel Hard Scheduling
 - [x] Implement Masking Scheduler
 - [x] Add KL to the Loss along with the schedule
+- [x] Switched to using AdamW with weight decay
+- [x] Add Learning Rate Noam Schedule
 - [ ] PAD/EOS value to be determined automatically from Model Config
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
@@ -31,6 +33,7 @@
 - [x] Implement Throughput Monitor
 - [x] Control WandB initialisation and naming
 - [x] Add debug mode to disable logging to WANDB (may be ligthning internal)
+- [x] Monitor learning rate
 - [ ] Implement disentanglement monitor
 - [ ] Non EOS token accuracy as well for validation
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
@@ -41,7 +44,7 @@
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
 ## Refactor
-- [ ] Remove pesky warnings
+- [x] Remove pesky warnings
 
 ## Optimisation
 - [ ] Optimise training for speed

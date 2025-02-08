@@ -1,16 +1,15 @@
 from functools import partial
-from typing import Callable, Dict
+from typing import Dict
 import numpy as np
 from dataclasses import dataclass
 import warnings
 import torch
 import time
-import wandb  # Ensure wandb is imported
 import pytorch_lightning as pl
-from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import WandbLogger
 from torch.utils.data import DataLoader
-from torch.optim import Adam
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from pips.grid_dataset import GridDataset
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.utils import generate_friendly_name
@@ -47,6 +46,10 @@ class LoggingCallback(pl.Callback):
             tokens_per_sec = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
             print(f"[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
             outputs['tokens_per_sec'] = tokens_per_sec
+        
+        # Log the current learning rate
+        current_lr = trainer.optimizers[0].param_groups[0]['lr']
+        pl_module.log('params/learning_rate', current_lr, on_step=True, on_epoch=False)
         
         # Log loss metrics using the helper method
         self._log_metrics(pl_module, 'train', outputs, batch[0].size(0), on_step=True, on_epoch=False)
@@ -119,6 +122,7 @@ class ExperimentConfig:
     # Training parameters
     batch_size: int = 4
     learning_rate: float = 1e-3
+    weight_decay: float = 0.01  # Add weight decay parameter
     max_steps: int = 1000000
 
     # Add max_mask_pct parameter
@@ -270,7 +274,35 @@ class DVAETrainingModule(pl.LightningModule):
         return output_dict
 
     def configure_optimizers(self):
-        return Adam(self.parameters(), lr=self.experiment_config.learning_rate)
+        optimizer = AdamW(
+            self.parameters(),
+            lr=self.experiment_config.learning_rate,
+            weight_decay=self.experiment_config.weight_decay
+        )
+        
+        # Noam scheduler with linear warmup and cosine decay
+        def lr_lambda(step):
+            warmup_steps = self.experiment_config.warmup_steps
+            min_lr_factor = 0.01  # Minimum learning rate will be 1% of max lr
+            
+            if step < warmup_steps:
+                # Linear warmup
+                return float(step) / float(max(1, warmup_steps))
+            else:
+                # Cosine decay from 1.0 to min_lr_factor
+                progress = float(step - warmup_steps) / float(max(1, self.experiment_config.max_steps - warmup_steps))
+                return min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
+        
+        scheduler = LambdaLR(optimizer, lr_lambda)
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",  # Update lr every step
+                "frequency": 1
+            }
+        }
 
 
 def main():
@@ -299,16 +331,17 @@ def main():
         initial_beta_mi=0.0,
         initial_beta_tc=0.0,
         initial_beta_dwkl=0.0,
-        initial_beta_kl=0.0,    # Add initial beta for KL
+        initial_beta_kl=0.0,
         target_beta_mi=1.0,
         target_beta_tc=1.0,
         target_beta_dwkl=1.0,
-        target_beta_kl=1.0,     # Add target beta for KL
+        target_beta_kl=1.0,
         warmup_steps=5000,
         batch_size=4,
         learning_rate=1e-3,
+        weight_decay=0.01,  # Add weight decay
         max_steps=100000,
-        max_mask_pct=0.5  # Set maximum masking percentage
+        max_mask_pct=0.5
     )
 
     # Create datasets and dataloaders
