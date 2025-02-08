@@ -12,15 +12,18 @@
 - [x] Add Learning Rate Noam Schedule
 - [x] PAD/EOS value to be determined automatically from Model Config
 - [ ] Codebook Weight Initialisation
+- [ ] Move ProjectSize to Experiment Config
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
+- [ ] Gradient Accumulation and how to do it in Lightning
 
 
 ## Checkpointing
 - [x] Implement Checkpointing
 - [x] Prevent saving everything or at least deleting unnecessary artifacts (Write a Wandb Sync Callback)
-- [ ] Save hyperparameters
+- [x] Add rudimentary resume support from local checkpoint
+- [x] Save hyperparameters
 - [ ] Training Resume
 
 ## Disentanglement

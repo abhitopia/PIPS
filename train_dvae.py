@@ -16,6 +16,7 @@ from pips.utils import generate_friendly_name
 from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.misc.schedule import Schedule  # Add this import
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
+from pathlib import Path
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
 
 
@@ -311,79 +312,105 @@ class DVAETrainingModule(pl.LightningModule):
         }
 
 
-def main():
-    run_name = generate_friendly_name()
-    debug_mode = True
-    logging_enable = True
+def main(resume_checkpoint: str | None = None):
+    if resume_checkpoint is None:
+        # Normal training initialization
+        run_name = generate_friendly_name()
+        debug_mode = True
+        logging_enable = True
 
-    # Model configuration
-    model_config = GridDVAEConfig(
-        n_dim=256,
-        n_head=8,
-        n_layers=6,
-        n_codes=16,
-        codebook_size=512,
-        rope_base=10000,
-        dropout=0.0,
-        n_pos=32 * 32,
-        n_vocab=16
-    )
+        # Model configuration
+        model_config = GridDVAEConfig(
+            n_dim=256,
+            n_head=8,
+            n_layers=6,
+            n_codes=16,
+            codebook_size=512,
+            rope_base=10000,
+            dropout=0.0,
+            n_pos=32 * 32,
+            n_vocab=16
+        )
 
-    # Experiment configuration
-    experiment_config = ExperimentConfig(
-        model_config=model_config,  # Pass model_config as an attribute
-        initial_tau=0.9,
-        min_tau=0.1,
-        initial_beta_mi=0.0,
-        initial_beta_tc=0.0,
-        initial_beta_dwkl=0.0,
-        initial_beta_kl=0.0,
-        target_beta_mi=1.0,
-        target_beta_tc=1.0,
-        target_beta_dwkl=1.0,
-        target_beta_kl=1.0,
-        warmup_steps=5000,
-        batch_size=4,
-        learning_rate=1e-3,
-        weight_decay=0.01,  # Add weight decay
-        max_steps=100000,
-        max_mask_pct=0.5
-    )
+        # Experiment configuration
+        experiment_config = ExperimentConfig(
+            model_config=model_config,
+            initial_tau=0.9,
+            min_tau=0.1,
+            initial_beta_mi=0.0,
+            initial_beta_tc=0.0,
+            initial_beta_dwkl=0.0,
+            initial_beta_kl=0.0,
+            target_beta_mi=1.0,
+            target_beta_tc=1.0,
+            target_beta_dwkl=1.0,
+            target_beta_kl=1.0,
+            warmup_steps=5000,
+            batch_size=4,
+            learning_rate=1e-3,
+            weight_decay=0.01,  # Add weight decay
+            max_steps=100000,
+            max_mask_pct=0.5
+        )
+    else:
+        # When resuming, load config from checkpoint
+        run_name = Path(resume_checkpoint).parent.parent.name
+        debug_mode = True
+        logging_enable = True
+        
+        # Load checkpoint to get config values
+        ckpt = torch.load(resume_checkpoint)
+        experiment_config = ckpt['hyper_parameters']['experiment_config']
+
+    # Initialize the model (both for new training and resuming)
+    model = DVAETrainingModule(experiment_config)
+    max_steps = experiment_config.max_steps
 
     # Create datasets and dataloaders
+    # Note: These still need to be created as they're not saved in checkpoint
     project_size = (32, 32)
     
-    collate_fn_train = partial(GridDataset.collate_fn, pad_value=experiment_config.padding_idx, permute=True, project_size=project_size)
+    if resume_checkpoint is None:
+        # Use experiment_config from new training
+        padding_idx = experiment_config.padding_idx
+        batch_size = experiment_config.batch_size
+    else:
+        # Load checkpoint to get config values needed for data loading
+        ckpt = torch.load(resume_checkpoint)
+        experiment_config = ckpt['hyper_parameters']['experiment_config']
+        padding_idx = experiment_config.padding_idx
+        batch_size = experiment_config.batch_size
+    
+    collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
     train_dataset = GridDataset(train=True)
     train_loader = DataLoader(
         train_dataset, 
-        batch_size=experiment_config.batch_size, 
+        batch_size=batch_size, 
         collate_fn=collate_fn_train,
         shuffle=True, 
-        num_workers=0  # It must be 0 because loading the dataset is otherwise too slow
+        num_workers=0
     )
 
-    collate_fn_val = partial(GridDataset.collate_fn, pad_value=experiment_config.padding_idx, permute=False, project_size=project_size)
+    collate_fn_val = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=False, project_size=project_size)
     val_dataset = GridDataset(train=False)
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=experiment_config.batch_size,
+        batch_size=batch_size,
         collate_fn=collate_fn_val,
         shuffle=False, 
         num_workers=4,
         persistent_workers=True
     )
 
-    # Initialize the model and trainer
-    model = DVAETrainingModule(experiment_config)
+    # Initialize wandb logger
     wandb_logger = WandbLogger(
         project='dvae-training',
         name=run_name,
         id=run_name,
-        version=run_name, # Used for naming on the local file system
-        log_model=False,  # No default logging of model checkpoints
+        version=run_name,
+        log_model=False,
         save_dir='./runs',
-        reinit=True, # Allows multiple runs from the same script one after another
+        reinit=True,
         mode="disabled" if debug_mode and not logging_enable else "online"
     )
 
@@ -400,38 +427,41 @@ def main():
         logger=wandb_logger,
         gradient_clip_val=1.0,
         callbacks=[
-            # Best model checkpoint - saves only when reconstruction loss improves
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='CE/loss_val',  # Monitor reconstruction loss
+                monitor='CE/loss_val',
                 save_top_k=3,
                 mode='min',
-                auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
+                auto_insert_metric_name=False,
                 filename='best-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
-                # save_last='link', # This will create a symbolic link to the latest checkpoint
             ),
-            # Periodic backup checkpoint every 10000 steps
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="backup",
                 monitor='step',  # Monitor step count
                 mode='max',      # Save latest steps
                 save_top_k=2,    # Keep only 2 latest periodic backups
                 every_n_train_steps=20 if debug_mode else 10000,
-                auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
+                auto_insert_metric_name=False,
                 filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
             ),
             logging_callback, 
             custom_progress_bar
         ],
         max_epochs=-1,
-        max_steps=experiment_config.max_steps,
+        max_steps=max_steps,  # Always use max_steps from config
         limit_train_batches=50 if debug_mode else None,
         limit_val_batches=10 if debug_mode else None,
         val_check_interval=10 if debug_mode else 1000,
     )
 
-    trainer.fit(model, train_loader, val_loader)
+    trainer.fit(model, train_loader, val_loader, ckpt_path=resume_checkpoint)
 
 
 if __name__ == '__main__':
-    main() 
+    # Example usage:
+    # For new training:
+    # main()
+    
+    # For resuming training:
+    main(resume_checkpoint='runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt')
+    # main(resume_checkpoint="runs/dvae-training/friendly-name/checkpoints/best-step0001000-ce0.1234.ckpt") 
