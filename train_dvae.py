@@ -129,11 +129,17 @@ class ExperimentConfig:
     max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
     mask_schedule_type: str = 'linear'
 
+    padding_idx: int | None = None
+
     def __post_init__(self):
         if self.hard_from is None:
             self.hard_from = self.warmup_steps
         elif self.hard_from < 0:
             raise ValueError("hard_from must be None, 0, or a positive integer")
+        
+        # Automatically set padding_idx if not provided
+        if self.padding_idx is None:
+            self.padding_idx = self.model_config.n_vocab - 1
 
 class DVAETrainingModule(pl.LightningModule):
     def __init__(self, experiment_config: ExperimentConfig):
@@ -345,10 +351,9 @@ def main():
     )
 
     # Create datasets and dataloaders
-    pad_value = 10
     project_size = (32, 32)
     
-    collate_fn_train = partial(GridDataset.collate_fn, pad_value=pad_value, permute=True, project_size=project_size)
+    collate_fn_train = partial(GridDataset.collate_fn, pad_value=experiment_config.padding_idx, permute=True, project_size=project_size)
     train_dataset = GridDataset(train=True)
     train_loader = DataLoader(
         train_dataset, 
@@ -358,7 +363,7 @@ def main():
         num_workers=0  # It must be 0 because loading the dataset is otherwise too slow
     )
 
-    collate_fn_val = partial(GridDataset.collate_fn, pad_value=pad_value, permute=False, project_size=project_size)
+    collate_fn_val = partial(GridDataset.collate_fn, pad_value=experiment_config.padding_idx, permute=False, project_size=project_size)
     val_dataset = GridDataset(train=False)
     val_loader = DataLoader(
         val_dataset, 

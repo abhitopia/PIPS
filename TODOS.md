@@ -10,7 +10,7 @@
 - [x] Add KL to the Loss along with the schedule
 - [x] Switched to using AdamW with weight decay
 - [x] Add Learning Rate Noam Schedule
-- [ ] PAD/EOS value to be determined automatically from Model Config
+- [x] PAD/EOS value to be determined automatically from Model Config
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
