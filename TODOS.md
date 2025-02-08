@@ -11,8 +11,8 @@
 - [x] Switched to using AdamW with weight decay
 - [x] Add Learning Rate Noam Schedule
 - [x] PAD/EOS value to be determined automatically from Model Config
+- [x] Move ProjectSize to Model Config
 - [ ] Codebook Weight Initialisation
-- [ ] Move ProjectSize to Experiment Config
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)

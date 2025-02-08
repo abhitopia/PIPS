@@ -173,7 +173,8 @@ def test_grid_dvae_config():
         n_layers=6,
         n_codes=8,  # Directly specify the number of codes
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,  # Replace n_pos with grid dimensions
+        max_grid_width=32,
         n_vocab=16
     )
     assert config.compression_factor == 128  # 1024/8
@@ -182,13 +183,11 @@ def test_grid_dvae_config():
     
     # Test invalid configurations
     with pytest.raises(ValueError):
-        GridDVAEConfig(n_dim=65, n_head=8, n_layers=6, n_pos=1024, n_vocab=16, n_codes=8)
+        GridDVAEConfig(n_dim=65, n_head=8, n_layers=6, max_grid_height=32, max_grid_width=32, n_vocab=16, n_codes=8)
     
     with pytest.raises(AssertionError):
-        GridDVAEConfig(n_dim=128, n_head=8, n_layers=6, n_pos=1000, n_vocab=16, n_codes=8)
-    
-    with pytest.raises(AssertionError):
-        GridDVAEConfig(n_dim=128, n_head=8, n_layers=6, n_pos=2048, n_vocab=16, n_codes=8)
+        # Test non-power-of-2 grid size (31x32 = 992)
+        GridDVAEConfig(n_dim=128, n_head=8, n_layers=6, max_grid_height=31, max_grid_width=32, n_vocab=16, n_codes=8)
 
 # Test DVAE
 def test_dvae():
@@ -196,9 +195,10 @@ def test_dvae():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     
@@ -314,9 +314,10 @@ def test_create_random_mask_no_mask():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     ))
     B, S = 4, 1024
@@ -328,9 +329,10 @@ def test_create_random_mask_full_mask():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     ))
     B, S = 4, 1024
@@ -342,9 +344,10 @@ def test_create_random_mask_partial_mask():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     ))
     B, S = 4, 1024
@@ -361,9 +364,10 @@ def test_dvae_forward_with_mask():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -485,9 +489,10 @@ def test_transformer_masking_effect():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     transformer = Transformer(config)
@@ -525,9 +530,10 @@ def test_transformer_masking_effect_single_mask():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     transformer = Transformer(config)
@@ -569,9 +575,10 @@ def test_dvae_masking_effect():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -657,7 +664,8 @@ def test_reconstruction_loss():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=4  # Reduced vocab size for simplicity
     ))
     
@@ -698,7 +706,8 @@ def test_kld_disentanglement_loss():
         n_layers=6,
         n_codes=4,  # Reduced for simplicity
         codebook_size=512,
-        n_pos=16,    # Reduced for simplicity
+        max_grid_height=4,    # 4x4 grid = 16 positions
+        max_grid_width=4,
         n_vocab=4
     )
     dvae = GridDVAE(config)
@@ -756,9 +765,10 @@ def test_dvae_encode_with_reinmax():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -788,9 +798,10 @@ def test_dvae_forward_with_reinmax():
         n_dim=128,
         n_head=8,
         n_layers=6,
-        n_codes=8,  # Directly specify the number of codes
+        n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -828,7 +839,8 @@ def test_reinmax_gradient_flow():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -861,7 +873,8 @@ def test_reinmax_edge_cases():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -885,7 +898,8 @@ def test_reinmax_stochasticity():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -907,7 +921,8 @@ def test_reinmax_output_consistency():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -929,7 +944,8 @@ def test_kld_losses_non_negative():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -958,7 +974,8 @@ def test_kld_losses_extreme_inputs():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)
@@ -986,7 +1003,8 @@ def test_kld_losses_numerical_stability():
         n_layers=6,
         n_codes=8,
         codebook_size=512,
-        n_pos=1024,
+        max_grid_height=32,
+        max_grid_width=32,
         n_vocab=16
     )
     dvae = GridDVAE(config)

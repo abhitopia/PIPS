@@ -321,7 +321,8 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     Returns:
         tuple: (train_loader, val_loader)
     """
-    project_size = (32, 32)
+    project_size = (experiment_config.model_config.max_grid_height, 
+                   experiment_config.model_config.max_grid_width)
     padding_idx = experiment_config.padding_idx
     batch_size = experiment_config.batch_size
 
@@ -368,8 +369,9 @@ def create_fresh_config(debug_mode: bool = True) -> ExperimentConfig:
         codebook_size=512,
         rope_base=10000,
         dropout=0.0,
-        n_pos=32 * 32,
-        n_vocab=16
+        n_vocab=16,
+        max_grid_height=32,
+        max_grid_width=32
     )
 
     # Experiment configuration
@@ -475,8 +477,8 @@ def main(resume_checkpoint: str | None = None):
 if __name__ == '__main__':
     # Example usage:
     # For new training:
-    # main()
+    main()
     
     # For resuming training:
-    main(resume_checkpoint='runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt')
+    # main(resume_checkpoint='runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt')
     # main(resume_checkpoint="runs/dvae-training/friendly-name/checkpoints/best-step0001000-ce0.1234.ckpt") 
