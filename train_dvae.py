@@ -16,6 +16,7 @@ from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.utils import generate_friendly_name
 from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.misc.schedule import Schedule  # Add this import
+from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
 
 
@@ -342,7 +343,7 @@ def main():
         name=run_name,
         id=run_name,
         version=run_name, # Used for naming on the local file system
-        log_model='all',  # Uploads all checkpoints created by ModelCheckpoint
+        log_model=False,  # No default logging of model checkpoints
         save_dir='./runs',
         reinit=True, # Allows multiple runs from the same script one after another
         mode="disabled" if debug_mode and not logging_enable else "online"
@@ -362,20 +363,22 @@ def main():
         gradient_clip_val=1.0,
         callbacks=[
             # Best model checkpoint - saves only when reconstruction loss improves
-            ModelCheckpoint(
+            ModelCheckpointWithWandbSync(
+                wandb_model_suffix="best",
                 monitor='CE/loss_val',  # Monitor reconstruction loss
                 save_top_k=3,
                 mode='min',
                 auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
                 filename='best-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
-                save_last='link', # This will create a symbolic link to the latest checkpoint
+                # save_last='link', # This will create a symbolic link to the latest checkpoint
             ),
             # Periodic backup checkpoint every 10000 steps
-            ModelCheckpoint(
+            ModelCheckpointWithWandbSync(
+                wandb_model_suffix="backup",
                 monitor='step',  # Monitor step count
                 mode='max',      # Save latest steps
                 save_top_k=2,    # Keep only 2 latest periodic backups
-                every_n_train_steps=5 if debug_mode else 10000,
+                every_n_train_steps=20 if debug_mode else 10000,
                 auto_insert_metric_name=False, # To prevent the metric name from being inserted in the filename (and new folders)
                 filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
             ),
@@ -386,7 +389,7 @@ def main():
         max_steps=experiment_config.max_steps,
         limit_train_batches=50 if debug_mode else None,
         limit_val_batches=10 if debug_mode else None,
-        val_check_interval=5 if debug_mode else 1000,
+        val_check_interval=10 if debug_mode else 1000,
     )
 
     trainer.fit(model, train_loader, val_loader)

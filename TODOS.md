@@ -17,7 +17,7 @@
 
 ## Checkpointing
 - [x] Implement Checkpointing
-- [x] Prevent saving everything or at least deleting unnecessary artifacts
+- [x] Prevent saving everything or at least deleting unnecessary artifacts (Write a Wandb Sync Callback)
 - [ ] Save hyperparameters
 - [ ] Training Resume
 
