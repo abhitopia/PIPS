@@ -14,11 +14,12 @@
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
 - [x] Gradient Accumulation and how to do it in Lightning
+- [ ] Add LR finder option
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
-
+- [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#stochastic-weight-averaging
 
 ## Checkpointing
 - [x] Implement Checkpointing
@@ -52,6 +53,12 @@
 
 ## Optimisation
 - [ ] Optimise training for speed
+- [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
+- [ ] https://lightning.ai/docs/pytorch/stable/accelerators/gpu.html
+- [ ] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
+- [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
+- [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
+- [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html
 
 ## Grokking
 - [ ] Implement Orthograd Optimizer
