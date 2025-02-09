@@ -12,11 +12,12 @@
 - [x] Add Learning Rate Noam Schedule
 - [x] PAD/EOS value to be determined automatically from Model Config
 - [x] Move ProjectSize to Model Config
+- [ ] Gradient Accumulation and how to do it in Lightning
+- [ ] Make gradient clipping specified in the experiment config
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
-- [ ] Gradient Accumulation and how to do it in Lightning
 
 
 ## Checkpointing
@@ -24,7 +25,7 @@
 - [x] Prevent saving everything or at least deleting unnecessary artifacts (Write a Wandb Sync Callback)
 - [x] Add rudimentary resume support from local checkpoint
 - [x] Save hyperparameters
-- [ ] Training Resume
+- [ ] Training Resume from WandB
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss

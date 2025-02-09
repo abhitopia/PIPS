@@ -97,6 +97,9 @@ class ExperimentConfig:
     # Model configuration
     model_config: GridDVAEConfig
 
+    # Tracking info
+    checkpoint_path: str | None = None  # Track if config was loaded from checkpoint
+    
     # Sampling parameters
     hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
     reinMax: bool = True
@@ -141,6 +144,36 @@ class ExperimentConfig:
         # Automatically set padding_idx if not provided
         if self.padding_idx is None:
             self.padding_idx = self.model_config.n_vocab - 1
+
+    @staticmethod
+    def from_checkpoint(checkpoint_path: str) -> 'ExperimentConfig':
+        """Load ExperimentConfig from a checkpoint file.
+        
+        Args:
+            checkpoint_path: Path to the checkpoint file
+            
+        Returns:
+            ExperimentConfig: Configuration loaded from checkpoint with checkpoint_path set
+            
+        Raises:
+            ValueError: If checkpoint doesn't contain valid config
+        """
+        # Add ExperimentConfig and GridDVAEConfig to safe globals
+        torch.serialization.add_safe_globals([ExperimentConfig, GridDVAEConfig])
+        
+        ckpt = torch.load(checkpoint_path, weights_only=True)
+        
+        try:
+            config = ckpt['hyper_parameters']['experiment_config']
+            if not isinstance(config, ExperimentConfig):
+                raise ValueError("Checkpoint contains invalid config type")
+                
+            # Set the checkpoint_path field
+            config.checkpoint_path = checkpoint_path
+            return config
+            
+        except KeyError as e:
+            raise ValueError(f"Checkpoint doesn't contain valid config: {e}")
 
 class DVAETrainingModule(pl.LightningModule):
     def __init__(self, experiment_config: ExperimentConfig):
@@ -351,12 +384,8 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
 
     return train_loader, val_loader
 
-def create_fresh_config(debug_mode: bool = True) -> ExperimentConfig:
+def create_fresh_config() -> ExperimentConfig:
     """Create a fresh experiment configuration with default parameters.
-    
-    Args:
-        debug_mode: If True, uses reduced steps for debugging
-    
     Returns:
         ExperimentConfig: New configuration instance
     """
@@ -391,47 +420,45 @@ def create_fresh_config(debug_mode: bool = True) -> ExperimentConfig:
         batch_size=4,
         learning_rate=1e-3,
         weight_decay=0.01,
-        max_steps=100000 if not debug_mode else 1000,
+        max_steps=100000,
         max_mask_pct=0.5
     )
 
-def main(resume_checkpoint: str | None = None):
-    if resume_checkpoint is None:
-        # Normal training initialization
-        run_name = generate_friendly_name()
-        debug_mode = True
-        logging_enable = True
-        experiment_config = create_fresh_config(debug_mode=debug_mode)
-    else:
-        # When resuming, load config from checkpoint
-        run_name = Path(resume_checkpoint).parent.parent.name
-        debug_mode = True
-        logging_enable = True
-        
-        # Load checkpoint to get config values
-        ckpt = torch.load(resume_checkpoint)
-        experiment_config = ckpt['hyper_parameters']['experiment_config']
-
-    # Initialize the model (both for new training and resuming)
+def train(
+    experiment_config: ExperimentConfig,
+    run_name: str,
+    debug_mode: bool = False,
+    debug_logging: bool = True,
+    val_check_interval: int | None = None,
+) -> None:
+    """Train a DVAE model with the given configuration.
+    
+    Args:
+        experiment_config: Configuration containing model and training parameters
+        run_name: Name of the training run for logging
+        debug_mode: If True, uses reduced workers and batches for debugging
+        debug_logging: If True, enables logging even in debug mode
+        val_check_interval: How often to run validation (defaults to 1000, or 10 in debug mode)
+    """
+    # Initialize the model
     model = DVAETrainingModule(experiment_config)
-    max_steps = experiment_config.max_steps
 
-    # Create dataloaders using the new function
+    # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
     # Initialize wandb logger
     wandb_logger = WandbLogger(
-        project='dvae-training',
+        project='dvae-training' if not debug_mode else 'dvae-training-debug',
         name=run_name,
         id=run_name,
         version=run_name,
         log_model=False,
         save_dir='./runs',
         reinit=True,
-        mode="disabled" if debug_mode and not logging_enable else "online"
+        mode="disabled" if debug_mode and not debug_logging else "online"
     )
 
-    # Add the custom logging callback
+    # Add callbacks
     logging_callback = LoggingCallback()
     custom_progress_bar = CustomRichProgressBar()
 
@@ -454,31 +481,45 @@ def main(resume_checkpoint: str | None = None):
             ),
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="backup",
-                monitor='step',  # Monitor step count
-                mode='max',      # Save latest steps
-                save_top_k=2,    # Keep only 2 latest periodic backups
+                monitor='step',
+                mode='max',
+                save_top_k=2,
                 every_n_train_steps=20 if debug_mode else 10000,
                 auto_insert_metric_name=False,
                 filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
             ),
-            logging_callback, 
+            logging_callback,
             custom_progress_bar
         ],
         max_epochs=-1,
-        max_steps=max_steps,  # Always use max_steps from config
+        max_steps=experiment_config.max_steps if not debug_mode else 1000,
         limit_train_batches=50 if debug_mode else None,
         limit_val_batches=10 if debug_mode else None,
-        val_check_interval=10 if debug_mode else 1000,
+        val_check_interval=10 if debug_mode else val_check_interval,
     )
 
-    trainer.fit(model, train_loader, val_loader, ckpt_path=resume_checkpoint)
+    trainer.fit(
+        model, 
+        train_loader, 
+        val_loader, 
+        ckpt_path=experiment_config.checkpoint_path
+    )
 
 
 if __name__ == '__main__':
     # Example usage:
     # For new training:
-    main()
+    config = create_fresh_config()
+    run_name = generate_friendly_name()
     
     # For resuming training:
-    # main(resume_checkpoint='runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt')
-    # main(resume_checkpoint="runs/dvae-training/friendly-name/checkpoints/best-step0001000-ce0.1234.ckpt") 
+    # checkpoint_path = "runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt"
+    # config = ExperimentConfig.from_checkpoint(checkpoint_path)
+    # run_name = Path(config.checkpoint_path).parent.parent.name  # Extract original run name from checkpoint path
+    
+    train(
+        experiment_config=config,
+        run_name=run_name,
+        debug_mode=True,
+        debug_logging=True
+    ) 
