@@ -126,8 +126,9 @@ class ExperimentConfig:
     # Training parameters
     batch_size: int = 4
     learning_rate: float = 1e-3
-    weight_decay: float = 0.01  # Add weight decay parameter
+    weight_decay: float = 0.01
     max_steps: int = 1000000
+    gradient_clip_val: float = 1.0  # Add gradient clipping parameter
 
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
@@ -469,7 +470,7 @@ def train(
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
         devices=1,
         logger=wandb_logger,
-        gradient_clip_val=1.0,
+        gradient_clip_val=experiment_config.gradient_clip_val,
         callbacks=[
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",

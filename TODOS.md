@@ -12,8 +12,8 @@
 - [x] Add Learning Rate Noam Schedule
 - [x] PAD/EOS value to be determined automatically from Model Config
 - [x] Move ProjectSize to Model Config
+- [x] Make gradient clipping specified in the experiment config
 - [ ] Gradient Accumulation and how to do it in Lightning
-- [ ] Make gradient clipping specified in the experiment config
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor
