@@ -13,7 +13,7 @@
 - [x] PAD/EOS value to be determined automatically from Model Config
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
-- [ ] Gradient Accumulation and how to do it in Lightning
+- [x] Gradient Accumulation and how to do it in Lightning
 - [ ] Codebook Weight Initialisation
 - [ ] Codebook regularization (to bound it)
 - [ ] Implement code usage monitor

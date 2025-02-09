@@ -128,7 +128,8 @@ class ExperimentConfig:
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
     max_steps: int = 1000000
-    gradient_clip_val: float = 1.0  # Add gradient clipping parameter
+    gradient_clip_val: float = 1.0
+    accumulate_grad_batches: int = 1  # Add this parameter
 
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
@@ -142,6 +143,9 @@ class ExperimentConfig:
         elif self.hard_from < 0:
             raise ValueError("hard_from must be None, 0, or a positive integer")
         
+        if self.accumulate_grad_batches < 1:
+            raise ValueError("accumulate_grad_batches must be >= 1")
+            
         # Automatically set padding_idx if not provided
         if self.padding_idx is None:
             self.padding_idx = self.model_config.n_vocab - 1
@@ -422,7 +426,8 @@ def create_fresh_config() -> ExperimentConfig:
         learning_rate=1e-3,
         weight_decay=0.01,
         max_steps=100000,
-        max_mask_pct=0.5
+        max_mask_pct=0.5,
+        accumulate_grad_batches=1  # Add default value
     )
 
 def train(
@@ -471,6 +476,7 @@ def train(
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
+        accumulate_grad_batches=experiment_config.accumulate_grad_batches,  # Use config parameter
         callbacks=[
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
