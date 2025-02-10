@@ -443,7 +443,8 @@ def train(
     experiment_config: ExperimentConfig,
     run_name: str,
     project_name: str,
-    checkpoint_dir: Path,  # Add checkpoint_dir parameter
+    checkpoint_dir: Path,
+    load_model_from: str | None = None,  # Renamed parameter
     debug_mode: bool = False,
     debug_logging: bool = True,
     val_check_interval: int | None = None,
@@ -455,12 +456,20 @@ def train(
         run_name: Name of the training run for logging
         project_name: Name of the project for experiment tracking
         checkpoint_dir: Base directory for checkpoints and logging
+        load_model_from: Optional path to load initial model weights from
         debug_mode: If True, uses reduced workers and batches for debugging
         debug_logging: If True, enables logging even in debug mode
         val_check_interval: How often to run validation (defaults to 1000, or 10 in debug mode)
     """
     # Initialize the model
     model = DVAETrainingModule(experiment_config)
+
+    # Load weights if specified
+    if load_model_from:
+        # Load just the model weights
+        checkpoint = torch.load(load_model_from, map_location='cpu')
+        model.load_state_dict(checkpoint['state_dict'], strict=True)
+        print(f"Loaded model weights from {load_model_from}")
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
@@ -522,7 +531,7 @@ def train(
         model, 
         train_loader, 
         val_loader, 
-        ckpt_path=experiment_config.checkpoint_path
+        ckpt_path=experiment_config.checkpoint_path  # This is for resuming training
     )
 
 

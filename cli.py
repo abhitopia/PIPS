@@ -70,52 +70,51 @@ def new(
     # Training mode
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
     debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
-    checkpoint_path: str = typer.Option(None, "--checkpoint-path", "--ckpt", help="Path to checkpoint for resuming training"),
+    load_model_from: str = typer.Option(
+        None, 
+        "--model-weights", 
+        "-m",
+        help="Path to checkpoint to load model weights from"
+    ),
 ):
     """Train a new DVAE model with specified configuration."""
 
-    if checkpoint_path:
-        # Resume training from checkpoint
-        config = ExperimentConfig.from_checkpoint(checkpoint_path)
-        assert run_name is not None, "--run_name must be None when checkpoint path is specified"
-        run_name = Path(checkpoint_path).parent.parent.name
-    else:
-        # Create fresh config with CLI parameters
-        model_config = GridDVAEConfig(
-            n_dim=n_dim,
-            n_head=n_head,
-            n_layers=n_layers,
-            n_codes=n_codes,
-            codebook_size=codebook_size,
-            rope_base=10000,
-            dropout=dropout,
-            n_vocab=16,  # Fixed for grid world
-            max_grid_height=32,  # Fixed for grid world
-            max_grid_width=32,  # Fixed for grid world
-        )
-        
-        config = ExperimentConfig(
-            model_config=model_config,
-            initial_tau=initial_tau,
-            min_tau=final_tau,
-            initial_beta_mi=0.0,
-            initial_beta_tc=0.0,
-            initial_beta_dwkl=0.0,
-            initial_beta_kl=0.0,
-            target_beta_mi=target_beta_mi,
-            target_beta_tc=target_beta_tc,
-            target_beta_dwkl=target_beta_dwkl,
-            target_beta_kl=target_beta_kl,
-            warmup_steps=warmup_steps,
-            batch_size=batch_size,
-            learning_rate=learning_rate,
-            weight_decay=weight_decay,
-            max_steps=max_steps,
-            max_mask_pct=max_mask_pct,
-            gradient_clip_val=gradient_clip_val,
-            accumulate_grad_batches=accumulate_grad_batches,
-        )
-        run_name = generate_friendly_name() if run_name is None else run_name
+    # Create fresh config with CLI parameters
+    model_config = GridDVAEConfig(
+        n_dim=n_dim,
+        n_head=n_head,
+        n_layers=n_layers,
+        n_codes=n_codes,
+        codebook_size=codebook_size,
+        rope_base=10000,
+        dropout=dropout,
+        n_vocab=16,  # Fixed for grid world
+        max_grid_height=32,  # Fixed for grid world
+        max_grid_width=32,  # Fixed for grid world
+    )
+    
+    config = ExperimentConfig(
+        model_config=model_config,
+        initial_tau=initial_tau,
+        min_tau=final_tau,
+        initial_beta_mi=0.0,
+        initial_beta_tc=0.0,
+        initial_beta_dwkl=0.0,
+        initial_beta_kl=0.0,
+        target_beta_mi=target_beta_mi,
+        target_beta_tc=target_beta_tc,
+        target_beta_dwkl=target_beta_dwkl,
+        target_beta_kl=target_beta_kl,
+        warmup_steps=warmup_steps,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
+        max_steps=max_steps,
+        max_mask_pct=max_mask_pct,
+        gradient_clip_val=gradient_clip_val,
+        accumulate_grad_batches=accumulate_grad_batches,
+    )
+    run_name = generate_friendly_name() if run_name is None else run_name
 
     # Start training with project name and checkpoint directory
     train(
@@ -123,6 +122,7 @@ def new(
         run_name=run_name,
         project_name=f"{project_name}-debug" if debug else project_name,
         checkpoint_dir=checkpoint_dir,
+        load_model_from=load_model_from,
         debug_mode=debug,
         debug_logging=debug_logging,
     )

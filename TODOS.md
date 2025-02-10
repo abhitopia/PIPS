@@ -27,8 +27,10 @@
 - [x] Add rudimentary resume support from local checkpoint
 - [x] Save hyperparameters
 - [x] Training Resume from WandB
+- [x] Add support for new from checkpoint CLI command
 - [ ] Refactor Wandb Checkpoint Sync to use Artifact class
-- [ ] Add support for new from checkpoint CLI command
+- [ ] Refactor new to use model from project/run_name/model-name/alias|step
+- [ ] Change ExperimentConfig to save project/run_name/model-name/alias|step
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss
