@@ -2,6 +2,8 @@ import typer
 from pathlib import Path
 import logging
 from train_dvae import ExperimentConfig, GridDVAEConfig, train, generate_friendly_name
+from torch.serialization import add_safe_globals
+from dataclasses import dataclass
 
 
 # Initialize logger
@@ -20,6 +22,9 @@ dvae_app = typer.Typer(help="Train, evaluate, and manage DVAE models.")
 
 # Register the dvae sub-app with the main app
 app.add_typer(dvae_app, name="dvae")
+
+# Add to safe globals before any checkpoint loading
+add_safe_globals([ExperimentConfig, GridDVAEConfig])
 
 @dvae_app.command("train")
 def new(
@@ -116,9 +121,27 @@ def new(
 
 
 @dvae_app.command()
-def resume():
+def resume(
+    checkpoint_path: str = typer.Argument(..., help="Path to checkpoint file to resume from"),
+    project_name: str = typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
+    debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
+    debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
+):
     """Resume training from a checkpoint."""
-    pass
+    # Load config from checkpoint
+    config = ExperimentConfig.from_checkpoint(checkpoint_path)
+    
+    # Extract run name from checkpoint path
+    run_name = Path(checkpoint_path).parent.parent.name
+    
+    # Resume training
+    train(
+        experiment_config=config,
+        run_name=run_name,
+        project_name=f"{project_name}-debug" if debug else project_name,
+        debug_mode=debug,
+        debug_logging=debug_logging,
+    )
 
 
 @dvae_app.command()
@@ -131,10 +154,6 @@ def lr_find():
 def evaluate():
     """Evaluate a trained DVAE model."""
     pass
-
-# @app.command()
-# def train_dvae():
-#     """Train a model with the given configuration."""
 
 
 if __name__ == "__main__":

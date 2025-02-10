@@ -17,6 +17,7 @@ from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.misc.schedule import Schedule  # Add this import
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
 from pathlib import Path
+from torch.serialization import add_safe_globals  # Add this import at the top
 warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
 
 
@@ -163,10 +164,18 @@ class ExperimentConfig:
         Raises:
             ValueError: If checkpoint doesn't contain valid config
         """
-        # Add ExperimentConfig and GridDVAEConfig to safe globals
-        torch.serialization.add_safe_globals([ExperimentConfig, GridDVAEConfig])
+        # Add our custom classes to safe globals
+        add_safe_globals([ExperimentConfig, GridDVAEConfig])
         
-        ckpt = torch.load(checkpoint_path, weights_only=True)
+        # First try with weights_only=True for security
+        try:
+            ckpt = torch.load(checkpoint_path, weights_only=True, map_location='cpu')
+        except Exception as e:
+            print(f"Warning: Failed to load with weights_only=True ({str(e)}), falling back to weights_only=False")
+            try:
+                ckpt = torch.load(checkpoint_path, weights_only=False, map_location='cpu')
+            except Exception as e:
+                raise ValueError(f"Failed to load checkpoint with both methods: {e}")
         
         try:
             config = ckpt['hyper_parameters']['experiment_config']

@@ -45,7 +45,8 @@
 
 ## CLI
 - [x] Add new training CLI command
-- [ ] Add resume CLI command
+- [x] Add resume CLI command
+- [ ] Make resume command work with project name, run name and step count or tag, also add list command
 - [ ] Add lr finder CLI command
 - [ ] Add evaluate CLI command
 - [ ] Add Seeding Everything
