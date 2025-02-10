@@ -98,8 +98,6 @@ class ExperimentConfig:
     # Model configuration
     model_config: GridDVAEConfig
 
-    # Tracking info
-    checkpoint_path: str | None = None  # Track if config was loaded from checkpoint
     
     # Sampling parameters
     hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
@@ -159,7 +157,7 @@ class ExperimentConfig:
             checkpoint_path: Path to the checkpoint file
             
         Returns:
-            ExperimentConfig: Configuration loaded from checkpoint with checkpoint_path set
+            ExperimentConfig: Configuration loaded from checkpoint
             
         Raises:
             ValueError: If checkpoint doesn't contain valid config
@@ -181,9 +179,6 @@ class ExperimentConfig:
             config = ckpt['hyper_parameters']['experiment_config']
             if not isinstance(config, ExperimentConfig):
                 raise ValueError("Checkpoint contains invalid config type")
-                
-            # Set the checkpoint_path field
-            config.checkpoint_path = checkpoint_path
             return config
             
         except KeyError as e:
@@ -444,10 +439,11 @@ def train(
     run_name: str,
     project_name: str,
     checkpoint_dir: Path,
-    load_model_from: str | None = None,  # Renamed parameter
+    load_model_from: str | None = None,
     debug_mode: bool = False,
     debug_logging: bool = True,
     val_check_interval: int | None = None,
+    resume_from: str | None = None,  # Add explicit resume_from parameter
 ) -> None:
     """Train a DVAE model with the given configuration.
     
@@ -459,7 +455,8 @@ def train(
         load_model_from: Optional path to load initial model weights from
         debug_mode: If True, uses reduced workers and batches for debugging
         debug_logging: If True, enables logging even in debug mode
-        val_check_interval: How often to run validation (defaults to 1000, or 10 in debug mode)
+        val_check_interval: How often to run validation
+        resume_from: Optional checkpoint path to resume training from
     """
     # Initialize the model
     model = DVAETrainingModule(experiment_config)
@@ -533,7 +530,7 @@ def train(
         model, 
         train_loader, 
         val_loader, 
-        ckpt_path=experiment_config.checkpoint_path  # This is for resuming training
+        ckpt_path=resume_from  # Use the explicit resume_from parameter
     )
 
 

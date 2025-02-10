@@ -140,12 +140,7 @@ def resume(
     step: int = typer.Option(None, "--step", "-s", help="Step number to resume from"),
     alias: str = typer.Option(None, "--alias", "-a", help="Alias to resume from (e.g. 'best', 'best-2', 'step-0001000')"),
     backup: bool = typer.Option(False, "--backup", "-B", help="Use backup checkpoints instead of best checkpoints"),
-    checkpoint_dir: Path = typer.Option(
-        Path("./runs"), 
-        "--checkpoint-dir", 
-        "-d", 
-        help="Base directory for checkpoints"
-    ),
+    checkpoint_dir: Path = typer.Option(Path("./runs"),  "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
     debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
 ):
@@ -182,6 +177,7 @@ def resume(
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         debug_logging=debug_logging,
+        resume_from=local_checkpoint_path
     )
 
 
