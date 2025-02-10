@@ -433,6 +433,7 @@ def create_fresh_config() -> ExperimentConfig:
 def train(
     experiment_config: ExperimentConfig,
     run_name: str,
+    project_name: str,
     debug_mode: bool = False,
     debug_logging: bool = True,
     val_check_interval: int | None = None,
@@ -442,6 +443,7 @@ def train(
     Args:
         experiment_config: Configuration containing model and training parameters
         run_name: Name of the training run for logging
+        project_name: Name of the project for experiment tracking
         debug_mode: If True, uses reduced workers and batches for debugging
         debug_logging: If True, enables logging even in debug mode
         val_check_interval: How often to run validation (defaults to 1000, or 10 in debug mode)
@@ -452,9 +454,9 @@ def train(
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
-    # Initialize wandb logger
+    # Initialize wandb logger with project name parameter
     wandb_logger = WandbLogger(
-        project='dvae-training' if not debug_mode else 'dvae-training-debug',
+        project=project_name,
         name=run_name,
         id=run_name,
         version=run_name,
@@ -527,6 +529,7 @@ if __name__ == '__main__':
     train(
         experiment_config=config,
         run_name=run_name,
+        project_name="dvae-training",
         debug_mode=True,
         debug_logging=True
     ) 

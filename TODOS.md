@@ -44,6 +44,10 @@
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 
 ## CLI
+- [x] Add new training CLI command
+- [ ] Add resume CLI command
+- [ ] Add lr finder CLI command
+- [ ] Add evaluate CLI command
 - [ ] Add Seeding Everything
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
