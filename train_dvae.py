@@ -507,6 +507,7 @@ def train(
                 mode='min',
                 auto_insert_metric_name=False,
                 filename='best-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
+                wandb_verbose=debug_logging
             ),
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="backup",
@@ -516,6 +517,7 @@ def train(
                 every_n_train_steps=20 if debug_mode else 10000,
                 auto_insert_metric_name=False,
                 filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
+                wandb_verbose=debug_logging
             ),
             logging_callback,
             custom_progress_bar

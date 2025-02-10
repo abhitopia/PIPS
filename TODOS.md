@@ -28,7 +28,7 @@
 - [x] Save hyperparameters
 - [x] Training Resume from WandB
 - [x] Add support for new from checkpoint CLI command
-- [ ] Refactor Wandb Checkpoint Sync to use Artifact class
+- [x] Refactor Wandb Checkpoint Sync to use Artifact class
 - [ ] Refactor new to use model from project/run_name/model-name/alias|step
 - [ ] Change ExperimentConfig to save project/run_name/model-name/alias|step
 

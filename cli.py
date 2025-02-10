@@ -8,6 +8,11 @@ from pips.misc.artifact import Artifact
 
 
 # Initialize logger
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    handlers=[logging.StreamHandler()]
+)
 logger = logging.getLogger(__name__)
 
 # Initialize Typer app
