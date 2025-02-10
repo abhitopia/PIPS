@@ -3,7 +3,8 @@ from pathlib import Path
 import logging
 from train_dvae import ExperimentConfig, GridDVAEConfig, train, generate_friendly_name
 from torch.serialization import add_safe_globals
-from dataclasses import dataclass
+import wandb
+from pips.misc.artifact import Artifact
 
 
 # Initialize logger
@@ -31,6 +32,12 @@ def new(
     # Project tracking
     project_name: str = typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
     run_name: str = typer.Option(None, "--name", "-n", help="Run name (generated if not specified)"),
+    checkpoint_dir: Path = typer.Option(
+        Path("./runs"), 
+        "--checkpoint-dir", 
+        "-d", 
+        help="Base directory for checkpoints"
+    ),
     
     # Model architecture
     n_dim: int = typer.Option(256, "--n-dim", "-d", help="Dimension of model embeddings"),
@@ -90,8 +97,8 @@ def new(
         config = ExperimentConfig(
             model_config=model_config,
             initial_tau=initial_tau,
-            min_tau=final_tau,  # Use final_tau for min_tau parameter
-            initial_beta_mi=0.0,  # Start from 0 and anneal up
+            min_tau=final_tau,
+            initial_beta_mi=0.0,
             initial_beta_tc=0.0,
             initial_beta_dwkl=0.0,
             initial_beta_kl=0.0,
@@ -110,11 +117,12 @@ def new(
         )
         run_name = generate_friendly_name() if run_name is None else run_name
 
-    # Start training with project name
+    # Start training with project name and checkpoint directory
     train(
         experiment_config=config,
         run_name=run_name,
         project_name=f"{project_name}-debug" if debug else project_name,
+        checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         debug_logging=debug_logging,
     )
@@ -122,23 +130,51 @@ def new(
 
 @dvae_app.command()
 def resume(
-    checkpoint_path: str = typer.Argument(..., help="Path to checkpoint file to resume from"),
+    run_name: str = typer.Argument(..., help="Run name to resume from"),
     project_name: str = typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
+    step: int = typer.Option(None, "--step", "-s", help="Step number to resume from"),
+    alias: str = typer.Option(None, "--alias", "-a", help="Alias to resume from (e.g. 'best', 'best-2', 'step-0001000')"),
+    backup: bool = typer.Option(False, "--backup", "-B", help="Use backup checkpoints instead of best checkpoints"),
+    checkpoint_dir: Path = typer.Option(
+        Path("./runs"), 
+        "--checkpoint-dir", 
+        "-d", 
+        help="Base directory for checkpoints"
+    ),
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
     debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
 ):
     """Resume training from a checkpoint."""
-    # Load config from checkpoint
-    config = ExperimentConfig.from_checkpoint(checkpoint_path)
     
-    # Extract run name from checkpoint path
-    run_name = Path(checkpoint_path).parent.parent.name
-    
-    # Resume training
+    # Initialize artifact manager
+    artifact_manager = Artifact(
+        entity=wandb.api.default_entity,
+        project_name=project_name,
+        run_name=run_name
+    )
+
+    # Get artifacts for the specified category
+    category = "backup" if backup else "best"
+    artifacts = artifact_manager.get_artifacts(category)
+    if not artifacts:
+        raise ValueError(f"No artifacts found for run '{run_name}' in category '{category}'")
+
+    # If no specific checkpoint requested, list available ones and exit
+    if step is None and alias is None:
+        artifact_manager.display_checkpoints_table(artifacts)
+        return
+
+    # Find and ensure local checkpoint exists
+    matching_artifact = artifact_manager.find_matching_artifact(artifacts, step, alias)
+    local_checkpoint_path = artifact_manager.ensure_local_checkpoint(matching_artifact, checkpoint_dir)
+
+    # Load config and resume training
+    config = ExperimentConfig.from_checkpoint(str(local_checkpoint_path))
     train(
         experiment_config=config,
         run_name=run_name,
         project_name=f"{project_name}-debug" if debug else project_name,
+        checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         debug_logging=debug_logging,
     )

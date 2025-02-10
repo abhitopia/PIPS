@@ -443,6 +443,7 @@ def train(
     experiment_config: ExperimentConfig,
     run_name: str,
     project_name: str,
+    checkpoint_dir: Path,  # Add checkpoint_dir parameter
     debug_mode: bool = False,
     debug_logging: bool = True,
     val_check_interval: int | None = None,
@@ -453,6 +454,7 @@ def train(
         experiment_config: Configuration containing model and training parameters
         run_name: Name of the training run for logging
         project_name: Name of the project for experiment tracking
+        checkpoint_dir: Base directory for checkpoints and logging
         debug_mode: If True, uses reduced workers and batches for debugging
         debug_logging: If True, enables logging even in debug mode
         val_check_interval: How often to run validation (defaults to 1000, or 10 in debug mode)
@@ -470,7 +472,7 @@ def train(
         id=run_name,
         version=run_name,
         log_model=False,
-        save_dir='./runs',
+        save_dir=checkpoint_dir,  # Use the provided checkpoint_dir
         reinit=True,
         mode="disabled" if debug_mode and not debug_logging else "online"
     )
@@ -539,6 +541,7 @@ if __name__ == '__main__':
         experiment_config=config,
         run_name=run_name,
         project_name="dvae-training",
+        checkpoint_dir="./runs",
         debug_mode=True,
         debug_logging=True
     ) 

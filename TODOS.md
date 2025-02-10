@@ -26,7 +26,9 @@
 - [x] Prevent saving everything or at least deleting unnecessary artifacts (Write a Wandb Sync Callback)
 - [x] Add rudimentary resume support from local checkpoint
 - [x] Save hyperparameters
-- [ ] Training Resume from WandB
+- [x] Training Resume from WandB
+- [ ] Refactor Wandb Checkpoint Sync to use Artifact class
+- [ ] Add support for new from checkpoint CLI command
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss
