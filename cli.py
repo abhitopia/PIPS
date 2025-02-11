@@ -49,7 +49,9 @@ def new(
         None, 
         "--model-src", 
         "-m",
-        help="Format: [project/]run_name/{best|backup}[/alias] to load model weights from"
+        help="Format: [project/]run_name/{best|backup}[/{alias|step}] where:\n"
+             "- alias can be 'best', 'best-N', 'latest', 'step-NNNNNNN'\n"
+             "- step is a positive integer that will be converted to 'step-NNNNNNN' format"
     ),
     
     # Model architecture
@@ -82,9 +84,11 @@ def new(
     
     # Training mode
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
-    debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
 ):
     """Train a new DVAE model with specified configuration."""
+    
+    # Add debug suffix to project name if in debug mode
+    project_name = f"{project_name}-debug" if debug else project_name
     
     # Create fresh config with CLI parameters
     model_config = GridDVAEConfig(
@@ -129,57 +133,57 @@ def new(
     train(
         experiment_config=config,
         run_name=run_name,
-        project_name=f"{project_name}-debug" if debug else project_name,
+        project_name=project_name,
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
-        debug_logging=debug_logging,
     )
 
 
 @dvae_app.command()
 def resume(
-    run_name: str = typer.Argument(..., help="Run name to resume from"),
+    model_src: str = typer.Argument(
+        ..., 
+        help="Format: [project/]run_name/{best|backup}[/{alias|step}] where:\n"
+             "- alias can be 'best', 'best-N', 'latest', 'step-NNNNNNN'\n"
+             "- step is a positive integer that will be converted to 'step-NNNNNNN' format"
+    ),
     project_name: str = typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
-    step: int = typer.Option(None, "--step", "-s", help="Step number to resume from"),
-    alias: str = typer.Option(None, "--alias", "-a", help="Alias to resume from (e.g. 'best', 'best-2', 'step-0001000')"),
-    backup: bool = typer.Option(False, "--backup", "-B", help="Use backup checkpoints instead of best checkpoints"),
-    checkpoint_dir: Path = typer.Option(Path("./runs"),  "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
+    checkpoint_dir: Path = typer.Option(Path("./runs"), "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
-    debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
 ):
     """Resume training from a checkpoint."""
     
-    # Initialize artifact manager
+    # Add debug suffix to project name if in debug mode
+    project_name = f"{project_name}-debug" if debug else project_name
+    
+    # Parse model source string first
+    source_project, run_name, category, alias = Artifact.parse_artifact_string(
+        model_src,
+        default_project=project_name
+    )
+    
+    # Initialize artifact manager with correct project and run name
     artifact_manager = Artifact(
         entity=wandb.api.default_entity,
-        project_name=project_name,
+        project_name=source_project,
         run_name=run_name
     )
 
-    # Get artifacts for the specified category
-    category = "backup" if backup else "best"
-    artifacts = artifact_manager.get_artifacts(category)
-    if not artifacts:
-        raise ValueError(f"No artifacts found for run '{run_name}' in category '{category}'")
-
-    # If no specific checkpoint requested, list available ones and exit
-    if step is None and alias is None:
-        artifact_manager.display_checkpoints_table(artifacts)
-        return
-
-    # Find and ensure local checkpoint exists
-    matching_artifact = artifact_manager.find_matching_artifact(artifacts, step, alias)
-    local_checkpoint_path = artifact_manager.ensure_local_checkpoint(matching_artifact, checkpoint_dir)
+    # Get local checkpoint path
+    local_checkpoint_path = artifact_manager.get_local_checkpoint(
+        category=category,
+        alias=alias,
+        checkpoint_dir=checkpoint_dir
+    )
 
     # Load config and resume training
     config = ExperimentConfig.from_checkpoint(str(local_checkpoint_path))
     train(
         experiment_config=config,
         run_name=run_name,
-        project_name=f"{project_name}-debug" if debug else project_name,
+        project_name=project_name,
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
-        debug_logging=debug_logging,
         resume_from=local_checkpoint_path
     )
 

@@ -408,7 +408,9 @@ def load_model_weights(
     
     Args:
         model: The model to load weights into
-        model_src: Artifact string in format [project/]run_name/model_name[/alias]
+        model_src: Artifact string in format [project/]run_name/{best|backup}[/{alias|step}] where:
+            - alias can be 'best', 'best-N', 'latest', 'step-NNNNNNN'
+            - step is a positive integer that will be converted to 'step-NNNNNNN' format
         project_name: Default project name if not specified in model_src
         checkpoint_dir: Directory to store downloaded checkpoints
         
@@ -417,31 +419,25 @@ def load_model_weights(
         SystemExit: If no alias is specified (after displaying available checkpoints)
     """
     try:
-        source_project, run_name_src, model_name, alias = Artifact.parse_artifact_string(
-            model_src, 
+        # Parse model source string first
+        source_project, run_name, category, alias = Artifact.parse_artifact_string(
+            model_src,
             default_project=project_name
         )
         
-        # Initialize artifact manager
+        # Initialize artifact manager with correct project and run name
         artifact_manager = Artifact(
             entity=wandb.api.default_entity,
             project_name=source_project,
-            run_name=run_name_src
+            run_name=run_name
         )
 
-        # Get artifacts for the specified model name
-        artifacts = artifact_manager.get_artifacts(model_name)
-        if not artifacts:
-            raise ValueError(f"No artifacts found for run '{run_name_src}' with model name '{model_name}'")
-
-        # If no alias specified, list available ones and exit
-        if alias is None:
-            artifact_manager.display_checkpoints_table(artifacts)
-            sys.exit(0)
-
-        # Find and ensure local checkpoint exists
-        matching_artifact = artifact_manager.find_matching_artifact(artifacts, None, alias)
-        checkpoint_path = artifact_manager.ensure_local_checkpoint(matching_artifact, checkpoint_dir)
+        # Get local checkpoint path
+        checkpoint_path = artifact_manager.get_local_checkpoint(
+            category=category,
+            alias=alias,
+            checkpoint_dir=checkpoint_dir
+        )
         
         # Load just the model weights
         checkpoint = torch.load(checkpoint_path, map_location='cpu')

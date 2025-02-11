@@ -78,17 +78,28 @@ class Artifact:
     def find_matching_artifact(
         self, 
         artifacts: List[wandb.Artifact], 
-        step: Optional[int] = None, 
-        alias: Optional[str] = None
+        alias: Optional[str]
     ) -> wandb.Artifact:
-        """Find artifact matching either step or alias."""
-        alias_to_find = f"step-{step:07d}" if step is not None else alias
+        """Find artifact matching the given alias.
+        
+        Args:
+            artifacts: List of artifacts to search
+            alias: Alias to match (e.g., 'best', 'best-1', 'step-0001000')
+            
+        Returns:
+            Matching artifact
+            
+        Raises:
+            SystemExit: If no matching artifact is found (after displaying available checkpoints)
+        """
+        if alias is None:
+            return None
 
         for artifact in artifacts:
-            if alias_to_find in artifact.aliases:
+            if alias in artifact.aliases:
                 return artifact
 
-        # If no matching artifact found, show available checkpoints and raise error
+        # If no matching artifact found, show available checkpoints and exit
         print("\nNo matching checkpoint found. Available checkpoints:")
         self.display_checkpoints_table(artifacts)
         sys.exit(1)
@@ -200,10 +211,22 @@ class Artifact:
     def parse_artifact_string(artifact_string: str, default_project: str) -> tuple[str, str, str, str | None]:
         """Parse an artifact string into its components.
         
-        Format: [project/]run_name/model_name[/alias]
+        Format: [project/]run_name/{best|backup}[/{alias|step}]
+        where:
+        - project: Optional project name (defaults to default_project if not specified)
+        - run_name: Name of the run
+        - best|backup: Model category
+        - alias: Optional alias (e.g., 'best', 'best-1', 'latest', 'step-0001000')
+        - step: Optional positive integer that will be converted to 'step-NNNNNNN' format
+        
+        Examples:
+            - "run_name/best"  # Lists available checkpoints
+            - "run_name/best/best-1"
+            - "project/run_name/backup/1000"  # Converted to step-0001000
+            - "run_name/best/step-0001000"
         
         Args:
-            artifact_string: String in the format [project/]run_name/model_name[/alias]
+            artifact_string: String in the specified format
             default_project: Default project name to use if not specified
             
         Returns:
@@ -230,32 +253,90 @@ class Artifact:
         if len(parts) == 3:
             # Could be either:
             # 1. project/run_name/model_name
-            # 2. run_name/model_name/alias
-            if Artifact.is_alias(parts[2]):
-                # Case 2: run_name/model_name/alias
-                run_name, model_name, alias = parts
+            # 2. run_name/model_name/alias_or_step
+            last_part = parts[2]
+            try:
+                # Check if the last part is a step number
+                step = int(last_part)
+                if step <= 0:
+                    raise ValueError(f"Step number must be positive, got: {step}")
+                # Convert step to alias format
+                alias = f"step-{step:07d}"
+                run_name, model_name = parts[:2]
                 if not Artifact.is_model_category(model_name):
                     raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
                 return default_project, run_name, model_name, alias
-            else:
-                # Case 1: project/run_name/model_name
-                project, run_name, model_name = parts
-                if not Artifact.is_model_category(model_name):
-                    raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
-                return project, run_name, model_name, None
+            except ValueError:
+                # Not a step number, treat as normal alias or project name
+                if Artifact.is_alias(last_part):
+                    # Case 2: run_name/model_name/alias
+                    run_name, model_name, alias = parts
+                    if not Artifact.is_model_category(model_name):
+                        raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+                    return default_project, run_name, model_name, alias
+                else:
+                    # Case 1: project/run_name/model_name
+                    project, run_name, model_name = parts
+                    if not Artifact.is_model_category(model_name):
+                        raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+                    return project, run_name, model_name, None
                 
         if len(parts) == 4:
-            # Format: project/run_name/model_name/alias
-            project, run_name, model_name, alias = parts
+            # Format: project/run_name/model_name/alias_or_step
+            project, run_name, model_name, last_part = parts
             if not Artifact.is_model_category(model_name):
                 raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
-            if not Artifact.is_alias(alias):
-                raise ValueError(
-                    f"Invalid alias format: {alias}. Must be 'best[-N]', 'latest', or 'step-NNNNNN'"
-                )
-            return project, run_name, model_name, alias
+            
+            try:
+                # Check if the last part is a step number
+                step = int(last_part)
+                if step <= 0:
+                    raise ValueError(f"Step number must be positive, got: {step}")
+                # Convert step to alias format
+                alias = f"step-{step:07d}"
+                return project, run_name, model_name, alias
+            except ValueError:
+                # Not a step number, treat as normal alias
+                if not Artifact.is_alias(last_part):
+                    raise ValueError(
+                        f"Invalid alias format: {last_part}. Must be 'best[-N]', 'latest', 'step-NNNNNN', or a positive integer"
+                    )
+                return project, run_name, model_name, last_part
             
         raise ValueError(
             f"Invalid artifact string format: {artifact_string}. "
-            "Must be [project/]run_name/model_name[/alias]"
-        ) 
+            "Must be [project/]run_name/model_name[/alias_or_step]"
+        )
+
+    def get_local_checkpoint(
+        self,
+        category: str,
+        alias: Optional[str],
+        checkpoint_dir: Path,
+    ) -> Path:
+        """Get local checkpoint path for the specified category and alias.
+        
+        Args:
+            category: Category of checkpoint ("best" or "backup")
+            alias: Specific alias to load (e.g. "best", "best-1", "step-0001000")
+            checkpoint_dir: Directory to store downloaded checkpoints
+            
+        Returns:
+            Path to local checkpoint
+            
+        Raises:
+            ValueError: If artifact cannot be found or loaded
+        """
+        # Get artifacts for the specified category
+        artifacts = self.get_artifacts(category)
+        if not artifacts:
+            raise ValueError(f"No artifacts found for run '{self.run_name}' in category '{category}'")
+
+        # If no alias specified, list available ones and exit
+        if alias is None:
+            self.display_checkpoints_table(artifacts)
+            sys.exit(0)
+
+        # Find and ensure local checkpoint exists
+        matching_artifact = self.find_matching_artifact(artifacts, alias)
+        return self.ensure_local_checkpoint(matching_artifact, checkpoint_dir) 
