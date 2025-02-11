@@ -44,6 +44,14 @@ def new(
         help="Base directory for checkpoints"
     ),
     
+    # Model loading
+    model_src: str = typer.Option(
+        None, 
+        "--model-src", 
+        "-m",
+        help="Format: [project/]run_name/{best|backup}[/alias] to load model weights from"
+    ),
+    
     # Model architecture
     n_dim: int = typer.Option(256, "--n-dim", "-d", help="Dimension of model embeddings"),
     n_head: int = typer.Option(8, "--n-head", "-h", help="Number of attention heads"),
@@ -75,15 +83,9 @@ def new(
     # Training mode
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
     debug_logging: bool = typer.Option(False, "--debug-logging", "-L", help="Enable logging in debug mode"),
-    load_model_from: str = typer.Option(
-        None, 
-        "--model-weights", 
-        "-m",
-        help="Path to checkpoint to load model weights from"
-    ),
 ):
     """Train a new DVAE model with specified configuration."""
-
+    
     # Create fresh config with CLI parameters
     model_config = GridDVAEConfig(
         n_dim=n_dim,
@@ -100,6 +102,7 @@ def new(
     
     config = ExperimentConfig(
         model_config=model_config,
+        model_src=model_src,  # Add model source to config
         initial_tau=initial_tau,
         min_tau=final_tau,
         initial_beta_mi=0.0,
@@ -119,6 +122,7 @@ def new(
         gradient_clip_val=gradient_clip_val,
         accumulate_grad_batches=accumulate_grad_batches,
     )
+
     run_name = generate_friendly_name() if run_name is None else run_name
 
     # Start training with project name and checkpoint directory
@@ -127,7 +131,6 @@ def new(
         run_name=run_name,
         project_name=f"{project_name}-debug" if debug else project_name,
         checkpoint_dir=checkpoint_dir,
-        load_model_from=load_model_from,
         debug_mode=debug,
         debug_logging=debug_logging,
     )

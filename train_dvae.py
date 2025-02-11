@@ -12,13 +12,15 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from pips.grid_dataset import GridDataset
 from pips.dvae import GridDVAEConfig, GridDVAE
+from pips.misc.artifact import Artifact
 from pips.utils import generate_friendly_name
 from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.misc.schedule import Schedule  # Add this import
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
 from pathlib import Path
 from torch.serialization import add_safe_globals  # Add this import at the top
-warnings.filterwarnings("ignore", ".*Consider increasing the value of the `num_workers` argument*")
+import wandb
+import sys
 
 
 class LoggingCallback(pl.Callback):
@@ -135,6 +137,8 @@ class ExperimentConfig:
     mask_schedule_type: str = 'linear'
 
     padding_idx: int | None = None
+
+    model_src: str | None = None  # Add model_src attribute
 
     def __post_init__(self):
         if self.hard_from is None:
@@ -393,80 +397,79 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
 
     return train_loader, val_loader
 
-def create_fresh_config() -> ExperimentConfig:
-    """Create a fresh experiment configuration with default parameters.
-    Returns:
-        ExperimentConfig: New configuration instance
-    """
-    # Model configuration
-    model_config = GridDVAEConfig(
-        n_dim=256,
-        n_head=8,
-        n_layers=6,
-        n_codes=16,
-        codebook_size=512,
-        rope_base=10000,
-        dropout=0.0,
-        n_vocab=16,
-        max_grid_height=32,
-        max_grid_width=32
-    )
 
-    # Experiment configuration
-    return ExperimentConfig(
-        model_config=model_config,
-        initial_tau=0.9,
-        min_tau=0.1,
-        initial_beta_mi=0.0,
-        initial_beta_tc=0.0,
-        initial_beta_dwkl=0.0,
-        initial_beta_kl=0.0,
-        target_beta_mi=1.0,
-        target_beta_tc=1.0,
-        target_beta_dwkl=1.0,
-        target_beta_kl=1.0,
-        warmup_steps=5000,
-        batch_size=4,
-        learning_rate=1e-3,
-        weight_decay=0.01,
-        max_steps=100000,
-        max_mask_pct=0.5,
-        accumulate_grad_batches=1  # Add default value
-    )
+def load_model_weights(
+    model: pl.LightningModule,
+    model_src: str,
+    project_name: str,
+    checkpoint_dir: Path
+) -> None:
+    """Load model weights from a remote artifact.
+    
+    Args:
+        model: The model to load weights into
+        model_src: Artifact string in format [project/]run_name/model_name[/alias]
+        project_name: Default project name if not specified in model_src
+        checkpoint_dir: Directory to store downloaded checkpoints
+        
+    Raises:
+        ValueError: If artifact cannot be found or loaded
+        SystemExit: If no alias is specified (after displaying available checkpoints)
+    """
+    try:
+        source_project, run_name_src, model_name, alias = Artifact.parse_artifact_string(
+            model_src, 
+            default_project=project_name
+        )
+        
+        # Initialize artifact manager
+        artifact_manager = Artifact(
+            entity=wandb.api.default_entity,
+            project_name=source_project,
+            run_name=run_name_src
+        )
+
+        # Get artifacts for the specified model name
+        artifacts = artifact_manager.get_artifacts(model_name)
+        if not artifacts:
+            raise ValueError(f"No artifacts found for run '{run_name_src}' with model name '{model_name}'")
+
+        # If no alias specified, list available ones and exit
+        if alias is None:
+            artifact_manager.display_checkpoints_table(artifacts)
+            sys.exit(0)
+
+        # Find and ensure local checkpoint exists
+        matching_artifact = artifact_manager.find_matching_artifact(artifacts, None, alias)
+        checkpoint_path = artifact_manager.ensure_local_checkpoint(matching_artifact, checkpoint_dir)
+        
+        # Load just the model weights
+        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        model.load_state_dict(checkpoint['state_dict'], strict=True)
+        print(f"Loaded model weights from {checkpoint_path}")
+        
+    except ValueError as e:
+        print(f"Error loading model weights: {e}")
+        sys.exit(1)
 
 def train(
     experiment_config: ExperimentConfig,
     run_name: str,
     project_name: str,
     checkpoint_dir: Path,
-    load_model_from: str | None = None,
     debug_mode: bool = False,
     debug_logging: bool = True,
     val_check_interval: int | None = None,
-    resume_from: str | None = None,  # Add explicit resume_from parameter
+    resume_from: str | None = None,
 ) -> None:
-    """Train a DVAE model with the given configuration.
+    """Train a DVAE model with the given configuration."""
     
-    Args:
-        experiment_config: Configuration containing model and training parameters
-        run_name: Name of the training run for logging
-        project_name: Name of the project for experiment tracking
-        checkpoint_dir: Base directory for checkpoints and logging
-        load_model_from: Optional path to load initial model weights from
-        debug_mode: If True, uses reduced workers and batches for debugging
-        debug_logging: If True, enables logging even in debug mode
-        val_check_interval: How often to run validation
-        resume_from: Optional checkpoint path to resume training from
-    """
     # Initialize the model
     model = DVAETrainingModule(experiment_config)
 
-    # Load weights if specified
-    if load_model_from:
-        # Load just the model weights
-        checkpoint = torch.load(load_model_from, map_location='cpu')
-        model.load_state_dict(checkpoint['state_dict'], strict=True)
-        print(f"Loaded model weights from {load_model_from}")
+    # Handle model source if specified
+    if experiment_config.model_src:
+        load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
 
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
@@ -535,21 +538,6 @@ def train(
 
 
 if __name__ == '__main__':
-    # Example usage:
-    # For new training:
-    config = create_fresh_config()
-    run_name = generate_friendly_name()
-    
-    # For resuming training:
-    # checkpoint_path = "runs/dvae-training/kind-lion-635/checkpoints/best-step0000020-ce2.7784-mi0.0020-tc0.0000-dwkl0.0000-kl0.0018.ckpt"
-    # config = ExperimentConfig.from_checkpoint(checkpoint_path)
-    # run_name = Path(config.checkpoint_path).parent.parent.name  # Extract original run name from checkpoint path
-    
-    train(
-        experiment_config=config,
-        run_name=run_name,
-        project_name="dvae-training",
-        checkpoint_dir="./runs",
-        debug_mode=True,
-        debug_logging=True
-    ) 
+    print("Please use the CLI interface to train models:")
+    print("python cli.py dvae train --help")
+    sys.exit(1) 

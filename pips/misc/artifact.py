@@ -179,3 +179,83 @@ class Artifact:
         except Exception as e:
             self._handle_error(e, f"Error creating/logging artifact for {file_path}")
             return None 
+
+    @staticmethod
+    def is_alias(value: str) -> bool:
+        """Check if a string matches known alias patterns."""
+        # Check for known alias patterns
+        alias_patterns = [
+            r'^best(-\d+)?$',  # best, best-2, best-3, etc.
+            r'^latest$',
+            r'^step-\d+$'      # step-0000123, etc.
+        ]
+        return any(re.match(pattern, value) for pattern in alias_patterns)
+
+    @staticmethod
+    def is_model_category(value: str) -> bool:
+        """Check if a string is a valid model category."""
+        return value in ["best", "backup"]
+
+    @staticmethod
+    def parse_artifact_string(artifact_string: str, default_project: str) -> tuple[str, str, str, str | None]:
+        """Parse an artifact string into its components.
+        
+        Format: [project/]run_name/model_name[/alias]
+        
+        Args:
+            artifact_string: String in the format [project/]run_name/model_name[/alias]
+            default_project: Default project name to use if not specified
+            
+        Returns:
+            tuple: (project_name, run_name, model_name, alias)
+            
+        Raises:
+            ValueError: If the string format is invalid or ambiguous
+        """
+        parts = artifact_string.split('/')
+        
+        if len(parts) < 2:
+            raise ValueError(
+                "Artifact string must contain at least run_name/model_name. "
+                f"Got: {artifact_string}"
+            )
+            
+        if len(parts) == 2:
+            # Format: run_name/model_name
+            run_name, model_name = parts
+            if not Artifact.is_model_category(model_name):
+                raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+            return default_project, run_name, model_name, None
+            
+        if len(parts) == 3:
+            # Could be either:
+            # 1. project/run_name/model_name
+            # 2. run_name/model_name/alias
+            if Artifact.is_alias(parts[2]):
+                # Case 2: run_name/model_name/alias
+                run_name, model_name, alias = parts
+                if not Artifact.is_model_category(model_name):
+                    raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+                return default_project, run_name, model_name, alias
+            else:
+                # Case 1: project/run_name/model_name
+                project, run_name, model_name = parts
+                if not Artifact.is_model_category(model_name):
+                    raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+                return project, run_name, model_name, None
+                
+        if len(parts) == 4:
+            # Format: project/run_name/model_name/alias
+            project, run_name, model_name, alias = parts
+            if not Artifact.is_model_category(model_name):
+                raise ValueError(f"Invalid model category: {model_name}. Must be 'best' or 'backup'")
+            if not Artifact.is_alias(alias):
+                raise ValueError(
+                    f"Invalid alias format: {alias}. Must be 'best[-N]', 'latest', or 'step-NNNNNN'"
+                )
+            return project, run_name, model_name, alias
+            
+        raise ValueError(
+            f"Invalid artifact string format: {artifact_string}. "
+            "Must be [project/]run_name/model_name[/alias]"
+        ) 

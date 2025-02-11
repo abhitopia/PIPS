@@ -29,8 +29,8 @@
 - [x] Training Resume from WandB
 - [x] Add support for new from checkpoint CLI command
 - [x] Refactor Wandb Checkpoint Sync to use Artifact class
-- [ ] Refactor new to use model from project/run_name/model-name/alias|step
-- [ ] Change ExperimentConfig to save project/run_name/model-name/alias|step
+- [x] Refactor new to use model from project/run_name/model-name/alias|step
+- [x] Change ExperimentConfig to save project/run_name/model-name/alias|step
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss
@@ -43,9 +43,10 @@
 - [x] Control WandB initialisation and naming
 - [x] Add debug mode to disable logging to WANDB (may be ligthning internal)
 - [x] Monitor learning rate
-- [ ] Implement disentanglement monitor
+- [ ] Implement Token Accuracy and Sample Accuracy 
 - [ ] Non EOS token accuracy as well for validation
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
+- [ ] Implement disentanglement monitor
 
 ## CLI
 - [x] Add new training CLI command
@@ -58,7 +59,7 @@
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
 ## Refactor
-- [x] Remove pesky warnings
+- [ ] Remove pesky warnings
 
 ## Optimisation
 - [ ] Optimise training for speed
