@@ -44,18 +44,20 @@
 - [x] Control WandB initialisation and naming
 - [x] Add debug mode to disable logging to WANDB (may be ligthning internal)
 - [x] Monitor learning rate
-- [ ] Implement Token Accuracy and Sample Accuracy 
-- [ ] Non EOS token accuracy as well for validation
+- [x] Implement Token Accuracy and Sample Accuracy 
+- [x] Non EOS token accuracy as well for validation
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
+- [ ] Implement input/output token accuracy
+
 
 ## CLI
 - [x] Add new training CLI command
 - [x] Add resume CLI command
 - [ ] Make resume command work with project name, run name and step count or tag, also add list command
+- [ ] Add Seeding Everything
 - [ ] Add lr finder CLI command
 - [ ] Add evaluate CLI command
-- [ ] Add Seeding Everything
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 

@@ -281,13 +281,27 @@ class DVAETrainingModule(pl.LightningModule):
             mask_pct = np.random.uniform(0.0, max_mask_pct)
         
         # Forward pass with current scheduled values
-        _, reconstruction_loss, kld_losses = self.model.forward(
+        logits, reconstruction_loss, kld_losses = self.model.forward(
             x, 
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
             tau=scheduled_values['tau']
         )
+
+        # Calculate token accuracy
+        predictions = logits.argmax(dim=-1)
+        correct_tokens = (predictions == x).float()
+        token_accuracy = correct_tokens.mean()
+
+        # Calculate token accuracy excluding padding tokens
+        padding_idx = self.experiment_config.padding_idx
+        non_padding_mask = (x != padding_idx)
+        acc_no_pad = (correct_tokens * non_padding_mask).sum() / non_padding_mask.sum()
+
+        # Calculate sample accuracy
+        sample_correct = correct_tokens.all(dim=1).float()
+        sample_accuracy = sample_correct.mean()
 
         # The problem is that reconstruction loss (output tokens) is computed in a different space than the KLD losses (latent codes)
         # Per sample, CE is summed over number of output tokens (1024)
@@ -310,8 +324,11 @@ class DVAETrainingModule(pl.LightningModule):
         return {
             'loss': total_loss,
             **{k: v.detach() for k, v in loss_components.items()},
-            **{k: v for k, v in scheduled_values.items()},  # Include scheduled values
-            'mask_pct': mask_pct
+            **{k: v for k, v in scheduled_values.items()},
+            'mask_pct': mask_pct,
+            'token_accuracy': token_accuracy.detach(),
+            'acc_no_pad': acc_no_pad.detach(),
+            'sample_accuracy': sample_accuracy.detach()
         }
 
     def training_step(self, batch, batch_idx):
