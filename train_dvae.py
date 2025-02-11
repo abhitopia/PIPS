@@ -398,6 +398,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     # Create training dataloader
     collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
     train_dataset = GridDataset(train=True)
+
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
@@ -417,6 +418,9 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         num_workers=0 if debug_mode else 4,
         persistent_workers=not debug_mode
     )
+
+    print("Number of batches in training set: ", len(train_loader))
+    print("Number of batches in validation set: ", len(val_loader))
 
     return train_loader, val_loader
 

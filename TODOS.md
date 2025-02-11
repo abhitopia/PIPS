@@ -14,8 +14,6 @@
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
 - [x] Gradient Accumulation and how to do it in Lightning
-- [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
-- [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#stochastic-weight-averaging
 - [ ] Codebook Weight Initialisation
 - [ ] Implement code usage monitor
 
@@ -83,3 +81,7 @@
 - [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook (Should not be needed as queries in pooler should double up as positional encodings)
 - [ ] Codebook regularization (to bound it) (This can be done by adding weight decay to start with)
 - [ ] Add evaluate CLI command
+
+## Later
+- [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning) (Will use SWA instead)
+- [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#stochastic-weight-averaging
