@@ -14,12 +14,10 @@
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
 - [x] Gradient Accumulation and how to do it in Lightning
-- [ ] Add LR finder option
-- [ ] Codebook Weight Initialisation
-- [ ] Codebook regularization (to bound it)
-- [ ] Implement code usage monitor
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning)
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#stochastic-weight-averaging
+- [ ] Codebook Weight Initialisation
+- [ ] Implement code usage monitor
 
 ## Checkpointing
 - [x] Implement Checkpointing
@@ -54,10 +52,9 @@
 ## CLI
 - [x] Add new training CLI command
 - [x] Add resume CLI command
-- [ ] Make resume command work with project name, run name and step count or tag, also add list command
 - [ ] Add Seeding Everything
+- [ ] Make cli.py a cli app
 - [ ] Add lr finder CLI command
-- [ ] Add evaluate CLI command
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
@@ -84,3 +81,5 @@
 ## Archived
 - [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)
 - [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook (Should not be needed as queries in pooler should double up as positional encodings)
+- [ ] Codebook regularization (to bound it) (This can be done by adding weight decay to start with)
+- [ ] Add evaluate CLI command

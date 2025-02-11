@@ -99,7 +99,9 @@ class ExperimentConfig:
     """Configuration for training hyperparameters and schedules"""
     # Model configuration
     model_config: GridDVAEConfig
-
+    
+    # Add seed parameter
+    seed: int | None = None  # None means random seed
     
     # Sampling parameters
     hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
@@ -152,6 +154,10 @@ class ExperimentConfig:
         # Automatically set padding_idx if not provided
         if self.padding_idx is None:
             self.padding_idx = self.model_config.n_vocab - 1
+            
+        # Generate random seed if none provided
+        if self.seed is None:
+            self.seed = np.random.randint(0, 2**32 - 1)
 
     @staticmethod
     def from_checkpoint(checkpoint_path: str) -> 'ExperimentConfig':
@@ -476,6 +482,10 @@ def train(
     resume_from: str | None = None,
 ) -> None:
     """Train a DVAE model with the given configuration."""
+    
+    # Set all random seeds
+    seed = experiment_config.seed
+    pl.seed_everything(seed, workers=True)
     
     # Initialize the model
     model = DVAETrainingModule(experiment_config)

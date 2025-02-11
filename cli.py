@@ -84,6 +84,14 @@ def new(
     
     # Training mode
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
+    
+    # Add seed parameter
+    seed: int = typer.Option(
+        None, 
+        "--seed", 
+        "-s", 
+        help="Random seed for reproducibility. If not provided, a random seed will be generated."
+    ),
 ):
     """Train a new DVAE model with specified configuration."""
     
@@ -125,6 +133,7 @@ def new(
         max_mask_pct=max_mask_pct,
         gradient_clip_val=gradient_clip_val,
         accumulate_grad_batches=accumulate_grad_batches,
+        seed=seed,  # Add seed to config
     )
 
     run_name = generate_friendly_name() if run_name is None else run_name
