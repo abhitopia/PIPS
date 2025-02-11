@@ -31,6 +31,7 @@
 - [x] Refactor Wandb Checkpoint Sync to use Artifact class
 - [x] Refactor new to use model from project/run_name/model-name/alias|step
 - [x] Change ExperimentConfig to save project/run_name/model-name/alias|step
+- [ ] Make resume command use the same logic as new command for specifying remote source. That way there is less code duplication
 
 ## Disentanglement
 - [x] Implement explicit disentanglement in KLD Loss
