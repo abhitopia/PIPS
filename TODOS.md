@@ -50,8 +50,8 @@
 ## CLI
 - [x] Add new training CLI command
 - [x] Add resume CLI command
-- [ ] Add Seeding Everything
-- [ ] Make cli.py a cli app
+- [x] Add Seeding Everything
+- [x] Make cli.py a cli app
 - [ ] Add lr finder CLI command
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
