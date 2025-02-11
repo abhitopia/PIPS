@@ -52,7 +52,7 @@
 - [x] Add resume CLI command
 - [x] Add Seeding Everything
 - [x] Make cli.py a cli app
-- [ ] Add lr finder CLI command
+- [x] Add lr finder CLI command
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
@@ -60,13 +60,14 @@
 - [ ] Remove pesky warnings
 
 ## Optimisation
-- [ ] Optimise training for speed
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/gpu.html
 - [ ] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
 - [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
 - [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html
+- [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
+- [ ] Optimise training for speed
 
 ## Grokking
 - [ ] Implement Orthograd Optimizer

@@ -1,12 +1,16 @@
 from functools import partial
+import os
 from typing import Dict
 import numpy as np
 from dataclasses import dataclass
+import tempfile
+
 import warnings
 import torch
 import time
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
@@ -21,6 +25,7 @@ from pathlib import Path
 from torch.serialization import add_safe_globals  # Add this import at the top
 import wandb
 import sys
+import matplotlib.pyplot as plt
 
 
 class LoggingCallback(pl.Callback):
@@ -200,6 +205,7 @@ class DVAETrainingModule(pl.LightningModule):
         self.experiment_config = experiment_config
         self.model_config = experiment_config.model_config
         self.model = self.build_model()
+        self.learning_rate = experiment_config.learning_rate
         self.save_hyperparameters()
 
     def build_model(self):
@@ -352,7 +358,7 @@ class DVAETrainingModule(pl.LightningModule):
     def configure_optimizers(self):
         optimizer = AdamW(
             self.parameters(),
-            lr=self.experiment_config.learning_rate,
+            lr=self.learning_rate,
             weight_decay=self.experiment_config.weight_decay
         )
         
@@ -484,6 +490,7 @@ def train(
     debug_logging: bool = True,
     val_check_interval: int | None = None,
     resume_from: str | None = None,
+    lr_find: bool = False,  # Add lr_find parameter
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -518,6 +525,7 @@ def train(
     custom_progress_bar = CustomRichProgressBar()
 
     trainer = pl.Trainer(
+        default_root_dir=tempfile.gettempdir() if lr_find else None,
         log_every_n_steps=1,
         num_sanity_val_steps=0,
         enable_progress_bar=True,
@@ -525,7 +533,7 @@ def train(
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
-        accumulate_grad_batches=experiment_config.accumulate_grad_batches,  # Use config parameter
+        accumulate_grad_batches=experiment_config.accumulate_grad_batches,
         callbacks=[
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
@@ -551,16 +559,36 @@ def train(
         ],
         max_epochs=-1,
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
-        limit_train_batches=50 if debug_mode else None,
-        limit_val_batches=10 if debug_mode else None,
-        val_check_interval=10 if debug_mode else val_check_interval,
+        limit_train_batches=100 if lr_find else (50 if debug_mode else None)    ,
+        limit_val_batches=0 if lr_find else (10 if debug_mode else None),  # Set to 0 for lr_find
+        val_check_interval=100 if lr_find else (20 if debug_mode else val_check_interval),
+        enable_model_summary=not lr_find
     )
+
+    if lr_find:
+        # Run learning rate finder
+        tuner = Tuner(trainer)
+        lr_finder = tuner.lr_find(model, 
+                                train_loader, 
+                                val_loader, 
+                                update_attr=False)
+        
+        # Print results and suggestion
+        print("\nLearning rate finder results:")
+        print(f"Suggested learning rate: {lr_finder.suggestion()}")
+        
+        # Plot the results
+        fig = lr_finder.plot(suggest=True)
+        output_file = os.path.join(os.getcwd(), f"lr_finder_{run_name}.png")
+        fig.savefig(output_file)
+        plt.show()  # This will open the plot window, if an interactive backend is available
+        return
 
     trainer.fit(
         model, 
         train_loader, 
         val_loader, 
-        ckpt_path=resume_from  # Use the explicit resume_from parameter
+        ckpt_path=resume_from
     )
 
 

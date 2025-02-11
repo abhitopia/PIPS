@@ -94,6 +94,7 @@ def new(
         "-s", 
         help="Random seed for reproducibility. If not provided, a random seed will be generated."
     ),
+    lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
 ):
     """Train a new DVAE model with specified configuration."""
     
@@ -147,6 +148,7 @@ def new(
         project_name=project_name,
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
+        lr_find=lr_find,
     )
 
 
@@ -197,18 +199,6 @@ def resume(
         debug_mode=debug,
         resume_from=local_checkpoint_path
     )
-
-
-@dvae_app.command()
-def lr_find():
-    """Run learning rate finder to determine optimal learning rate."""
-    pass
-
-
-@dvae_app.command()
-def evaluate():
-    """Evaluate a trained DVAE model."""
-    pass
 
 
 if __name__ == "__main__":
