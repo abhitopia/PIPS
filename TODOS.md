@@ -60,6 +60,7 @@
 - [ ] Remove pesky warnings
 
 ## Optimisation
+- [x] Set up pytorch lightning studio
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/gpu.html
 - [ ] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
