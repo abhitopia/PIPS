@@ -64,8 +64,11 @@
 - [x] https://lightning.ai/docs/pytorch/stable/accelerators/gpu.html
     - L40S 
         - BS: 32 -> 174k
-- [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
+- [x] `torch.set_float32_matmul_precision('high')` for better performance.
+    - L40S: BS: 32 -> 200k
+
 - [ ] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
+- [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
 - [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
 - [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html

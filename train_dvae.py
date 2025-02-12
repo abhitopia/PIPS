@@ -498,7 +498,8 @@ def train(
     # Set all random seeds
     seed = experiment_config.seed
     pl.seed_everything(seed, workers=True)
-    
+    torch.set_float32_matmul_precision('high')
+
     # Initialize the model
     model = DVAETrainingModule(experiment_config)
 
