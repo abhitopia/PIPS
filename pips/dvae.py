@@ -664,7 +664,6 @@ class GridDVAE(nn.Module):
         return mask
 
     def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, reinMax: bool = False) -> Tensor:
-
         if reinMax:
             assert hard, "ReinMax requires hard sampling"
 
@@ -673,7 +672,8 @@ class GridDVAE(nn.Module):
         # Convert into x: (B, S, D) using self.embd
         x = self.embd(x)
 
-        positions = self.pos_indices.expand(B, -1, -1)
+        # Ensure the position indices tensor is on the same device as x
+        positions = self.pos_indices.to(x.device).expand(B, -1, -1)
 
         assert S == self.n_pos, f"Input Sequence must be of length {self.n_pos}"
 
@@ -688,7 +688,7 @@ class GridDVAE(nn.Module):
         # Use gumbel softmax to sample from the Codebook
         soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
 
-        hard_code = soft_code # Default to soft code
+        hard_code = soft_code  # Default to soft code
         if hard:
             # Straight through.
             index = soft_code.max(dim=-1, keepdim=True)[1]
