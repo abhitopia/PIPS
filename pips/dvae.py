@@ -650,10 +650,9 @@ class GridDVAE(nn.Module):
             Optional[Tensor]: A boolean mask of shape [B, 1, S] or [1, 1, S] with True for unmasked and False for masked tokens,
                               or None if no masking is applied.
         """
-        if mask_percentage == 0:
-            return None  # No masking
-        if mask_percentage == 1:
-            raise ValueError("mask_percentage of 1 would mask all tokens, which is not allowed.")
+        # if mask_percentage == 0:
+        #     return None  # No masking
+        assert mask_percentage < 1, "mask_percentage of 1 would mask all tokens, which is not allowed."
 
 
         device = self.pos_indices.device if hasattr(self, "pos_indices") else torch.device("cpu")

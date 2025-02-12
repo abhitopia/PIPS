@@ -290,7 +290,7 @@ class DVAETrainingModule(pl.LightningModule):
         mask_pct = 0.0  # No masking during validation
         if train:
             max_mask_pct = scheduled_values['max_mask_pct']
-            mask_pct = np.random.uniform(0.0, max_mask_pct)
+            mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
         
         # Forward pass with current scheduled values
         logits, reconstruction_loss, kld_losses = self.model.forward(
