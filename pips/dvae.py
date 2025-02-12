@@ -721,8 +721,10 @@ class GridDVAE(nn.Module):
         # Decompress from Codebook Space
         z_prime = self.decoder_bottleneck(code_words)
 
+        # Ensure that pos_indices is on the same device as the code tensor.
+        positions = self.pos_indices.to(code.device).expand(B, -1, -1)
+
         # Pass through decoder network
-        positions = self.pos_indices.expand(B, -1, -1)
         decoded, _ = self.decoder_base(z_prime, None, positions)
 
         # Convert to logits
