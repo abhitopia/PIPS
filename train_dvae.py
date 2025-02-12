@@ -490,7 +490,8 @@ def train(
     debug_logging: bool = True,
     val_check_interval: int | None = None,
     resume_from: str | None = None,
-    lr_find: bool = False,  # Add lr_find parameter
+    lr_find: bool = False,  # Run learning rate finder flag
+    compile_model: bool | None = None,  # New parameter for model compilation
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -501,26 +502,35 @@ def train(
     # Initialize the model
     model = DVAETrainingModule(experiment_config)
 
-    # Handle model source if specified
+    # Load weights if a model source is specified
     if experiment_config.model_src:
         load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
-
+    
+    # Determine whether to compile the model:
+    # If not explicitly provided, default to compiling when a GPU is available.
+    if compile_model is None:
+        compile_model = torch.cuda.is_available()
+        
+    if compile_model:
+        print("Compiling model using torch.compile...")
+        model = torch.compile(model)
+    
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
-    # Initialize wandb logger with project name parameter
+    # Initialize wandb logger
     wandb_logger = WandbLogger(
         project=project_name,
         name=run_name,
         id=run_name,
         version=run_name,
         log_model=False,
-        save_dir=checkpoint_dir,  # Use the provided checkpoint_dir
+        save_dir=checkpoint_dir,
         reinit=True,
         mode="disabled" if debug_mode and not debug_logging else "online"
     )
 
-    # Add callbacks
+    # Define callbacks
     logging_callback = LoggingCallback()
     custom_progress_bar = CustomRichProgressBar()
 
@@ -559,29 +569,26 @@ def train(
         ],
         max_epochs=-1,
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
-        limit_train_batches=100 if lr_find else (50 if debug_mode else None)    ,
-        limit_val_batches=0 if lr_find else (10 if debug_mode else None),  # Set to 0 for lr_find
+        limit_train_batches=100 if lr_find else (50 if debug_mode else None),
+        limit_val_batches=0 if lr_find else (10 if debug_mode else None),
         val_check_interval=100 if lr_find else (20 if debug_mode else val_check_interval),
         enable_model_summary=not lr_find
     )
 
     if lr_find:
-        # Run learning rate finder
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(model, 
                                 train_loader, 
                                 val_loader, 
                                 update_attr=False)
         
-        # Print results and suggestion
         print("\nLearning rate finder results:")
         print(f"Suggested learning rate: {lr_finder.suggestion()}")
         
-        # Plot the results
         fig = lr_finder.plot(suggest=True)
         output_file = os.path.join(os.getcwd(), f"lr_finder_{run_name}.png")
         fig.savefig(output_file)
-        plt.show()  # This will open the plot window, if an interactive backend is available
+        plt.show()
         return
 
     trainer.fit(

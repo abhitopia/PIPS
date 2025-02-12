@@ -95,6 +95,11 @@ def new(
         help="Random seed for reproducibility. If not provided, a random seed will be generated."
     ),
     lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
+    compile_model: bool | None = typer.Option(
+        None,
+        "--compile-model",
+        help="Compile model using torch.compile if using GPU. If not specified, defaults to True on GPU and False on CPU."
+    ),
 ):
     """Train a new DVAE model with specified configuration."""
     
@@ -149,6 +154,7 @@ def new(
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         lr_find=lr_find,
+        compile_model=compile_model,
     )
 
 
@@ -163,6 +169,11 @@ def resume(
     project_name: str = typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
     checkpoint_dir: Path = typer.Option(Path("./runs"), "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
+    compile_model: bool | None = typer.Option(
+        None,
+        "--compile-model",
+        help="Compile model using torch.compile if using GPU. If not specified, defaults to True on GPU and False on CPU."
+    ),
 ):
     """Resume training from a checkpoint."""
     
@@ -197,7 +208,8 @@ def resume(
         project_name=project_name,
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
-        resume_from=local_checkpoint_path
+        resume_from=local_checkpoint_path,
+        compile_model=compile_model,
     )
 
 
