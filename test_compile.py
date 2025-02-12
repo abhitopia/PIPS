@@ -1,8 +1,33 @@
 import torch
 from pips.dvae import GridDVAEConfig, GridDVAE
 import time
+import pytorch_lightning as pl
 
 torch.set_float32_matmul_precision('high')
+
+
+class MinimalDVAEModule(pl.LightningModule):
+    def __init__(self, config: GridDVAEConfig):
+        super().__init__()
+        self.config = config
+        self.model = GridDVAE(config)
+        
+    def forward(self, x):
+        return self.model(
+            x,
+            tau=0.9,
+            hard=True,
+            mask_percentage=0.0
+        )
+    
+    def training_step(self, batch, batch_idx):
+        x = batch
+        decoded_logits, reconstruction_loss, kld_losses = self(x)
+        loss = reconstruction_loss + sum(kld_losses.values())
+        return loss
+    
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=1e-3)
 
 
 def test_dvae_compile():
@@ -20,7 +45,7 @@ def test_dvae_compile():
     )
 
     # Create model
-    model = GridDVAE(config)
+    model = MinimalDVAEModule(config)
     
     # Move to CUDA if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -30,13 +55,13 @@ def test_dvae_compile():
     # Use different compilation mode to avoid SM warning
     model = torch.compile(
         model,
-        mode="reduce-overhead",  # Alternative modes: 'max-autotune', 'default'
+        mode="reduce-overhead",
         fullgraph=True,
-        options={
-            "max_autotune": False,  # Disable autotune to avoid SM warning
-            "trace.enabled": True,
-            "trace.graph_diagram": True,
-        }
+        # options={
+        #     "max_autotune": False,
+        #     "trace.enabled": True,
+        #     "trace.graph_diagram": True,
+        # }
     )
     
     # Create a minimal batch
@@ -47,12 +72,7 @@ def test_dvae_compile():
     print("Running first forward pass...")
     try:
         # First forward pass (includes compilation)
-        decoded_logits, reconstruction_loss, kld_losses = model(
-            x,
-            tau=0.9,
-            hard=True,
-            mask_percentage=0.0
-        )
+        decoded_logits, reconstruction_loss, kld_losses = model(x)
         print("First forward pass successful!")
         print(f"Output shapes:")
         print(f"- decoded_logits: {decoded_logits.shape}")
@@ -65,7 +85,7 @@ def test_dvae_compile():
         
         # Warmup
         for _ in range(3):
-            model(x, tau=0.9, hard=True, mask_percentage=0.0)
+            model(x)
             
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -74,12 +94,7 @@ def test_dvae_compile():
         start_time = time.perf_counter()
         
         for _ in range(num_iters):
-            decoded_logits, reconstruction_loss, kld_losses = model(
-                x,
-                tau=0.9,
-                hard=True,
-                mask_percentage=0.0
-            )
+            decoded_logits, reconstruction_loss, kld_losses = model(x)
             
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -94,6 +109,11 @@ def test_dvae_compile():
         print(f"Total time: {total_time:.4f} seconds")
         print(f"Average time per iteration: {avg_time*1000:.2f} ms")
         print(f"Iterations per second: {num_iters/total_time:.2f}")
+        
+        # Test training step
+        print("\nTesting training step...")
+        loss = model.training_step(x, 0)
+        print(f"Training step successful! Loss: {loss.item():.4f}")
         
     except Exception as e:
         print(f"Error during execution: {str(e)}")
