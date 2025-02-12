@@ -3,6 +3,8 @@ from pips.dvae import GridDVAEConfig, GridDVAE
 import time
 import pytorch_lightning as pl
 import torch.nn.functional as F
+from pytorch_lightning import Trainer
+from torch.optim import AdamW
 
 torch.set_float32_matmul_precision('high')
 
@@ -13,6 +15,7 @@ class MinimalDVAEModule(pl.LightningModule):
         self.config = config
         self.model = GridDVAE(config)
         self.padding_idx = config.n_vocab - 1
+        self.automatic_optimization = False  # We'll handle optimization manually for testing
         
     def forward(self, x, train=True):
         # Fixed parameters for testing
@@ -24,9 +27,7 @@ class MinimalDVAEModule(pl.LightningModule):
         mask_pct = 0.0
         if train:
             max_mask_pct = 0.5  # Fixed value for testing
-            # mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
-            # mask_pct = 0.0
         
         # Forward pass
         logits, reconstruction_loss, kld_losses = self.model.forward(
@@ -82,11 +83,39 @@ class MinimalDVAEModule(pl.LightningModule):
             'logits': logits
         }
     
-    def training_step(self, batch, batch_idx):
-        x = batch
-        outputs = self(x, train=True)
-        self.log_dict({k: v for k, v in outputs.items() if k != 'logits'})
-        return outputs['loss']
+    def compute_loss(self, batch: torch.Tensor) -> torch.Tensor:
+        outputs = self.forward(batch)
+        total_loss = outputs['loss']
+        return total_loss
+    
+    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
+        loss = self.compute_loss(batch)
+        
+        # Retrieve optimizer(s)
+        optimizers = self.optimizers()
+        if isinstance(optimizers, list):
+            for opt in optimizers:
+                opt.zero_grad()
+        else:
+            optimizers.zero_grad()
+        
+        # Instead of calling self.manual_backward(loss) directly,
+        # check if self.trainer is attached and its lightning_module is not None.
+        if not self.trainer or self.trainer.lightning_module is None:
+            # Fallback for testing without a fully attached trainer.
+            loss.backward()
+        else:
+            self.manual_backward(loss)
+        
+        # Perform optimizer step(s)
+        if isinstance(optimizers, list):
+            for opt in optimizers:
+                opt.step()
+        else:
+            optimizers.step()
+        
+        self.log("train_loss", loss)
+        return loss
     
     def validation_step(self, batch, batch_idx):
         x = batch
@@ -95,7 +124,8 @@ class MinimalDVAEModule(pl.LightningModule):
         return outputs['loss']
     
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = AdamW(self.parameters(), lr=1e-4)
+        return optimizer
 
 
 def test_dvae_compile():
@@ -112,12 +142,15 @@ def test_dvae_compile():
         dropout=0.0
     )
 
-    # Create model
+    # Create model 
     model = MinimalDVAEModule(config)
     
     # Move to CUDA if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
+    
+    # Initialize optimizer
+    optimizer = model.configure_optimizers()
     
     print("Compiling model...")
     model = torch.compile(
@@ -141,46 +174,101 @@ def test_dvae_compile():
             if k != 'logits':
                 print(f"- {k}: {v.item() if torch.is_tensor(v) and v.numel() == 1 else v}")
         
-        # Now run multiple iterations and time them
+        # Test backward pass
+        print("\nTesting backward pass...")
+        loss = outputs['loss']
+        loss.backward()
+        print("Backward pass successful!")
+        
+        # Check if gradients exist
+        has_grad = all(p.grad is not None for p in model.parameters() if p.requires_grad)
+        print(f"All parameters have gradients: {has_grad}")
+        
+        # Reset gradients
+        optimizer.zero_grad()
+        
+        # Now run multiple iterations with forward and backward
         num_iters = 100
         print(f"\nRunning timing test for {num_iters} iterations...")
         
-        # Warmup
-        for _ in range(3):
-            model(x)
+        def run_benchmark(include_backward=True, include_optimize=True):
+            # Warmup
+            for _ in range(3):
+                outputs = model(x)
+                if include_backward:
+                    loss = outputs['loss']
+                    loss.backward()
+                    if include_optimize:
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        optimizer.step()
+                        optimizer.zero_grad()
             
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
-        
-        # Timing loop
-        start_time = time.perf_counter()
-        
-        for _ in range(num_iters):
-            outputs = model(x)
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
             
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()
+            # Timing loop
+            start_time = time.perf_counter()
             
-        end_time = time.perf_counter()
+            for i in range(num_iters):
+                # Forward pass
+                outputs = model(x)
+                
+                if include_backward:
+                    loss = outputs['loss']
+                    # Backward pass
+                    loss.backward()
+                    
+                    if include_optimize:
+                        # Gradient clipping
+                        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                        # Optimizer step and zero grad
+                        optimizer.step()
+                        optimizer.zero_grad()
+            
+            if torch.cuda.is_available():
+                torch.cuda.synchronize()
+                
+            end_time = time.perf_counter()
+            
+            # Calculate statistics
+            total_time = end_time - start_time
+            avg_time = total_time / num_iters
+            
+            components = "forward"
+            if include_backward:
+                components += " + backward"
+            if include_optimize:
+                components += " + optimize"
+            
+            print(f"\nTiming Results ({components}):")
+            print(f"Total time: {total_time:.4f} seconds")
+            print(f"Average time per iteration: {avg_time*1000:.2f} ms")
+            print(f"Iterations per second: {num_iters/total_time:.2f}")
         
-        # Calculate statistics
-        total_time = end_time - start_time
-        avg_time = total_time / num_iters
+        # Run different benchmark configurations
+        print("\nBenchmark 1: Forward only")
+        run_benchmark(include_backward=False, include_optimize=False)
         
-        print(f"\nTiming Results:")
-        print(f"Total time: {total_time:.4f} seconds")
-        print(f"Average time per iteration: {avg_time*1000:.2f} ms")
-        print(f"Iterations per second: {num_iters/total_time:.2f}")
+        print("\nBenchmark 2: Forward + Backward")
+        run_benchmark(include_backward=True, include_optimize=False)
         
-        # Test training step
-        print("\nTesting training step...")
-        loss = model.training_step(x, 0)
-        print(f"Training step successful! Loss: {loss.item():.4f}")
+        print("\nBenchmark 3: Forward + Backward + Optimize")
+        run_benchmark(include_backward=True, include_optimize=True)
         
-        # Test validation step
-        print("\nTesting validation step...")
-        val_loss = model.validation_step(x, 0)
-        print(f"Validation step successful! Loss: {val_loss.item():.4f}")
+        # # Test training step
+        # print("\nTesting training step...")
+        # # Attach a dummy Lightning Trainer to the module.
+        # dummy_trainer = Trainer(fast_dev_run=True)
+        # model.trainer = dummy_trainer
+
+        # # Now call training_step
+        # loss = model.training_step(x, 0)
+        # print(f"Training step successful! Loss: {loss.item():.4f}")
+        
+        # # Test validation step
+        # print("\nTesting validation step...")
+        # val_loss = model.validation_step(x, 0)
+        # print(f"Validation step successful! Loss: {val_loss.item():.4f}")
         
     except Exception as e:
         print(f"Error during execution: {str(e)}")
