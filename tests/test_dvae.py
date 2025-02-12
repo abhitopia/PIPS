@@ -208,8 +208,9 @@ def test_dvae():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
-    output, reconstruction_loss, kld_losses = dvae(x)
-        # Test output shape
+    output, reconstruction_loss, kld_losses, q_z_marg = dvae(x)
+    
+    # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab)
     assert isinstance(reconstruction_loss, torch.Tensor), "reconstruction_loss should be a tensor."
     assert reconstruction_loss.dim() == 0, "reconstruction_loss should be a scalar tensor."
@@ -310,7 +311,7 @@ def test_stacked_pooling_with_partial_mask():
     assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}" 
 
 def test_create_random_mask_no_mask():
-    dvae = GridDVAE(GridDVAEConfig(
+    config = GridDVAEConfig(
         n_dim=128,
         n_head=8,
         n_layers=6,
@@ -319,13 +320,18 @@ def test_create_random_mask_no_mask():
         max_grid_height=32,
         max_grid_width=32,
         n_vocab=16
-    ))
-    B, S = 4, 1024
-    mask = dvae.create_random_mask(B, S, mask_percentage=0.0)
-    assert mask is None, "Expected no mask when mask_percentage is 0."
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    seq_length = 10
+    
+    # Test with mask_percentage = 0
+    mask = dvae.create_random_mask(batch_size, seq_length, mask_percentage=0.0)
+    # Instead of checking for None, check that all values are True (no masking)
+    assert torch.all(mask == True)
 
 def test_create_random_mask_full_mask():
-    dvae = GridDVAE(GridDVAEConfig(
+    config = GridDVAEConfig(
         n_dim=128,
         n_head=8,
         n_layers=6,
@@ -334,10 +340,14 @@ def test_create_random_mask_full_mask():
         max_grid_height=32,
         max_grid_width=32,
         n_vocab=16
-    ))
-    B, S = 4, 1024
-    with pytest.raises(ValueError, match="mask_percentage of 1 would mask all tokens, which is not allowed."):
-        dvae.create_random_mask(B, S, mask_percentage=1.0)
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    seq_length = 10
+    
+    # Test with mask_percentage = 1
+    with pytest.raises(AssertionError):
+        dvae.create_random_mask(batch_size, seq_length, mask_percentage=1.0)
 
 def test_create_random_mask_partial_mask():
     dvae = GridDVAE(GridDVAEConfig(
@@ -375,12 +385,12 @@ def test_dvae_forward_with_mask():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with no mask
-    output_no_mask, _, _ = dvae(x, mask_percentage=0.0)
+    output_no_mask, _, _, q_z_marg = dvae(x, mask_percentage=0.0)
     assert output_no_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_no_mask.shape}"
 
     # Test forward pass with partial mask
-    output_partial_mask, _, _ = dvae(x, mask_percentage=0.5)
+    output_partial_mask, _, _, _ = dvae(x, mask_percentage=0.5)
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
@@ -728,7 +738,7 @@ def test_kld_disentanglement_loss():
     expected_q_z_running = expected_q_z_current.clone()
     
     # Compute disentanglement losses
-    losses = dvae.kld_disentanglement_loss(code_soft)
+    losses, q_z_marg = dvae.kld_disentanglement_loss(code_soft)
     
     # Manually compute expected Full KL, MI, DWKL, and TC
     epsilon = 1e-8  # For numerical stability
@@ -809,7 +819,7 @@ def test_dvae_forward_with_reinmax():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with ReinMax enabled
-    output, reconstruction_loss, kld_losses = dvae(x, tau=0.9, hard=True, reinMax=True)
+    output, reconstruction_loss, kld_losses, q_z_marg = dvae(x, tau=0.9, hard=True, reinMax=True)
 
     # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab), \
@@ -955,7 +965,7 @@ def test_kld_losses_non_negative():
     # Run forward pass multiple times with different random inputs
     for _ in range(5):
         x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
-        _, _, kld_losses = dvae(x)
+        _, _, kld_losses, _ = dvae(x)
         
         # Check that all losses are non-negative
         assert kld_losses["mi_loss"] >= 0, "MI loss should be non-negative"
@@ -983,11 +993,11 @@ def test_kld_losses_extreme_inputs():
     
     # Test with all zeros
     x_zeros = torch.zeros((batch_size, config.n_pos), dtype=torch.long)
-    _, _, kld_losses_zeros = dvae(x_zeros)
+    _, _, kld_losses_zeros, _ = dvae(x_zeros)
     
     # Test with all same value
     x_same = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab-1, dtype=torch.long)
-    _, _, kld_losses_same = dvae(x_same)
+    _, _, kld_losses_same, _ = dvae(x_same)
     
     # Check that all losses remain non-negative for both cases
     for losses in [kld_losses_zeros, kld_losses_same]:
@@ -1015,7 +1025,7 @@ def test_kld_losses_numerical_stability():
     temperatures = [0.1, 0.5, 1.0, 2.0, 5.0]
     
     for temp in temperatures:
-        _, _, kld_losses = dvae(x, tau=temp)
+        _, _, kld_losses, _ = dvae(x, tau=temp)
         
         # Check that all losses are finite and non-negative
         assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"

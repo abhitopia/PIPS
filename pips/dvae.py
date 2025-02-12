@@ -732,20 +732,38 @@ class GridDVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tensor:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, Tensor, dict, Tensor]:
+        """
+        Forward pass through the DVAE.
+
+        Args:
+            x (Tensor): Input tensor
+            q_z_marg (Optional[Tensor]): Current estimate of marginal q(z), shape (N, C)
+            tau (float): Temperature for Gumbel-Softmax
+            hard (bool): Whether to use hard or soft Gumbel-Softmax samples
+            mask_percentage (float): Percentage of tokens to mask
+            reinMax (bool): Whether to use ReinMax sampling
+
+        Returns:
+            Tuple containing:
+            - decoded_logits: Output logits
+            - reconstruction_loss: Reconstruction loss
+            - kld_losses: Dictionary of KL-related losses
+            - updated_q_z_marg: Updated estimate of marginal q(z)
+        """
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
         code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
 
-        # Compute the KL disentanglement loss using the internal q_z_running
-        kld_losses = self.kld_disentanglement_loss(soft_code)
+        # Compute the KL disentanglement loss with the provided q_z_marg
+        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg)
 
         # Compute the reconstruction loss
         decoded_logits = self.decode(code)
         reconstruction_loss = self.reconstruction_loss(decoded_logits, x)
 
-        # Return the reconstruction loss and the disentanglement losses
-        return decoded_logits, reconstruction_loss, kld_losses
+        # Return the reconstruction loss, disentanglement losses, and updated q_z_marg
+        return decoded_logits, reconstruction_loss, kld_losses, updated_q_z_marg
     
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
@@ -755,7 +773,7 @@ class GridDVAE(nn.Module):
         return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1), reduction='sum') / x.size(0)
     
 
-    def kld_disentanglement_loss(self, q_z_x, momentum=0.99, eps=1e-8):
+    def kld_disentanglement_loss(self, q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8):
         """
         The Beta-TCVAE paper(https://arxiv.org/pdf/1802.04942) splits the KLD term as
 
@@ -865,21 +883,18 @@ class GridDVAE(nn.Module):
         we use an EMA to keep a running estimate of q(z).
 
         Args:
-            code_soft (Tensor): Soft one-hot distributions from Gumbel-softmax, of shape (B, N, C), where:
+            q_z_x (Tensor): Soft one-hot distributions from Gumbel-softmax, of shape (B, N, C), where:
                 B = batch size,
                 N = number of discrete latent codes,
                 C = codebook size.
-            q_z_running (Tensor, optional): The running estimate of the aggregated posterior q(z) 
-                from previous minibatches, of shape (N, C). If None, it will be initialized to the current batch's mean.
+            q_z_marg: Optional tensor of shape (N, C) containing the running estimate of q(z)
             momentum (float): The decay rate for the EMA; typical values are near 0.99.
             eps (float): A small constant for numerical stability.
 
         Returns:
-            mi_loss (Tensor): Average Mutual Information loss per sample (sum over latents, then averaged over batch).
-            dwkl_loss (Tensor): Total Dimension-wise KL loss computed from the EMA aggregated posterior (summed over latents).
-            tc_loss (Tensor): Total Correlation loss: TC = Full KL - MI - DWKL.
-            full_kl_loss (Tensor): Average full KL loss per sample (sum over latents, then averaged over batch).
-            q_z_running (Tensor): The updated EMA estimate of the aggregated posterior q(z).
+            Tuple containing:
+            - Dictionary of KL-related losses
+            - Updated marginal q(z)
         """
         # -----------------------------------------------
         # Retrieve dimensions.
@@ -900,10 +915,8 @@ class GridDVAE(nn.Module):
         # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
         # This provides a smoother estimate of the global q(z) than using the current batch alone.
         # -----------------------------------------------
-
-        q_z_marginal = ( momentum * self.q_z_marg + (1 - momentum) * q_z_marg_batch ) if self.q_z_marg is not None else q_z_marg_batch
-        self.q_z_marg = q_z_marginal.detach()                                        # Detach the local variable from the graph
-
+        q_z_marginal = (momentum * q_z_marg + (1 - momentum) * q_z_marg_batch) if q_z_marg is not None else q_z_marg_batch
+        q_z_marginal_detached = q_z_marginal.detach()  # Detach for return value
 
         # Compute log probabilities
         log_q_z_x = torch.log(q_z_x + eps)  # Shape: (B, N, C)
@@ -976,7 +989,7 @@ class GridDVAE(nn.Module):
             "dwkl_loss": F.relu(dwkl_batch.mean()), 
             "tc_loss": F.relu(tc_batch.mean()), 
             "kl_loss": F.relu(full_kl_batch.mean())
-        }
+        }, q_z_marginal_detached
 
 
 

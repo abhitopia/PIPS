@@ -207,6 +207,8 @@ class DVAETrainingModule(pl.LightningModule):
         self.model = self.build_model()
         self.learning_rate = experiment_config.learning_rate
         self.save_hyperparameters()
+        self.register_buffer('q_z_marg', None, persistent=True)
+
 
     def build_model(self):
         return GridDVAE(self.model_config)
@@ -279,7 +281,7 @@ class DVAETrainingModule(pl.LightningModule):
             'max_mask_pct': max_mask_pct_schedule(step),
         }
 
-    def forward(self, x, train=True):
+    def forward(self, x, q_z_marg=None, train=True):
         reinMax = self.experiment_config.reinMax
         
         # Get current values for all scheduled parameters
@@ -291,11 +293,11 @@ class DVAETrainingModule(pl.LightningModule):
         if train:
             max_mask_pct = scheduled_values['max_mask_pct']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
-
         
-        # Forward pass with current scheduled values
-        logits, reconstruction_loss, kld_losses = self.model.forward(
+        # Forward pass with current scheduled values and provided q_z_marg
+        logits, reconstruction_loss, kld_losses, updated_q_z_marg = self.model.forward(
             x, 
+            q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
@@ -342,17 +344,22 @@ class DVAETrainingModule(pl.LightningModule):
             'token_accuracy': token_accuracy.detach(),
             'acc_no_pad': acc_no_pad.detach(),
             'sample_accuracy': sample_accuracy.detach()
-        }
+        }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
         x, _ = batch
-        output_dict = self(x, train=True)
+        output_dict, updated_q_z_marg = self(x, q_z_marg=self.q_z_marg, train=True)
+        
+        # Update the global q_z_marg estimate
+        self.q_z_marg = updated_q_z_marg
         
         return output_dict
     
     def validation_step(self, batch, batch_idx):
         x, _ = batch
-        output_dict = self(x, train=False)
+
+        # No update of q_z_marg in validation
+        output_dict, _ = self(x, q_z_marg=self.q_z_marg, train=False)
     
         return output_dict
 
