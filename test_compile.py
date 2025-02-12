@@ -2,6 +2,7 @@ import torch
 from pips.dvae import GridDVAEConfig, GridDVAE
 import time
 import pytorch_lightning as pl
+import torch.nn.functional as F
 
 torch.set_float32_matmul_precision('high')
 
@@ -11,20 +12,85 @@ class MinimalDVAEModule(pl.LightningModule):
         super().__init__()
         self.config = config
         self.model = GridDVAE(config)
+        self.padding_idx = config.n_vocab - 1
         
-    def forward(self, x):
-        return self.model(
-            x,
-            tau=0.9,
-            hard=True,
-            mask_percentage=0.0
+    def forward(self, x, train=True):
+        # Fixed parameters for testing
+        reinMax = True
+        tau = 0.9
+        hard = True
+        
+        # Sample mask percentage
+        mask_pct = 0.0
+        if train:
+            max_mask_pct = 0.5  # Fixed value for testing
+            mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
+        
+        # Forward pass
+        logits, reconstruction_loss, kld_losses = self.model.forward(
+            x, 
+            mask_percentage=mask_pct, 
+            hard=hard, 
+            reinMax=reinMax,
+            tau=tau
         )
+
+        # Calculate accuracies
+        predictions = logits.argmax(dim=-1)
+        correct_tokens = (predictions == x).float()
+        token_accuracy = correct_tokens.mean()
+
+        # Calculate token accuracy excluding padding tokens
+        non_padding_mask = (x != self.padding_idx)
+        acc_no_pad = (correct_tokens * non_padding_mask).sum() / non_padding_mask.sum()
+
+        # Calculate sample accuracy
+        sample_correct = correct_tokens.all(dim=1).float()
+        sample_accuracy = sample_correct.mean()
+
+        # Normalize reconstruction loss by number of tokens
+        reconstruction_loss = reconstruction_loss / x.size(1)
+
+        # Fixed beta values for testing
+        beta_values = {
+            'beta(MI)': 1.0,
+            'beta(DWKL)': 1.0,
+            'beta(TC)': 1.0,
+            'beta(KL)': 1.0
+        }
+
+        # Compute loss components
+        loss_components = {
+            'loss(CE)': reconstruction_loss,
+            'loss(MI)': kld_losses['mi_loss'] * beta_values['beta(MI)'],
+            'loss(DWKL)': kld_losses['dwkl_loss'] * beta_values['beta(DWKL)'],
+            'loss(TC)': kld_losses['tc_loss'] * beta_values['beta(TC)'],
+            'loss(KL)': kld_losses['kl_loss'] * beta_values['beta(KL)']
+        }
+        
+        total_loss = sum(loss_components.values())
+
+        return {
+            'loss': total_loss,
+            **{k: v.detach() for k, v in loss_components.items()},
+            'mask_pct': mask_pct,
+            'token_accuracy': token_accuracy.detach(),
+            'acc_no_pad': acc_no_pad.detach(),
+            'sample_accuracy': sample_accuracy.detach(),
+            'logits': logits
+        }
     
     def training_step(self, batch, batch_idx):
         x = batch
-        decoded_logits, reconstruction_loss, kld_losses = self(x)
-        loss = reconstruction_loss + sum(kld_losses.values())
-        return loss
+        outputs = self(x, train=True)
+        self.log_dict({k: v for k, v in outputs.items() if k != 'logits'})
+        return outputs['loss']
+    
+    def validation_step(self, batch, batch_idx):
+        x = batch
+        outputs = self(x, train=False)
+        self.log_dict({f"val_{k}": v for k, v in outputs.items() if k != 'logits'})
+        return outputs['loss']
     
     def configure_optimizers(self):
         return torch.optim.Adam(self.parameters(), lr=1e-3)
@@ -52,16 +118,10 @@ def test_dvae_compile():
     model = model.to(device)
     
     print("Compiling model...")
-    # Use different compilation mode to avoid SM warning
     model = torch.compile(
         model,
         mode="reduce-overhead",
         fullgraph=True,
-        # options={
-        #     "max_autotune": False,
-        #     "trace.enabled": True,
-        #     "trace.graph_diagram": True,
-        # }
     )
     
     # Create a minimal batch
@@ -72,12 +132,12 @@ def test_dvae_compile():
     print("Running first forward pass...")
     try:
         # First forward pass (includes compilation)
-        decoded_logits, reconstruction_loss, kld_losses = model(x)
+        outputs = model(x)
         print("First forward pass successful!")
-        print(f"Output shapes:")
-        print(f"- decoded_logits: {decoded_logits.shape}")
-        print(f"- reconstruction_loss: {reconstruction_loss.item():.4f}")
-        print(f"- kld_losses: {kld_losses}")
+        print("\nOutputs:")
+        for k, v in outputs.items():
+            if k != 'logits':
+                print(f"- {k}: {v.item() if torch.is_tensor(v) and v.numel() == 1 else v}")
         
         # Now run multiple iterations and time them
         num_iters = 100
@@ -94,7 +154,7 @@ def test_dvae_compile():
         start_time = time.perf_counter()
         
         for _ in range(num_iters):
-            decoded_logits, reconstruction_loss, kld_losses = model(x)
+            outputs = model(x)
             
         if torch.cuda.is_available():
             torch.cuda.synchronize()
@@ -114,6 +174,11 @@ def test_dvae_compile():
         print("\nTesting training step...")
         loss = model.training_step(x, 0)
         print(f"Training step successful! Loss: {loss.item():.4f}")
+        
+        # Test validation step
+        print("\nTesting validation step...")
+        val_loss = model.validation_step(x, 0)
+        print(f"Validation step successful! Loss: {val_loss.item():.4f}")
         
     except Exception as e:
         print(f"Error during execution: {str(e)}")
