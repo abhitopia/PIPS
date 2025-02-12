@@ -2,6 +2,9 @@ import torch
 from pips.dvae import GridDVAEConfig, GridDVAE
 import time
 
+torch.set_float32_matmul_precision('high')
+
+
 def test_dvae_compile():
     # Create minimal config
     config = GridDVAEConfig(
@@ -24,7 +27,17 @@ def test_dvae_compile():
     model = model.to(device)
     
     print("Compiling model...")
-    model = torch.compile(model)
+    # Use different compilation mode to avoid SM warning
+    model = torch.compile(
+        model,
+        mode="reduce-overhead",  # Alternative modes: 'max-autotune', 'default'
+        fullgraph=True,
+        options={
+            "max_autotune": False,  # Disable autotune to avoid SM warning
+            "trace.enabled": True,
+            "trace.graph_diagram": True,
+        }
+    )
     
     # Create a minimal batch
     batch_size = 2
