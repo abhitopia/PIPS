@@ -290,7 +290,8 @@ class DVAETrainingModule(pl.LightningModule):
         mask_pct = 0.0  # No masking during validation
         if train:
             max_mask_pct = scheduled_values['max_mask_pct']
-            mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
+            mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
+
         
         # Forward pass with current scheduled values
         logits, reconstruction_loss, kld_losses = self.model.forward(
@@ -514,7 +515,7 @@ def train(
         
     if compile_model:
         print("Compiling model using torch.compile...")
-        model = torch.compile(model, fullgraph=True)
+        model = torch.compile(model, fullgraph=True, mode="reduce-overhead")
     
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)

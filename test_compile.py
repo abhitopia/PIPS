@@ -24,7 +24,9 @@ class MinimalDVAEModule(pl.LightningModule):
         mask_pct = 0.0
         if train:
             max_mask_pct = 0.5  # Fixed value for testing
-            mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
+            # mask_pct = torch.empty(1).uniform_(0.0, max_mask_pct)[0]
+            mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
+            # mask_pct = 0.0
         
         # Forward pass
         logits, reconstruction_loss, kld_losses = self.model.forward(
