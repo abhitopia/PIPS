@@ -655,10 +655,13 @@ class GridDVAE(nn.Module):
         if mask_percentage == 1:
             raise ValueError("mask_percentage of 1 would mask all tokens, which is not allowed.")
 
+
+        device = self.pos_indices.device if hasattr(self, "pos_indices") else torch.device("cpu")
+
         if same_mask_for_all:
-            mask = torch.rand(1, 1, S) > mask_percentage
+            mask = torch.rand(1, 1, S, device=device) > mask_percentage
         else:
-            mask = torch.rand(B, 1, S) > mask_percentage
+            mask = torch.rand(B, 1, S, device=device) > mask_percentage
         return mask
 
     def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, reinMax: bool = False) -> Tensor:
