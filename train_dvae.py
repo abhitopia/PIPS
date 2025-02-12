@@ -514,7 +514,7 @@ def train(
         
     if compile_model:
         print("Compiling model using torch.compile...")
-        model = torch.compile(model)
+        model = torch.compile(model, fullgraph=True)
     
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
