@@ -395,7 +395,7 @@ class DVAETrainingModule(pl.LightningModule):
             self.parameters(),
             lr=self.learning_rate,
             weight_decay=self.experiment_config.weight_decay,
-            fused=True
+            fused=True if torch.cuda.is_available() else False
         )
         
         # Noam scheduler with linear warmup and cosine decay

@@ -14,8 +14,8 @@
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
 - [x] Gradient Accumulation and how to do it in Lightning
-- [ ] Make optimiser fused dependent on cuda availability
-- [ ] Regularise only 2D parameters with weight decay
+- [x] Make optimiser fused dependent on cuda availability
+- [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 - [ ] Codebook Weight Initialisation
 - [ ] Implement code usage monitor
 
