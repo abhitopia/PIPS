@@ -526,15 +526,7 @@ def train(
     pl.seed_everything(seed, workers=True)
     torch.set_float32_matmul_precision('high')
 
-    # Initialize the model
-    model = DVAETrainingModule(
-        experiment_config,
-        compile_model=compile_model
-    )
-
-    # Load weights if a model source is specified
-    if experiment_config.model_src:
-        load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
+   
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
@@ -564,6 +556,7 @@ def train(
         # precision="16-mixed",
         # precision="bf16",   #2.2M
         precision="32-true",  #6.1M
+        # precision="bf16-true", #~5.5M
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
@@ -614,6 +607,17 @@ def train(
         fig.savefig(output_file)
         plt.show()
         return
+
+    with trainer.init_module():
+         # Initialize the model
+        model = DVAETrainingModule(
+            experiment_config,
+            compile_model=compile_model
+        )
+
+        # Load weights if a model source is specified
+        if experiment_config.model_src:
+            load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
 
     trainer.fit(
         model, 
