@@ -113,7 +113,7 @@ def process_grid_loader(loader, output_file):
     np.save(output_file, combined_data)
     logger.info(f"Saved {valid_grid_count} valid grids to {output_file} for {loader.name}")
 
-def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
+def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache', verbose=False):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Sort loaders by name
@@ -142,7 +142,8 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
         all_data = []
 
-        logger.info(f"Saving grid data to cache...")
+        if verbose:
+            logger.info(f"Saving grid data to cache...")
         for loader_name, output_file in output_files.items():
             assert output_file.exists(), f"Output file for {loader_name} does not exist"
             data = np.load(output_file, mmap_mode='r')
@@ -152,7 +153,8 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 
         np.save(unified_file, all_data)
     else:
-        logger.info(f"Loading grid data from cache...")
+        if verbose:
+            logger.info(f"Loading grid data from cache...")
         all_data = np.load(unified_file, mmap_mode='r')
 
     return all_data
@@ -164,17 +166,34 @@ class GRID_INPUT(NamedTuple):
 
 class GridDataset(Dataset):
     def __init__(self, train: bool = True, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
-        # Load the data using the existing function
+        self.train = train
+        self.cache_dir = cache_dir
+        self.data = None
+        
+        # Store the length in a class variable (shared across all instances)
+        if not hasattr(GridDataset, '_shared_length'):
+            # Quick load just to get length using memory mapping
+            loaders = TRAIN_GRID_LOADERS if train else VAL_GRID_LOADERS
+            temp_data = load_grid_loaders(loaders, cache_dir, verbose=True)
+            GridDataset._shared_length = len(temp_data)
+            del temp_data  # Clean up the temporary mapping
 
-        loaders = TRAIN_GRID_LOADERS if train else VAL_GRID_LOADERS
-        self.data = load_grid_loaders(loaders, cache_dir)
+    def _initialize_data(self):
+        """Initialize the data for this process"""
+        if self.data is None:
+            loaders = TRAIN_GRID_LOADERS if self.train else VAL_GRID_LOADERS
+            self.data = load_grid_loaders(loaders, self.cache_dir)
+            self._shared_length = len(self.data)
+            # print(f"Initialized data with {len(self.data)} grids for {'train' if self.train else 'val'}")
 
     def __len__(self):
-        # Return the number of samples
-        return len(self.data)
+        return self._shared_length
 
     def __getitem__(self, idx):
-        # Retrieve the sample at the given index
+        # Initialize data if not already done
+        if self.data is None:
+            self._initialize_data()
+            
         sample = self.data[idx]
         
         # Extract the original shape
@@ -245,6 +264,15 @@ class GridDataset(Dataset):
 
         return GRID_INPUT(grids=projected_grids, attributes=attributes)
 
+# Update the worker_init_fn to be simpler
+def worker_init_fn(worker_id):
+    """Initialize worker for DataLoader"""
+    # print(f"Initializing worker {worker_id}")
+    worker_info = torch.utils.data.get_worker_info()
+    if worker_info is not None:
+        dataset = worker_info.dataset
+        dataset._initialize_data()  # Initialize data for this worker
+
 if __name__ == '__main__':
     logging.basicConfig(
         level=logging.INFO,
@@ -260,7 +288,8 @@ if __name__ == '__main__':
         batch_size=32,
         shuffle=True,
         collate_fn=lambda x: GridDataset.collate_fn(x, pad_value=15, device='cpu', permute=True),
-        drop_last=False
+        drop_last=False,
+        worker_init_fn=worker_init_fn
     )
 
     # Iterate over the DataLoader

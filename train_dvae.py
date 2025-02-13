@@ -14,7 +14,7 @@ from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
-from pips.grid_dataset import GridDataset
+from pips.grid_dataset import GridDataset, worker_init_fn
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.misc.artifact import Artifact
 from pips.utils import generate_friendly_name
@@ -446,7 +446,9 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         batch_size=batch_size, 
         collate_fn=collate_fn_train,
         shuffle=True, 
-        num_workers=0 if debug_mode else 0
+        num_workers=4,
+        persistent_workers=not debug_mode,
+        worker_init_fn=worker_init_fn
     )
 
     # Create validation dataloader
@@ -457,8 +459,9 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         batch_size=batch_size,
         collate_fn=collate_fn_val,
         shuffle=False, 
-        num_workers=0 if debug_mode else 4,
-        persistent_workers=not debug_mode
+        num_workers=4,
+        persistent_workers=not debug_mode,
+        worker_init_fn=worker_init_fn
     )
 
     print("Number of batches in training set: ", len(train_loader))
