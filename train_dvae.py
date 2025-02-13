@@ -560,6 +560,10 @@ def train(
         num_sanity_val_steps=0,
         enable_progress_bar=True,
         accelerator="gpu" if torch.cuda.is_available() else "cpu",
+        # precision="bf16-mixed",
+        # precision="16-mixed",
+        # precision="bf16",   #2.2M
+        precision="32-true",  #6.1M
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
