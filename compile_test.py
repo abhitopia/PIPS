@@ -18,7 +18,7 @@ class MinimalDVAEModule(pl.LightningModule):
         self.automatic_optimization = False  # We'll handle optimization manually for testing
         self.register_buffer('q_z_marg', None, persistent=True)
         
-    def forward(self, x, train=True):
+    def forward(self, x, q_z_marg=None, train=True):
         # Fixed parameters for testing
         reinMax = True
         tau = 0.9
@@ -30,10 +30,10 @@ class MinimalDVAEModule(pl.LightningModule):
             max_mask_pct = 0.5  # Fixed value for testing
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
-        # Forward pass with q_z_marg
+        # Forward pass with provided q_z_marg
         logits, reconstruction_loss, kld_losses, updated_q_z_marg = self.model.forward(
             x, 
-            q_z_marg=self.q_z_marg,
+            q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
@@ -86,7 +86,7 @@ class MinimalDVAEModule(pl.LightningModule):
             'acc_no_pad': acc_no_pad.detach(),
             'sample_accuracy': sample_accuracy.detach(),
             'logits': logits
-        }
+        }, updated_q_z_marg
     
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=1e-4)
@@ -132,7 +132,9 @@ def test_dvae_compile():
     print("Running first forward pass...")
     try:
         # First forward pass (includes compilation)
-        outputs = model(x)
+        q_z_marg = None
+        outputs, q_z_marg = model(x, q_z_marg=q_z_marg)
+        
         print("First forward pass successful!")
         print("\nOutputs:")
         for k, v in outputs.items():
@@ -157,12 +159,16 @@ def test_dvae_compile():
         print(f"\nRunning timing test for {num_iters} iterations...")
         
         def run_benchmark(include_backward=True, include_optimize=True):
+            # Initialize q_z_marg as None - it will be updated during iterations
+            
             # Warmup
             for _ in range(3):
-                # Create new random input with requires_grad=False
                 x = torch.randint(0, config.n_vocab, (batch_size, seq_length), 
                                  device=device, requires_grad=False)
-                outputs = model(x)
+                outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
+                # Update q_z_marg for next iteration
+                model.q_z_marg = q_z_marg
+                
                 if include_backward:
                     loss = outputs['loss']
                     loss.backward()
@@ -178,22 +184,19 @@ def test_dvae_compile():
             start_time = time.perf_counter()
             
             for i in range(num_iters):
-                # Create new random input with requires_grad=False
                 x = torch.randint(0, config.n_vocab, (batch_size, seq_length), 
                                  device=device, requires_grad=False)
                 
-                # Forward pass
-                outputs = model(x)
+                # Forward pass with current q_z_marg
+                outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
+                model.q_z_marg = q_z_marg
                 
                 if include_backward:
                     loss = outputs['loss']
-                    # Backward pass
                     loss.backward()
                     
                     if include_optimize:
-                        # Gradient clipping
                         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                        # Optimizer step and zero grad
                         optimizer.step()
                         optimizer.zero_grad()
             
