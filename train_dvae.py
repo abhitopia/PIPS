@@ -204,14 +204,32 @@ class DVAETrainingModule(pl.LightningModule):
         super(DVAETrainingModule, self).__init__()
         self.experiment_config = experiment_config
         self.model_config = experiment_config.model_config
-        self.model = self.build_model()
+        self.model = None
         self.learning_rate = experiment_config.learning_rate
         self.save_hyperparameters()
         self.register_buffer('q_z_marg', None, persistent=True)
+    
+    def configure_model(self):
+        """
+        Compile the model after device placement.
+        This gets called in on_fit_start so that the model is already on GPU.
+        """
+        if self.model is not None:
+            return
 
-
-    def build_model(self):
-        return GridDVAE(self.model_config)
+        self.model = GridDVAE(self.model_config)
+        if torch.cuda.is_available():
+            print("Compiling model using torch.compile on CUDA within configure_model...")
+            # model_device = next(model.parameters()).device.type
+            # assert model_device == "cuda", "Model is not on CUDA"
+            self.model = torch.compile(
+                self.model,
+                fullgraph=True,
+                mode="reduce-overhead",
+                backend="inductor"
+            )
+        else:
+            print("CUDA is not available; skipping torch.compile.")
 
     def get_scheduled_values(self, step: int) -> Dict[str, float]:
         """Returns all scheduled values for the current step."""
@@ -514,16 +532,6 @@ def train(
     # Load weights if a model source is specified
     if experiment_config.model_src:
         load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
-    
-    # Determine whether to compile the model:
-    # If not explicitly provided, default to compiling when a GPU is available.
-    if compile_model is None:
-        compile_model = torch.cuda.is_available()
-        
-    if compile_model:
-        print("Compiling model using torch.compile...")
-        model = torch.compile(model, fullgraph=True, mode="reduce-overhead")
-    
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
 
