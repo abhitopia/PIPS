@@ -46,15 +46,21 @@ class LoggingCallback(pl.Callback):
             elapsed_time = time.monotonic() - start_time
             x, _ = batch
             num_tokens = x.size(0) * x.size(1)  # batch_size * tokens_per_batch
-            return num_tokens / elapsed_time if elapsed_time > 0 else 0
-        return 0
+            tokens_per_sec = num_tokens / elapsed_time if elapsed_time > 0 else 0
+            time_per_batch_ms = elapsed_time * 1000  # Convert to milliseconds
+            return tokens_per_sec, time_per_batch_ms
+        return 0, 0
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()  # Wait for GPU operations to finish
+
         # Calculate tokens per second for the training batch
         if self.train_batch_start_time is not None:
-            tokens_per_sec = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
-            print(f"[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
+            print(f"[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
+            outputs['Δ_ms'] = time_per_batch_ms
         
         # Log the current learning rate
         current_lr = trainer.optimizers[0].param_groups[0]['lr']
@@ -68,11 +74,14 @@ class LoggingCallback(pl.Callback):
         self.val_batch_start_time = time.monotonic()
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()  # Wait for GPU operations to finish
         # Calculate tokens per second for the validation batch
         if self.val_batch_start_time is not None:
-            tokens_per_sec = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
-            print(f"[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f}")
+            tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
+            print(f"[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
+            outputs['Δ_ms'] = time_per_batch_ms
         
         # Log loss metrics using the helper method
         self._log_metrics(pl_module, 'val', outputs, batch[0].size(0), on_step=False, on_epoch=True)
@@ -385,7 +394,8 @@ class DVAETrainingModule(pl.LightningModule):
         optimizer = AdamW(
             self.parameters(),
             lr=self.learning_rate,
-            weight_decay=self.experiment_config.weight_decay
+            weight_decay=self.experiment_config.weight_decay,
+            fused=True
         )
         
         # Noam scheduler with linear warmup and cosine decay
@@ -555,8 +565,8 @@ def train(
         # precision="bf16-mixed",
         # precision="16-mixed",
         # precision="bf16",   #2.2M
-        precision="32-true",  #6.1M
-        # precision="bf16-true", #~5.5M
+        # precision="32-true",  #6.1M
+        precision="bf16-true", #~5.5M
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
