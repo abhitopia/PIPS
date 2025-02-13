@@ -14,6 +14,8 @@
 - [x] Move ProjectSize to Model Config
 - [x] Make gradient clipping specified in the experiment config
 - [x] Gradient Accumulation and how to do it in Lightning
+- [ ] Make optimiser fused dependent on cuda availability
+- [ ] Regularise only 2D parameters with weight decay
 - [ ] Codebook Weight Initialisation
 - [ ] Implement code usage monitor
 
@@ -70,11 +72,12 @@
 - [x] Generate multiple inputs for test_compile.py and set requires_grad to False for the inputs.
 - [x] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
     - L40: BS: 32 -> 1.5M (compile) and 56k (no compile)
+- [ ] Add precision etc a parameter in the experiment config
+- [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
 - [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
 - [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html
-- [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
 - [ ] Optimise training for speed
 
 ## Grokking
