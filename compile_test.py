@@ -16,6 +16,7 @@ class MinimalDVAEModule(pl.LightningModule):
         self.model = GridDVAE(config)
         self.padding_idx = config.n_vocab - 1
         self.automatic_optimization = False  # We'll handle optimization manually for testing
+        self.register_buffer('q_z_marg', None, persistent=True)
         
     def forward(self, x, train=True):
         # Fixed parameters for testing
@@ -29,14 +30,18 @@ class MinimalDVAEModule(pl.LightningModule):
             max_mask_pct = 0.5  # Fixed value for testing
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
-        # Forward pass
-        logits, reconstruction_loss, kld_losses = self.model.forward(
+        # Forward pass with q_z_marg
+        logits, reconstruction_loss, kld_losses, updated_q_z_marg = self.model.forward(
             x, 
+            q_z_marg=self.q_z_marg,
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
             tau=tau
         )
+
+        # Update the global q_z_marg estimate
+        self.q_z_marg = updated_q_z_marg
 
         # Calculate accuracies
         predictions = logits.argmax(dim=-1)
@@ -83,46 +88,6 @@ class MinimalDVAEModule(pl.LightningModule):
             'logits': logits
         }
     
-    def compute_loss(self, batch: torch.Tensor) -> torch.Tensor:
-        outputs = self.forward(batch)
-        total_loss = outputs['loss']
-        return total_loss
-    
-    def training_step(self, batch: torch.Tensor, batch_idx: int) -> torch.Tensor:
-        loss = self.compute_loss(batch)
-        
-        # Retrieve optimizer(s)
-        optimizers = self.optimizers()
-        if isinstance(optimizers, list):
-            for opt in optimizers:
-                opt.zero_grad()
-        else:
-            optimizers.zero_grad()
-        
-        # Instead of calling self.manual_backward(loss) directly,
-        # check if self.trainer is attached and its lightning_module is not None.
-        if not self.trainer or self.trainer.lightning_module is None:
-            # Fallback for testing without a fully attached trainer.
-            loss.backward()
-        else:
-            self.manual_backward(loss)
-        
-        # Perform optimizer step(s)
-        if isinstance(optimizers, list):
-            for opt in optimizers:
-                opt.step()
-        else:
-            optimizers.step()
-        
-        self.log("train_loss", loss)
-        return loss
-    
-    def validation_step(self, batch, batch_idx):
-        x = batch
-        outputs = self(x, train=False)
-        self.log_dict({f"val_{k}": v for k, v in outputs.items() if k != 'logits'})
-        return outputs['loss']
-    
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=1e-4)
         return optimizer
@@ -162,7 +127,7 @@ def test_dvae_compile():
     # Create a minimal batch
     batch_size = 2
     seq_length = config.max_grid_height * config.max_grid_width  # Should be 1024
-    x = torch.randint(0, config.n_vocab, (batch_size, seq_length), device=device)
+    x = torch.randint(0, config.n_vocab, (batch_size, seq_length), device=device, requires_grad=False)
     
     print("Running first forward pass...")
     try:
@@ -194,6 +159,9 @@ def test_dvae_compile():
         def run_benchmark(include_backward=True, include_optimize=True):
             # Warmup
             for _ in range(3):
+                # Create new random input with requires_grad=False
+                x = torch.randint(0, config.n_vocab, (batch_size, seq_length), 
+                                 device=device, requires_grad=False)
                 outputs = model(x)
                 if include_backward:
                     loss = outputs['loss']
@@ -210,6 +178,10 @@ def test_dvae_compile():
             start_time = time.perf_counter()
             
             for i in range(num_iters):
+                # Create new random input with requires_grad=False
+                x = torch.randint(0, config.n_vocab, (batch_size, seq_length), 
+                                 device=device, requires_grad=False)
+                
                 # Forward pass
                 outputs = model(x)
                 
@@ -254,21 +226,6 @@ def test_dvae_compile():
         
         print("\nBenchmark 3: Forward + Backward + Optimize")
         run_benchmark(include_backward=True, include_optimize=True)
-        
-        # # Test training step
-        # print("\nTesting training step...")
-        # # Attach a dummy Lightning Trainer to the module.
-        # dummy_trainer = Trainer(fast_dev_run=True)
-        # model.trainer = dummy_trainer
-
-        # # Now call training_step
-        # loss = model.training_step(x, 0)
-        # print(f"Training step successful! Loss: {loss.item():.4f}")
-        
-        # # Test validation step
-        # print("\nTesting validation step...")
-        # val_loss = model.validation_step(x, 0)
-        # print(f"Validation step successful! Loss: {val_loss.item():.4f}")
         
     except Exception as e:
         print(f"Error during execution: {str(e)}")

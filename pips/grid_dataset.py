@@ -238,7 +238,7 @@ class GridDataset(Dataset):
 
         # Convert the list of numpy arrays to a single numpy array before converting to a tensor
         projected_grids = np.array(projected_grids)
-        projected_grids = torch.tensor(projected_grids, dtype=torch.long).to(device, non_blocking=True)
+        projected_grids = torch.tensor(projected_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
         # Flatten the projected grids to shape BSx(project_size[0] * project_size[1])
         projected_grids = projected_grids.view(projected_grids.size(0), -1)
