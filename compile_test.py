@@ -40,9 +40,6 @@ class MinimalDVAEModule(pl.LightningModule):
             tau=tau
         )
 
-        # Update the global q_z_marg estimate
-        self.q_z_marg = updated_q_z_marg
-
         # Calculate accuracies
         predictions = logits.argmax(dim=-1)
         correct_tokens = (predictions == x).float()
@@ -87,6 +84,13 @@ class MinimalDVAEModule(pl.LightningModule):
             'sample_accuracy': sample_accuracy.detach(),
             'logits': logits
         }, updated_q_z_marg
+
+
+    def step(self, x):
+        outputs, q_z_marg = self.forward(x, q_z_marg=self.q_z_marg)
+        self.q_z_marq = q_z_marg
+        return outputs
+
     
     def configure_optimizers(self):
         optimizer = AdamW(self.parameters(), lr=1e-4)
@@ -125,15 +129,14 @@ def test_dvae_compile():
     )
     
     # Create a minimal batch
-    batch_size = 2
+    batch_size = 4
     seq_length = config.max_grid_height * config.max_grid_width  # Should be 1024
     x = torch.randint(0, config.n_vocab, (batch_size, seq_length), device=device, requires_grad=False)
     
     print("Running first forward pass...")
     try:
         # First forward pass (includes compilation)
-        q_z_marg = None
-        outputs, q_z_marg = model(x, q_z_marg=q_z_marg)
+        outputs = model.step(x)
         
         print("First forward pass successful!")
         print("\nOutputs:")
@@ -165,9 +168,10 @@ def test_dvae_compile():
             for _ in range(3):
                 x = torch.randint(0, config.n_vocab, (batch_size, seq_length), 
                                  device=device, requires_grad=False)
-                outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
+                # outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
+                outputs = model.step(x)
                 # Update q_z_marg for next iteration
-                model.q_z_marg = q_z_marg
+                # model.q_z_marg = q_z_marg
                 
                 if include_backward:
                     loss = outputs['loss']
@@ -188,8 +192,10 @@ def test_dvae_compile():
                                  device=device, requires_grad=False)
                 
                 # Forward pass with current q_z_marg
-                outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
-                model.q_z_marg = q_z_marg
+                # outputs, q_z_marg = model(x, q_z_marg=model.q_z_marg)
+                # model.q_z_marg = q_z_marg
+
+                outputs = model.step(x)
                 
                 if include_backward:
                     loss = outputs['loss']
