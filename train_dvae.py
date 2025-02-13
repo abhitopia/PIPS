@@ -200,12 +200,13 @@ class ExperimentConfig:
             raise ValueError(f"Checkpoint doesn't contain valid config: {e}")
 
 class DVAETrainingModule(pl.LightningModule):
-    def __init__(self, experiment_config: ExperimentConfig):
+    def __init__(self, experiment_config: ExperimentConfig, compile_model: bool = False):
         super(DVAETrainingModule, self).__init__()
         self.experiment_config = experiment_config
         self.model_config = experiment_config.model_config
         self.model = None
         self.learning_rate = experiment_config.learning_rate
+        self.compile_model = compile_model
         self.save_hyperparameters()
         self.register_buffer('q_z_marg', None, persistent=True)
     
@@ -218,10 +219,9 @@ class DVAETrainingModule(pl.LightningModule):
             return
 
         self.model = GridDVAE(self.model_config)
-        if torch.cuda.is_available():
-            print("Compiling model using torch.compile on CUDA within configure_model...")
-            # model_device = next(model.parameters()).device.type
-            # assert model_device == "cuda", "Model is not on CUDA"
+        
+        if self.compile_model:
+            print("Compiling model using torch.compile...")
             self.model = torch.compile(
                 self.model,
                 fullgraph=True,
@@ -229,7 +229,7 @@ class DVAETrainingModule(pl.LightningModule):
                 backend="inductor"
             )
         else:
-            print("CUDA is not available; skipping torch.compile.")
+            print("Model compilation disabled; skipping torch.compile.")
 
     def get_scheduled_values(self, step: int) -> Dict[str, float]:
         """Returns all scheduled values for the current step."""
@@ -517,7 +517,7 @@ def train(
     val_check_interval: int | None = None,
     resume_from: str | None = None,
     lr_find: bool = False,  # Run learning rate finder flag
-    compile_model: bool | None = None,  # New parameter for model compilation
+    compile_model: bool = False
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -527,7 +527,10 @@ def train(
     torch.set_float32_matmul_precision('high')
 
     # Initialize the model
-    model = DVAETrainingModule(experiment_config)
+    model = DVAETrainingModule(
+        experiment_config,
+        compile_model=compile_model
+    )
 
     # Load weights if a model source is specified
     if experiment_config.model_src:

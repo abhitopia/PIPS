@@ -68,7 +68,8 @@
     - L40S: BS: 32 -> 200k
 - [x] Move the q_z_marg to be outside of the module.
 - [x] Generate multiple inputs for test_compile.py and set requires_grad to False for the inputs.
-- [ ] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
+- [x] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
+    - L40: BS: 32 -> 1.5M (compile) and 56k (no compile)
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
 - [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html

@@ -97,8 +97,10 @@ def new(
     lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
     compile_model: bool = typer.Option(
         True,
-        "--compile-model/--no-compile-model",
-        help="Compile model using torch.compile if using GPU. Defaults to True; use --no-compile-model to disable."
+        "--no-compile",
+        help="Disable model compilation if specified",
+        is_flag=True,
+        flag_value=False,
     ),
 ):
     """Train a new DVAE model with specified configuration."""
@@ -171,8 +173,10 @@ def resume(
     debug: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
     compile_model: bool = typer.Option(
         True,
-        "--compile-model/--no-compile-model",
-        help="Compile model using torch.compile if using GPU. Defaults to True; use --no-compile-model to disable."
+        "--no-compile",
+        help="Disable model compilation if specified",
+        is_flag=True,
+        flag_value=False,
     ),
 ):
     """Resume training from a checkpoint."""
