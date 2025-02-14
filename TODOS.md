@@ -56,6 +56,8 @@
 - [x] Add Seeding Everything
 - [x] Make cli.py a cli app
 - [x] Add lr finder CLI command
+- [x] Refactor CLI to use common options
+- [x] Refactor CLI to specify Acceleration Config
 - [ ] Check the Dalle-E Paper for default parameters and schedules
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
@@ -73,7 +75,6 @@
 - [x] Generate multiple inputs for test_compile.py and set requires_grad to False for the inputs.
 - [x] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
     - L40: BS: 32 -> 1.5M (compile) and 56k (no compile)
-- [ ] Add precision etc a parameter in the experiment config
 - [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
 - [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries

@@ -26,6 +26,7 @@ from torch.serialization import add_safe_globals  # Add this import at the top
 import wandb
 import sys
 import matplotlib.pyplot as plt
+from pips.misc.acceleration_config import AccelerationConfig
 
 
 class LoggingCallback(pl.Callback):
@@ -529,16 +530,21 @@ def train(
     debug_logging: bool = True,
     val_check_interval: int | None = None,
     resume_from: str | None = None,
-    lr_find: bool = False,  # Run learning rate finder flag
-    compile_model: bool = False
+    lr_find: bool = False,
+    acceleration: AccelerationConfig | None = None,
 ) -> None:
     """Train a DVAE model with the given configuration."""
+    
+    # Create default acceleration config if none provided
+    if acceleration is None:
+        acceleration = AccelerationConfig()
     
     # Set all random seeds
     seed = experiment_config.seed
     pl.seed_everything(seed, workers=True)
-    torch.set_float32_matmul_precision('high')
-
+    
+    # Apply acceleration settings
+    acceleration.apply_settings()
    
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
@@ -564,12 +570,8 @@ def train(
         log_every_n_steps=1,
         num_sanity_val_steps=0,
         enable_progress_bar=True,
-        accelerator="gpu" if torch.cuda.is_available() else "cpu",
-        # precision="bf16-mixed",
-        # precision="16-mixed",
-        # precision="bf16",   #2.2M
-        # precision="32-true",  #6.1M
-        precision="bf16-true", #~5.5M
+        accelerator=acceleration.device,
+        precision=acceleration.precision,
         devices=1,
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
@@ -622,10 +624,10 @@ def train(
         return
 
     with trainer.init_module():
-         # Initialize the model
+        # Initialize the model
         model = DVAETrainingModule(
             experiment_config,
-            compile_model=compile_model
+            compile_model=acceleration.compile_model  # Use compile setting from acceleration config
         )
 
         # Load weights if a model source is specified
