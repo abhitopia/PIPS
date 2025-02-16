@@ -28,7 +28,7 @@
     - [x] Batch Size 512 (I will use 8 GPUs so larger batch size is possible)
 - [x] Fix the losses, remove them from betas
 - [x] Scale the KLD loss by the one over number of latents
-- [ ] Make relu to kld losses optional parameter
+- [x] Make relu to kld losses optional parameter
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 
 

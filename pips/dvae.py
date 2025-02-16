@@ -755,7 +755,7 @@ class GridDVAE(nn.Module):
         code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
 
         # Compute the KL disentanglement loss with the provided q_z_marg
-        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg)
+        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=False)
 
         # Compute the reconstruction loss
         decoded_logits = self.decode(code)
@@ -779,7 +779,7 @@ class GridDVAE(nn.Module):
         return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1), reduction='sum') / x.size(0)
     
 
-    def kld_disentanglement_loss(self, q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8):
+    def kld_disentanglement_loss(self, q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
         """
         The Beta-TCVAE paper(https://arxiv.org/pdf/1802.04942) splits the KLD term as
 
@@ -894,8 +894,9 @@ class GridDVAE(nn.Module):
                 N = number of discrete latent codes,
                 C = codebook size.
             q_z_marg: Optional tensor of shape (N, C) containing the running estimate of q(z)
-            momentum (float): The decay rate for the EMA; typical values are near 0.99.
-            eps (float): A small constant for numerical stability.
+            momentum (float): The decay rate for the EMA; typical values are near 0.99
+            eps (float): A small constant for numerical stability
+            apply_relu (bool): Whether to apply ReLU to ensure non-negative losses
 
         Returns:
             Tuple containing:
@@ -990,11 +991,15 @@ class GridDVAE(nn.Module):
         # -----------------------------------------------
         # Return the computed losses (averaged per sample over batch) and the updated running aggregated posterior.
         # -----------------------------------------------
+        # Helper function to conditionally apply ReLU
+        def maybe_relu(x):
+            return F.relu(x) if apply_relu else x
+
         return {
-            "mi_loss": F.relu(mi_batch.mean()), 
-            "dwkl_loss": F.relu(dwkl_batch.mean()), 
-            "tc_loss": F.relu(tc_batch.mean()), 
-            "kl_loss": F.relu(full_kl_batch.mean())
+            "mi_loss": maybe_relu(mi_batch.mean()), 
+            "dwkl_loss": maybe_relu(dwkl_batch.mean()), 
+            "tc_loss": maybe_relu(tc_batch.mean()), 
+            "kl_loss": maybe_relu(full_kl_batch.mean())
         }, q_z_marginal_detached
 
 
