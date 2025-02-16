@@ -396,6 +396,8 @@ class DVAETrainingModule(pl.LightningModule):
         optimizer = AdamW(
             self.parameters(),
             lr=self.learning_rate,
+            betas=(0.9, 0.999),
+            eps=1e-8,
             weight_decay=self.experiment_config.weight_decay,
             fused=True if torch.cuda.is_available() else False
         )
