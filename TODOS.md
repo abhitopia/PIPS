@@ -57,7 +57,7 @@
 - [x] Monitor learning rate
 - [x] Implement Token Accuracy and Sample Accuracy 
 - [x] Non EOS token accuracy as well for validation
-- [ ] Rename Accuracy logs
+- [x] Rename Accuracy logs
 - [ ] Log learning rate
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor

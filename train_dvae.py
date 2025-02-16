@@ -101,8 +101,10 @@ class LoggingCallback(pl.Callback):
                 category = key.split('(')[-1].split(')')[0]  # Extract category
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['hard', 'tau', 'beta', 'mask_pct']:
+            elif key in ['hard', 'tau', 'beta', 'mask_pct', 'max_mask_pct']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
+            elif key in ['tokens_per_sec', 'Δ_ms']:
+                metric_name = f'Throughput/{key}_{phase}'
             # Handle any remaining metrics
             elif key.strip():
                 metric_name = f'{key.capitalize()}/{key}_{phase}'
@@ -383,9 +385,9 @@ class DVAETrainingModule(pl.LightningModule):
             **{k: v.detach() for k, v in raw_losses.items()},  # Log raw losses
             **{k: v for k, v in scheduled_values.items()},
             'mask_pct': mask_pct,
-            'token_accuracy': token_accuracy.detach(),
-            'acc_no_pad': acc_no_pad.detach(),
-            'sample_accuracy': sample_accuracy.detach()
+            'accuracy(TOKENS)': token_accuracy.detach(),
+            'accuracy_no_pad(TOKENS)': acc_no_pad.detach(),
+            'accuracy(SAMPLES)': sample_accuracy.detach()
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
