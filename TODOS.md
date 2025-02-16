@@ -16,6 +16,8 @@
 - [x] Gradient Accumulation and how to do it in Lightning
 - [x] Make optimiser fused dependent on cuda availability
 - [x] Make the dataloader work with workrs > 0 faster
+- [x] Update CLI defaults
+- [x] Update ExperimentConfig defaults
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 
 

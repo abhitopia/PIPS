@@ -120,7 +120,7 @@ class ExperimentConfig:
     seed: int | None = None  # None means random seed
     
     # Sampling parameters
-    hard_from: int | None = 0  # None: after warmup, 0: always hard, >0: after specific step
+    hard_from: int | None = None  # None: after warmup, 0: always hard, >0: after specific step
     reinMax: bool = True
 
     # Initial values
@@ -132,10 +132,10 @@ class ExperimentConfig:
     initial_beta_kl: float = 0.0  # Add initial beta for KL
     
     # Target values
-    target_beta_mi: float = 1.0
-    target_beta_tc: float = 1.0
-    target_beta_dwkl: float = 1.0
-    target_beta_kl: float = 1.0   # Add target beta for KL
+    target_beta_mi: float = 0.0
+    target_beta_tc: float = 6.0
+    target_beta_dwkl: float = 0.0
+    target_beta_kl: float = 2.0   # Add target beta for KL
     
     # Schedule parameters
     warmup_steps: int = 10000
@@ -143,7 +143,7 @@ class ExperimentConfig:
     beta_schedule_type: str = 'cosine_anneal'
     
     # Training parameters
-    batch_size: int = 4
+    batch_size: int = 64
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
     max_steps: int = 1000000
@@ -152,7 +152,7 @@ class ExperimentConfig:
 
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
-    mask_schedule_type: str = 'linear'
+    mask_schedule_type: str = 'cosine_anneal'
 
     padding_idx: int | None = None
 
