@@ -358,19 +358,28 @@ class DVAETrainingModule(pl.LightningModule):
         reconstruction_loss = reconstruction_loss / x.size(1) # Normalize by number of tokens
 
         # Compute total loss in a way that maintains the computational graph
-        loss_components = {
+        raw_losses = {
             'loss(CE)': reconstruction_loss,
-            'loss(MI)': kld_losses['mi_loss'] * scheduled_values['beta(MI)'],
-            'loss(DWKL)': kld_losses['dwkl_loss'] * scheduled_values['beta(DWKL)'],
-            'loss(TC)': kld_losses['tc_loss'] * scheduled_values['beta(TC)'],
-            'loss(KL)': kld_losses['kl_loss'] * scheduled_values['beta(KL)']  # Add KL loss component
+            'loss(MI)': kld_losses['mi_loss'],
+            'loss(DWKL)': kld_losses['dwkl_loss'],
+            'loss(TC)': kld_losses['tc_loss'],
+            'loss(KL)': kld_losses['kl_loss']
         }
         
-        total_loss = sum(loss_components.values())
+        # Compute weighted losses for total loss
+        weighted_losses = {
+            'loss(CE)': raw_losses['loss(CE)'],
+            'loss(MI)': raw_losses['loss(MI)'] * scheduled_values['beta(MI)'],
+            'loss(DWKL)': raw_losses['loss(DWKL)'] * scheduled_values['beta(DWKL)'],
+            'loss(TC)': raw_losses['loss(TC)'] * scheduled_values['beta(TC)'],
+            'loss(KL)': raw_losses['loss(KL)'] * scheduled_values['beta(KL)']
+        }
+        
+        total_loss = sum(weighted_losses.values())
 
         return {
             'loss': total_loss,
-            **{k: v.detach() for k, v in loss_components.items()},
+            **{k: v.detach() for k, v in raw_losses.items()},  # Log raw losses
             **{k: v for k, v in scheduled_values.items()},
             'mask_pct': mask_pct,
             'token_accuracy': token_accuracy.detach(),

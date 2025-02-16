@@ -26,8 +26,9 @@
     - [x] Temperature warmup over 150_000 steps. Cosine anneal
     - [x] Total 3M steps, per GPU batch size 8, multi-gpu batchsize 512 (I will use 1M steps)
     - [x] Batch Size 512 (I will use 8 GPUs so larger batch size is possible)
-- [ ] Fix the losses, remove them from betas
+- [x] Fix the losses, remove them from betas
 - [ ] Rename parameters
+- [ ] Scale the KLD loss by the number of latents x codebook size
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 
 
