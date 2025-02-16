@@ -182,8 +182,6 @@ def new(
         compile_model=compile_model
     )
     
-    print("Abhishek")
-
     # Create fresh config with CLI parameters
     model_config = GridDVAEConfig(
         n_dim=n_dim,

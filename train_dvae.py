@@ -59,7 +59,7 @@ class LoggingCallback(pl.Callback):
         # Calculate tokens per second for the training batch
         if self.train_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
-            print(f"[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
+            print(f"\n[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
             outputs['Δ_ms'] = time_per_batch_ms
         
@@ -80,7 +80,7 @@ class LoggingCallback(pl.Callback):
         # Calculate tokens per second for the validation batch
         if self.val_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
-            print(f"[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
+            print(f"\n[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
             outputs['Δ_ms'] = time_per_batch_ms
         
@@ -572,7 +572,7 @@ def train(
         enable_progress_bar=True,
         accelerator=acceleration.device,
         precision=acceleration.precision,
-        devices=1,
+        devices='auto',
         logger=wandb_logger,
         gradient_clip_val=experiment_config.gradient_clip_val,
         accumulate_grad_batches=experiment_config.accumulate_grad_batches,

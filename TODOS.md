@@ -75,12 +75,13 @@
 - [x] Generate multiple inputs for test_compile.py and set requires_grad to False for the inputs.
 - [x] [torch.compile](https://lightning.ai/docs/pytorch/stable/advanced/compile.html#apply-torch-compile-to-your-lightningmodule)
     - L40: BS: 32 -> 1.5M (compile) and 56k (no compile)
+- [x] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
+- [x] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
+- [x] Optimise training for speed
+- [x] Multi-GPU training
 - [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
-- [ ] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
-- [ ] N-bit precision https://lightning.ai/docs/pytorch/stable/common/precision.html
 - [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html
-- [ ] Optimise training for speed
 
 ## Grokking
 - [ ] Implement Orthograd Optimizer
