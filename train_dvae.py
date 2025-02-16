@@ -107,7 +107,8 @@ class LoggingCallback(pl.Callback):
             elif key.strip():
                 metric_name = f'{key.capitalize()}/{key}_{phase}'
             
-            pl_module.log(metric_name, float(value), on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True)
+            sync_dist = False if phase == 'train' else True
+            pl_module.log(metric_name, float(value), on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True, sync_dist=sync_dist)
 
 @dataclass
 class ExperimentConfig:

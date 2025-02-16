@@ -17,8 +17,7 @@
 - [x] Make optimiser fused dependent on cuda availability
 - [x] Make the dataloader work with workrs > 0 faster
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
-- [ ] Codebook Weight Initialisation
-- [ ] Implement code usage monitor
+
 
 ## Checkpointing
 - [x] Implement Checkpointing
@@ -48,6 +47,7 @@
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
 - [ ] Implement input/output token accuracy
+- [ ] Implement code usage monitor
 
 
 ## CLI
@@ -79,6 +79,7 @@
 - [x] https://lightning.ai/docs/pytorch/stable/accelerators/accelerator_prepare.html
 - [x] Optimise training for speed
 - [x] Multi-GPU training
+- [x] Add dist log sync for validation
 - [ ] Use multiple threads on dataloader using sharing datasets across process boundaries
 - [ ] https://lightning.ai/docs/pytorch/stable/advanced/training_tricks.html#sharing-datasets-across-process-boundaries
 - [ ] Profile https://lightning.ai/docs/pytorch/stable/tuning/profiler.html
@@ -95,7 +96,9 @@
 - [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)
 - [ ] Positional Embedding may be needed on top of the encoder output because all the latents come from the same codebook (Should not be needed as queries in pooler should double up as positional encodings)
 - [ ] Codebook regularization (to bound it) (This can be done by adding weight decay to start with)
+- [ ] Codebook Weight Initialisation
 - [ ] Add evaluate CLI command
+
 
 ## Later
 - [ ] Exponential Weighted Iterate Average for parameters (May be already in Pytorch Lightning) (Will use SWA instead)
