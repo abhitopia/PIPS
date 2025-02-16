@@ -18,13 +18,16 @@
 - [x] Make the dataloader work with workrs > 0 faster
 - [x] Update CLI defaults
 - [x] Update ExperimentConfig defaults
-- [ ] Check the Dalle-E Paper for default parameters and schedules
+- [x] Check the Dalle-E Paper for default parameters and schedules
     - [x] AdamW b1 0.9, b2 0.999, eps 1e-8
-    - [ ] Batch Size 512
-    - [ ] KL Beta 0 to 6.6 Warmup 5000 steps
-    - [ ] Learning Rate 1e-4 -> 1.125e-6  over 1.2M steps 
-    - [ ] Temperature from 1.0 - > 1/16 (0.0625) over 150_000 steps. Cosine anneal
-    - [ ] Total 3M steps, per GPU batch size 8, multi-gpu batchsize 512 
+    - [x] KL Beta 0 to 6.6 Warmup 5000 steps (I use 10_000)
+    - [x] Learning Rate 1e-4 -> 1.125e-6  over 1.2M steps (I will set the min LR to 0.01, approx /100 of the max LR)
+    - [x] Temperature from 1.0 - > 1/16 (0.0625) 
+    - [x] Temperature warmup over 150_000 steps. Cosine anneal
+    - [x] Total 3M steps, per GPU batch size 8, multi-gpu batchsize 512 (I will use 1M steps)
+    - [x] Batch Size 512 (I will use 8 GPUs so larger batch size is possible)
+- [ ] Fix the losses, remove them from betas
+- [ ] Rename parameters
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 
 

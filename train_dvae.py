@@ -125,42 +125,46 @@ class ExperimentConfig:
 
     # Initial values
     initial_tau: float = 0.9
-    min_tau: float = 0.1
+    min_tau: float = 0.0625 # 1/16 as per Dalle-E paper
     initial_beta_mi: float = 0.0
     initial_beta_tc: float = 0.0
     initial_beta_dwkl: float = 0.0
-    initial_beta_kl: float = 0.0  # Add initial beta for KL
+    initial_beta_kl: float = 0.0
     
     # Target values
     target_beta_mi: float = 0.0
     target_beta_tc: float = 6.0
     target_beta_dwkl: float = 0.0
-    target_beta_kl: float = 2.0   # Add target beta for KL
+    target_beta_kl: float = 2.0
     
-    # Schedule parameters
-    warmup_steps: int = 10000
+    # Schedule types
     tau_schedule_type: str = 'cosine_decay'
     beta_schedule_type: str = 'cosine_anneal'
+    
+    # Replace single warmup_steps with separate warmups
+    warmup_steps_lr: int = 10_000
+    warmup_steps_tau: int = 150_000
+    warmup_steps_beta: int = 10_000
     
     # Training parameters
     batch_size: int = 64
     learning_rate: float = 1e-3
     weight_decay: float = 0.01
-    max_steps: int = 1000000
+    max_steps: int = 1_000_000
     gradient_clip_val: float = 1.0
-    accumulate_grad_batches: int = 1  # Add this parameter
+    accumulate_grad_batches: int = 1
 
     # Add max_mask_pct parameter
-    max_mask_pct: float = 0.5  # Maximum masking percentage to reach during training
+    max_mask_pct: float = 0.5
     mask_schedule_type: str = 'cosine_anneal'
 
     padding_idx: int | None = None
 
-    model_src: str | None = None  # Add model_src attribute
+    model_src: str | None = None
 
     def __post_init__(self):
         if self.hard_from is None:
-            self.hard_from = self.warmup_steps
+            self.hard_from = self.warmup_steps_lr # Use LR warmup for hard schedule
         elif self.hard_from < 0:
             raise ValueError("hard_from must be None, 0, or a positive integer")
         
@@ -251,71 +255,70 @@ class DVAETrainingModule(pl.LightningModule):
             initial_value=False,
             target_value=True,
             warmup_steps=cfg.hard_from,
-            schedule_type='threshold'  # Immediate step from 0 to 1 at warmup_steps
+            schedule_type='threshold'
         )
         
-        # Temperature schedule
+        # Temperature schedule with its own warmup
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.initial_tau,
             target_value=cfg.min_tau,
-            warmup_steps=cfg.warmup_steps,
+            warmup_steps=cfg.warmup_steps_tau,
             schedule_type=cfg.tau_schedule_type
         )
         
-        # Beta schedules
+        # Beta schedules with shared beta warmup
         beta_mi_schedule = Schedule.get_schedule(
             initial_value=cfg.initial_beta_mi,
             target_value=cfg.target_beta_mi,
-            warmup_steps=cfg.warmup_steps,
+            warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_tc_schedule = Schedule.get_schedule(
             initial_value=cfg.initial_beta_tc,
             target_value=cfg.target_beta_tc,
-            warmup_steps=cfg.warmup_steps,
+            warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_dwkl_schedule = Schedule.get_schedule(
             initial_value=cfg.initial_beta_dwkl,
             target_value=cfg.target_beta_dwkl,
-            warmup_steps=cfg.warmup_steps,
+            warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Add KL beta schedule
         beta_kl_schedule = Schedule.get_schedule(
             initial_value=cfg.initial_beta_kl,
             target_value=cfg.target_beta_kl,
-            warmup_steps=cfg.warmup_steps,
+            warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Add max mask percentage schedule
+        # Add max mask percentage schedule (using beta warmup)
         max_mask_pct_schedule = Schedule.get_schedule(
             initial_value=0.0,
             target_value=cfg.max_mask_pct,
-            warmup_steps=cfg.warmup_steps,
-            schedule_type='cosine_anneal'
+            warmup_steps=cfg.warmup_steps_beta,
+            schedule_type=cfg.mask_schedule_type
         )
         
         return {
-            'hard': hard_schedule(step),  # Convert to boolean
+            'hard': hard_schedule(step),
             'tau': tau_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
             'beta(DWKL)': beta_dwkl_schedule(step),
-            'beta(KL)': beta_kl_schedule(step),  # Add KL beta
+            'beta(KL)': beta_kl_schedule(step),
             'max_mask_pct': max_mask_pct_schedule(step),
         }
 
     def forward(self, x, q_z_marg=None, train=True):
-        reinMax = self.experiment_config.reinMax
         
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hard = scheduled_values['hard']
+        reinMax = self.experiment_config.reinMax and hard
 
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
@@ -402,10 +405,10 @@ class DVAETrainingModule(pl.LightningModule):
             fused=True if torch.cuda.is_available() else False
         )
         
-        # Noam scheduler with linear warmup and cosine decay
+        # Noam scheduler with linear warmup and cosine decay using lr-specific warmup
         def lr_lambda(step):
-            warmup_steps = self.experiment_config.warmup_steps
-            min_lr_factor = 0.01  # Minimum learning rate will be 1% of max lr
+            warmup_steps = self.experiment_config.warmup_steps_lr
+            min_lr_factor = 0.01 # 1/100 of the max LR (Consistent with Dalle-E paper)
             
             if step < warmup_steps:
                 # Linear warmup
@@ -421,7 +424,7 @@ class DVAETrainingModule(pl.LightningModule):
             "optimizer": optimizer,
             "lr_scheduler": {
                 "scheduler": scheduler,
-                "interval": "step",  # Update lr every step
+                "interval": "step",
                 "frequency": 1
             }
         }

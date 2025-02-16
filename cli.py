@@ -133,18 +133,30 @@ def new(
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     
+    # Sampling parameters
+    hard_from: int = typer.Option(
+        None, 
+        "--hard-from", 
+        "--hf",
+        help="When to start hard sampling. None: after LR warmup, 0: always hard, >0: after specific step"
+    ),
+    
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
     learning_rate: float = typer.Option(1e-3, "--learning-rate", "--lr", help="Initial learning rate"),
     weight_decay: float = typer.Option(0.01, "--weight-decay", "--wd", help="AdamW weight decay"),
-    max_steps: int = typer.Option(100000, "--max-steps", "--ms", help="Maximum training steps"),
-    warmup_steps: int = typer.Option(10000, "--warmup-steps", "--ws", help="Learning rate warmup steps"),
+    max_steps: int = typer.Option(1_000_000, "--max-steps", "--ms", help="Maximum training steps"),
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
-    accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches for gradient accumulation"),
+    accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
+    
+    # Split warmup steps into separate parameters
+    warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
+    warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
+    warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
     
     # Regularization parameters
-    initial_tau: float = typer.Option(0.9, "--begin-tau", "--bt", help="Initial temperature for Gumbel-Softmax"),
-    final_tau: float = typer.Option(0.1, "--end-tau", "--et", help="Final temperature for Gumbel-Softmax"),
+    initial_tau: float = typer.Option(1.0, "--begin-tau", "--bt", help="Initial temperature for Gumbel-Softmax"),
+    final_tau: float = typer.Option(0.0625, "--end-tau", "--et", help="Final temperature for Gumbel-Softmax"),
     max_mask_pct: float = typer.Option(0.5, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
     
     # Beta values for loss components
@@ -198,7 +210,8 @@ def new(
     
     config = ExperimentConfig(
         model_config=model_config,
-        model_src=model_src,  # Add model source to config
+        model_src=model_src,
+        hard_from=hard_from,
         initial_tau=initial_tau,
         min_tau=final_tau,
         initial_beta_mi=0.0,
@@ -209,7 +222,9 @@ def new(
         target_beta_tc=target_beta_tc,
         target_beta_dwkl=target_beta_dwkl,
         target_beta_kl=target_beta_kl,
-        warmup_steps=warmup_steps,
+        warmup_steps_lr=warmup_steps_lr,
+        warmup_steps_tau=warmup_steps_tau,
+        warmup_steps_beta=warmup_steps_beta,
         batch_size=batch_size,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
@@ -217,7 +232,7 @@ def new(
         max_mask_pct=max_mask_pct,
         gradient_clip_val=gradient_clip_val,
         accumulate_grad_batches=accumulate_grad_batches,
-        seed=seed,  # Add seed to config
+        seed=seed,
     )
 
     run_name = generate_friendly_name() if run_name is None else run_name
@@ -230,7 +245,7 @@ def new(
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         lr_find=lr_find,
-        acceleration=acceleration,  # Pass the config object instead of individual params
+        acceleration=acceleration,
     )
 
 
@@ -288,7 +303,7 @@ def resume(
         checkpoint_dir=checkpoint_dir,
         debug_mode=debug,
         resume_from=local_checkpoint_path,
-        acceleration=acceleration,  # Pass the config object instead of individual params
+        acceleration=acceleration,
     )
 
 
