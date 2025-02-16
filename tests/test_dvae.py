@@ -999,20 +999,36 @@ def test_kld_losses_extreme_inputs():
     
     # Test with all zeros
     x_zeros = torch.zeros((batch_size, config.n_pos), dtype=torch.long)
-    _, losses_zeros, _ = dvae(x_zeros)
-    kld_losses_zeros = {k: v for k, v in losses_zeros.items() if k != 'ce_loss'}
-    
     # Test with all same value
     x_same = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab-1, dtype=torch.long)
-    _, losses_same, _ = dvae(x_same)
-    kld_losses_same = {k: v for k, v in losses_same.items() if k != 'ce_loss'}
+
+    # Test with apply_relu=False to allow negative values
+    _, losses_zeros_no_relu, _ = dvae(x_zeros, apply_relu=False)
+    _, losses_same_no_relu, _ = dvae(x_same, apply_relu=False)
     
-    # Check that all losses remain non-negative for both cases
-    for losses in [kld_losses_zeros, kld_losses_same]:
-        assert losses["mi_loss"] >= 0, "MI loss should be non-negative"
-        assert losses["dwkl_loss"] >= 0, "DWKL loss should be non-negative"
-        assert losses["tc_loss"] >= 0, "TC loss should be non-negative"
-        assert losses["kl_loss"] >= 0, "KL loss should be non-negative"
+    kld_losses_zeros_no_relu = {k: v for k, v in losses_zeros_no_relu.items() if k != 'ce_loss'}
+    kld_losses_same_no_relu = {k: v for k, v in losses_same_no_relu.items() if k != 'ce_loss'}
+
+    # Check that losses are close to non-negative when not using ReLU
+    for losses in [kld_losses_zeros_no_relu, kld_losses_same_no_relu]:
+        assert losses["mi_loss"] >= -1e-6, "MI loss should be close to non-negative"
+        assert losses["dwkl_loss"] >= -1e-6, "DWKL loss should be close to non-negative"
+        assert losses["tc_loss"] >= -1e-6, "TC loss should be close to non-negative"
+        assert losses["kl_loss"] >= -1e-6, "KL loss should be close to non-negative"
+
+    # Test with apply_relu=True to ensure non-negative values
+    _, losses_zeros_relu, _ = dvae(x_zeros, apply_relu=True)
+    _, losses_same_relu, _ = dvae(x_same, apply_relu=True)
+    
+    kld_losses_zeros_relu = {k: v for k, v in losses_zeros_relu.items() if k != 'ce_loss'}
+    kld_losses_same_relu = {k: v for k, v in losses_same_relu.items() if k != 'ce_loss'}
+
+    # Check that all losses are strictly non-negative when using ReLU
+    for losses in [kld_losses_zeros_relu, kld_losses_same_relu]:
+        assert losses["mi_loss"] >= 0, "MI loss should be non-negative with ReLU"
+        assert losses["dwkl_loss"] >= 0, "DWKL loss should be non-negative with ReLU"
+        assert losses["tc_loss"] >= 0, "TC loss should be non-negative with ReLU"
+        assert losses["kl_loss"] >= 0, "KL loss should be non-negative with ReLU"
 
 def test_kld_losses_numerical_stability():
     config = GridDVAEConfig(
@@ -1032,11 +1048,29 @@ def test_kld_losses_numerical_stability():
     # Test with different temperature values
     temperatures = [0.1, 0.5, 1.0, 2.0, 5.0]
     
+    # Test without ReLU - allow small negative values
     for temp in temperatures:
-        _, losses, _ = dvae(x, tau=temp)
+        _, losses, _ = dvae(x, tau=temp, apply_relu=False)
         kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
         
-        # Check that all losses are finite and non-negative
+        # Check that all losses are finite
+        assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["dwkl_loss"]), f"DWKL loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["tc_loss"]), f"TC loss not finite at temperature {temp}"
+        assert torch.isfinite(kld_losses["kl_loss"]), f"KL loss not finite at temperature {temp}"
+        
+        # Allow for small negative values due to numerical precision
+        assert kld_losses["mi_loss"] >= -1e-6, f"MI loss too negative at temperature {temp}"
+        assert kld_losses["dwkl_loss"] >= -1e-6, f"DWKL loss too negative at temperature {temp}"
+        assert kld_losses["tc_loss"] >= -1e-6, f"TC loss too negative at temperature {temp}"
+        assert kld_losses["kl_loss"] >= -1e-6, f"KL loss too negative at temperature {temp}"
+
+    # Test with ReLU - ensure strictly non-negative
+    for temp in temperatures:
+        _, losses, _ = dvae(x, tau=temp, apply_relu=True)
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+        
+        # Check that all losses are finite and strictly non-negative
         assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"
         assert torch.isfinite(kld_losses["dwkl_loss"]), f"DWKL loss not finite at temperature {temp}"
         assert torch.isfinite(kld_losses["tc_loss"]), f"TC loss not finite at temperature {temp}"

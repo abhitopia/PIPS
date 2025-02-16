@@ -732,7 +732,8 @@ class GridDVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, 
+               mask_percentage: float = 0.0, reinMax: bool = False, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
         """
         Forward pass through the DVAE.
 
@@ -743,6 +744,7 @@ class GridDVAE(nn.Module):
             hard (bool): Whether to use hard or soft Gumbel-Softmax samples
             mask_percentage (float): Percentage of tokens to mask
             reinMax (bool): Whether to use ReinMax sampling
+            apply_relu (bool): Whether to apply ReLU to ensure non-negative losses
 
         Returns:
             Tuple containing:
@@ -755,7 +757,7 @@ class GridDVAE(nn.Module):
         code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
 
         # Compute the KL disentanglement loss with the provided q_z_marg
-        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=False)
+        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=apply_relu)
 
         # Compute the reconstruction loss
         decoded_logits = self.decode(code)

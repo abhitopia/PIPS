@@ -73,8 +73,7 @@
 - [x] Add lr finder CLI command
 - [x] Refactor CLI to use common options
 - [x] Refactor CLI to specify Acceleration Config
-- [ ] Rename parameters
-- [ ] Check Dalle-E paper for how they handle loss component scaling
+- [x] Rename parameters
 
 ## Refactor
 - [ ] Remove pesky warnings

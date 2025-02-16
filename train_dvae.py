@@ -125,19 +125,19 @@ class ExperimentConfig:
     hard_from: int | None = None  # None: after warmup, 0: always hard, >0: after specific step
     reinMax: bool = True
 
-    # Initial values
-    initial_tau: float = 0.9
-    min_tau: float = 0.0625 # 1/16 as per Dalle-E paper
-    initial_beta_mi: float = 0.0
-    initial_beta_tc: float = 0.0
-    initial_beta_dwkl: float = 0.0
-    initial_beta_kl: float = 0.0
+    # Initial values (renamed from initial_*)
+    tau_start: float = 1.0
+    tau: float = 0.0625 # 1/16 as per Dalle-E paper
+    beta_mi_start: float = 0.0
+    beta_tc_start: float = 0.0
+    beta_dwkl_start: float = 0.0
+    beta_kl_start: float = 0.0
     
-    # Target values
-    target_beta_mi: float = 0.0
-    target_beta_tc: float = 6.0
-    target_beta_dwkl: float = 0.0
-    target_beta_kl: float = 2.0
+    # Final values (renamed from target_*)
+    beta_mi: float = 0.0
+    beta_tc: float = 6.0
+    beta_dwkl: float = 0.0
+    beta_kl: float = 2.0
     
     # Schedule types
     tau_schedule_type: str = 'cosine_decay'
@@ -262,37 +262,37 @@ class DVAETrainingModule(pl.LightningModule):
         
         # Temperature schedule with its own warmup
         tau_schedule = Schedule.get_schedule(
-            initial_value=cfg.initial_tau,
-            target_value=cfg.min_tau,
+            initial_value=cfg.tau_start,
+            target_value=cfg.tau,
             warmup_steps=cfg.warmup_steps_tau,
             schedule_type=cfg.tau_schedule_type
         )
         
         # Beta schedules with shared beta warmup
         beta_mi_schedule = Schedule.get_schedule(
-            initial_value=cfg.initial_beta_mi,
-            target_value=cfg.target_beta_mi,
+            initial_value=cfg.beta_mi_start,
+            target_value=cfg.beta_mi,
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_tc_schedule = Schedule.get_schedule(
-            initial_value=cfg.initial_beta_tc,
-            target_value=cfg.target_beta_tc,
+            initial_value=cfg.beta_tc_start,
+            target_value=cfg.beta_tc,
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_dwkl_schedule = Schedule.get_schedule(
-            initial_value=cfg.initial_beta_dwkl,
-            target_value=cfg.target_beta_dwkl,
+            initial_value=cfg.beta_dwkl_start,
+            target_value=cfg.beta_dwkl,
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_kl_schedule = Schedule.get_schedule(
-            initial_value=cfg.initial_beta_kl,
-            target_value=cfg.target_beta_kl,
+            initial_value=cfg.beta_kl_start,
+            target_value=cfg.beta_kl,
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
@@ -312,7 +312,7 @@ class DVAETrainingModule(pl.LightningModule):
             'beta(TC)': beta_tc_schedule(step),
             'beta(DWKL)': beta_dwkl_schedule(step),
             'beta(KL)': beta_kl_schedule(step),
-            'max_mask_pct': max_mask_pct_schedule(step),
+            'max_pct(MASK)': max_mask_pct_schedule(step),
         }
 
     def forward(self, x, q_z_marg=None, train=True):
@@ -325,7 +325,7 @@ class DVAETrainingModule(pl.LightningModule):
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
         if train:
-            max_mask_pct = scheduled_values['max_mask_pct']
+            max_mask_pct = scheduled_values['max_pct(MASK)']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
         # Forward pass with current scheduled values and provided q_z_marg
@@ -384,7 +384,7 @@ class DVAETrainingModule(pl.LightningModule):
             'loss': total_loss,
             **{k: v.detach() for k, v in raw_losses.items()},  # Log raw losses
             **{k: v for k, v in scheduled_values.items()},
-            'mask_pct': mask_pct,
+            'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy_no_pad(TOKENS)': acc_no_pad.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach()
