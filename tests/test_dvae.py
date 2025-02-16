@@ -208,7 +208,10 @@ def test_dvae():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
-    output, reconstruction_loss, kld_losses, q_z_marg = dvae(x)
+    output, losses, q_z_marg = dvae(x)
+    # Access reconstruction loss and kld losses from the losses dictionary
+    reconstruction_loss = losses['ce_loss']
+    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
     
     # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab)
@@ -385,12 +388,12 @@ def test_dvae_forward_with_mask():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with no mask
-    output_no_mask, _, _, q_z_marg = dvae(x, mask_percentage=0.0)
+    output_no_mask, losses, q_z_marg = dvae(x, mask_percentage=0.0)
     assert output_no_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_no_mask.shape}"
 
     # Test forward pass with partial mask
-    output_partial_mask, _, _, _ = dvae(x, mask_percentage=0.5)
+    output_partial_mask, losses, _ = dvae(x, mask_percentage=0.5)
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
@@ -819,7 +822,9 @@ def test_dvae_forward_with_reinmax():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with ReinMax enabled
-    output, reconstruction_loss, kld_losses, q_z_marg = dvae(x, tau=0.9, hard=True, reinMax=True)
+    output, losses, q_z_marg = dvae(x, tau=0.9, hard=True, reinMax=True)
+    reconstruction_loss = losses['ce_loss']
+    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
 
     # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab), \
@@ -965,7 +970,8 @@ def test_kld_losses_non_negative():
     # Run forward pass multiple times with different random inputs
     for _ in range(5):
         x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
-        _, _, kld_losses, _ = dvae(x)
+        _, losses, _ = dvae(x)
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
         
         # Check that all losses are non-negative
         assert kld_losses["mi_loss"] >= 0, "MI loss should be non-negative"
@@ -993,11 +999,13 @@ def test_kld_losses_extreme_inputs():
     
     # Test with all zeros
     x_zeros = torch.zeros((batch_size, config.n_pos), dtype=torch.long)
-    _, _, kld_losses_zeros, _ = dvae(x_zeros)
+    _, losses_zeros, _ = dvae(x_zeros)
+    kld_losses_zeros = {k: v for k, v in losses_zeros.items() if k != 'ce_loss'}
     
     # Test with all same value
     x_same = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab-1, dtype=torch.long)
-    _, _, kld_losses_same, _ = dvae(x_same)
+    _, losses_same, _ = dvae(x_same)
+    kld_losses_same = {k: v for k, v in losses_same.items() if k != 'ce_loss'}
     
     # Check that all losses remain non-negative for both cases
     for losses in [kld_losses_zeros, kld_losses_same]:
@@ -1025,7 +1033,8 @@ def test_kld_losses_numerical_stability():
     temperatures = [0.1, 0.5, 1.0, 2.0, 5.0]
     
     for temp in temperatures:
-        _, _, kld_losses, _ = dvae(x, tau=temp)
+        _, losses, _ = dvae(x, tau=temp)
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
         
         # Check that all losses are finite and non-negative
         assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"

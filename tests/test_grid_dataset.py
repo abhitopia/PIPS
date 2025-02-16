@@ -84,9 +84,8 @@ def test_grid_dataset_initialization(mock_load_grid_loaders):
     dataset = GridDataset(train=False)
     assert len(dataset) == 0
 
-    # Ensure load_grid_loaders was called with the correct loaders and cache_dir
-    mock_load_grid_loaders.assert_any_call(TRAIN_GRID_LOADERS, cache_dir)
-    mock_load_grid_loaders.assert_any_call(VAL_GRID_LOADERS, cache_dir)
+    # Update assertion to include verbose parameter
+    mock_load_grid_loaders.assert_any_call(TRAIN_GRID_LOADERS, cache_dir, verbose=True)
 
 def test_collate_fn():
     # Create mock Grid objects

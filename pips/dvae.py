@@ -732,7 +732,7 @@ class GridDVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
         """
         Forward pass through the DVAE.
 
@@ -747,8 +747,7 @@ class GridDVAE(nn.Module):
         Returns:
             Tuple containing:
             - decoded_logits: Output logits
-            - reconstruction_loss: Reconstruction loss
-            - kld_losses: Dictionary of KL-related losses
+            - losses: Dictionary containing all losses (reconstruction and KL-related)
             - updated_q_z_marg: Updated estimate of marginal q(z)
         """
         # Create a random boolean mask
@@ -760,10 +759,17 @@ class GridDVAE(nn.Module):
 
         # Compute the reconstruction loss
         decoded_logits = self.decode(code)
-        reconstruction_loss = self.reconstruction_loss(decoded_logits, x)
+        ce_loss = self.reconstruction_loss(decoded_logits, x)
 
-        # Return the reconstruction loss, disentanglement losses, and updated q_z_marg
-        return decoded_logits, reconstruction_loss, kld_losses, updated_q_z_marg
+        # Combine all losses into a single dictionary
+        losses = {
+            "ce_loss": ce_loss,
+            **kld_losses  # Unpack KL-related losses
+        }
+
+        # Return the logits, combined losses dictionary, and updated q_z_marg
+        # All returned lossed are averaged over the batch to return per sample losses
+        return decoded_logits, losses, updated_q_z_marg
     
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:

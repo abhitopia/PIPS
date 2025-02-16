@@ -327,7 +327,7 @@ class DVAETrainingModule(pl.LightningModule):
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
         # Forward pass with current scheduled values and provided q_z_marg
-        logits, reconstruction_loss, kld_losses, updated_q_z_marg = self.model.forward(
+        logits, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
@@ -355,15 +355,16 @@ class DVAETrainingModule(pl.LightningModule):
         # Per sample, KLD is computed over number of latent codes (say 16)
         # In practice, we typically compute the ce_loss per token, while keeping the KLD losss using batchmean 
         # (Ref: https://github.com/lucidrains/DALLE-pytorch/blob/58c1e1a4fef10725a79bd45cdb5581c03e3e59e7/dalle_pytorch/dalle_pytorch.py#L261)
-        reconstruction_loss = reconstruction_loss / x.size(1) # Normalize by number of tokens
+        ce_loss = losses['ce_loss'] / x.size(1) # Normalize by number of tokens
 
-        # Compute total loss in a way that maintains the computational graph
+        # Compute total loss in a way that maintains the computational graph.
+        # Scale the KLD losses by the number of latents (similar to Dalle-E paper)
         raw_losses = {
-            'loss(CE)': reconstruction_loss,
-            'loss(MI)': kld_losses['mi_loss'],
-            'loss(DWKL)': kld_losses['dwkl_loss'],
-            'loss(TC)': kld_losses['tc_loss'],
-            'loss(KL)': kld_losses['kl_loss']
+            'loss(CE)': ce_loss,
+            'loss(MI)': losses['mi_loss']/self.model_config.n_codes,
+            'loss(DWKL)': losses['dwkl_loss']/self.model_config.n_codes,
+            'loss(TC)': losses['tc_loss']/self.model_config.n_codes,
+            'loss(KL)': losses['kl_loss']/self.model_config.n_codes
         }
         
         # Compute weighted losses for total loss

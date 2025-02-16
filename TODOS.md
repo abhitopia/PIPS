@@ -27,8 +27,8 @@
     - [x] Total 3M steps, per GPU batch size 8, multi-gpu batchsize 512 (I will use 1M steps)
     - [x] Batch Size 512 (I will use 8 GPUs so larger batch size is possible)
 - [x] Fix the losses, remove them from betas
-- [ ] Rename parameters
-- [ ] Scale the KLD loss by the number of latents x codebook size
+- [x] Scale the KLD loss by the one over number of latents
+- [ ] Make relu to kld losses optional parameter
 - [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
 
 
@@ -57,6 +57,8 @@
 - [x] Monitor learning rate
 - [x] Implement Token Accuracy and Sample Accuracy 
 - [x] Non EOS token accuracy as well for validation
+- [ ] Rename Accuracy logs
+- [ ] Log learning rate
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
 - [ ] Implement input/output token accuracy
@@ -71,6 +73,7 @@
 - [x] Add lr finder CLI command
 - [x] Refactor CLI to use common options
 - [x] Refactor CLI to specify Acceleration Config
+- [ ] Rename parameters
 - [ ] Check Dalle-E paper for how they handle loss component scaling
 
 ## Refactor
