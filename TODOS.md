@@ -29,7 +29,7 @@
 - [x] Fix the losses, remove them from betas
 - [x] Scale the KLD loss by the one over number of latents
 - [x] Make relu to kld losses optional parameter
-- [ ] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm)
+- [x] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm). Change default weight decay to 1e-4
 
 
 ## Checkpointing

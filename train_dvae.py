@@ -150,8 +150,8 @@ class ExperimentConfig:
     
     # Training parameters
     batch_size: int = 64
-    learning_rate: float = 1e-3
-    weight_decay: float = 0.01
+    learning_rate: float = 1e-4 # Consistent with Dalle-E paper
+    weight_decay: float = 1e-4 # Consistent with Dalle-E paper
     max_steps: int = 1_000_000
     gradient_clip_val: float = 1.0
     accumulate_grad_batches: int = 1
@@ -225,7 +225,8 @@ class DVAETrainingModule(pl.LightningModule):
         self.learning_rate = experiment_config.learning_rate
         self.compile_model = compile_model
         self.save_hyperparameters()
-        self.register_buffer('q_z_marg', None, persistent=True)
+        # Initialize q_z_marg with correct size but all zeros
+        self.register_buffer('q_z_marg', torch.zeros(16, 512), persistent=True)
     
     def configure_model(self):
         """
@@ -316,7 +317,6 @@ class DVAETrainingModule(pl.LightningModule):
         }
 
     def forward(self, x, q_z_marg=None, train=True):
-        
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hard = scheduled_values['hard']
@@ -328,10 +328,13 @@ class DVAETrainingModule(pl.LightningModule):
             max_mask_pct = scheduled_values['max_pct(MASK)']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
+        # Check if q_z_marg should be treated as None
+        effective_q_z_marg = None if q_z_marg.sum() == 0 else q_z_marg
+        
         # Forward pass with current scheduled values and provided q_z_marg
         logits, losses, updated_q_z_marg = self.model.forward(
             x, 
-            q_z_marg=q_z_marg,
+            q_z_marg=effective_q_z_marg,
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
@@ -408,12 +411,25 @@ class DVAETrainingModule(pl.LightningModule):
         return output_dict
 
     def configure_optimizers(self):
+        # Get all parameters that require gradients
+        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+        
+        # Split parameters based on dimensionality
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+
+        # This excludes biases and BatchNorm or LayerNorm
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': self.experiment_config.weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        
         optimizer = AdamW(
-            self.parameters(),
+            optim_groups,
             lr=self.learning_rate,
             betas=(0.9, 0.999),
             eps=1e-8,
-            weight_decay=self.experiment_config.weight_decay,
             fused=True if torch.cuda.is_available() else False
         )
         
@@ -466,7 +482,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         collate_fn=collate_fn_train,
         shuffle=True, 
         num_workers=4,
-        persistent_workers=not debug_mode,
+        persistent_workers=True,
         worker_init_fn=worker_init_fn
     )
 
@@ -479,7 +495,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         collate_fn=collate_fn_val,
         shuffle=False, 
         num_workers=4,
-        persistent_workers=not debug_mode,
+        persistent_workers=True,
         worker_init_fn=worker_init_fn
     )
 
@@ -625,6 +641,19 @@ def train(
         enable_model_summary=not lr_find
     )
 
+
+
+    with trainer.init_module():
+        # Initialize the model
+        model = DVAETrainingModule(
+            experiment_config,
+            compile_model=acceleration.compile_model  # Use compile setting from acceleration config
+        )
+
+        # Load weights if a model source is specified
+        if experiment_config.model_src:
+            load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
+
     if lr_find:
         tuner = Tuner(trainer)
         lr_finder = tuner.lr_find(model, 
@@ -640,17 +669,6 @@ def train(
         fig.savefig(output_file)
         plt.show()
         return
-
-    with trainer.init_module():
-        # Initialize the model
-        model = DVAETrainingModule(
-            experiment_config,
-            compile_model=acceleration.compile_model  # Use compile setting from acceleration config
-        )
-
-        # Load weights if a model source is specified
-        if experiment_config.model_src:
-            load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
 
     trainer.fit(
         model, 

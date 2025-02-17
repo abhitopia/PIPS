@@ -143,8 +143,8 @@ def new(
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
-    learning_rate: float = typer.Option(1e-3, "--learning-rate", "--lr", help="Initial learning rate"),
-    weight_decay: float = typer.Option(0.01, "--weight-decay", "--wd", help="AdamW weight decay"),
+    learning_rate: float = typer.Option(1e-4, "--learning-rate", "--lr", help="Initial learning rate"),
+    weight_decay: float = typer.Option(1e-4, "--weight-decay", "--wd", help="AdamW weight decay"),
     max_steps: int = typer.Option(1_000_000, "--max-steps", "--ms", help="Maximum training steps"),
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
     accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
