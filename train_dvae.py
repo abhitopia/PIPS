@@ -181,6 +181,25 @@ class ExperimentConfig:
         if self.seed is None:
             self.seed = np.random.randint(0, 2**32 - 1)
 
+    def to_dict(self) -> dict:
+        """Convert config to a dictionary."""
+        config_dict = {
+            field: getattr(self, field) 
+            for field in self.__dataclass_fields__
+        }
+        # Handle nested GridDVAEConfig
+        config_dict['model_config'] = self.model_config.to_dict()
+        return config_dict
+
+    @classmethod
+    def from_dict(cls, config_dict: dict) -> 'ExperimentConfig':
+        """Create config from a dictionary."""
+        # Handle nested GridDVAEConfig
+        if isinstance(config_dict.get('model_config'), dict):
+            config_dict = config_dict.copy()
+            config_dict['model_config'] = GridDVAEConfig.from_dict(config_dict['model_config'])
+        return cls(**config_dict)
+
     @staticmethod
     def from_checkpoint(checkpoint_path: str) -> 'ExperimentConfig':
         """Load ExperimentConfig from a checkpoint file.
@@ -592,7 +611,8 @@ def train(
         log_model=False,
         save_dir=checkpoint_dir,
         reinit=True,
-        mode="disabled" if debug_mode and not debug_logging else "online"
+        mode="disabled" if debug_mode and not debug_logging else "online",
+        config=experiment_config.to_dict()
     )
 
     # Define callbacks

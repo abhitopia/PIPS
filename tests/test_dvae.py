@@ -1080,3 +1080,103 @@ def test_kld_losses_numerical_stability():
         assert kld_losses["dwkl_loss"] >= 0, f"DWKL loss negative at temperature {temp}"
         assert kld_losses["tc_loss"] >= 0, f"TC loss negative at temperature {temp}"
         assert kld_losses["kl_loss"] >= 0, f"KL loss negative at temperature {temp}"
+
+def test_grid_dvae_config_serialization():
+    # Create a config with some values
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    # Convert to dict
+    config_dict = config.to_dict()
+    
+    # Check that all base attributes are present
+    assert config_dict['n_dim'] == 128
+    assert config_dict['n_head'] == 8
+    assert config_dict['n_layers'] == 6
+    assert config_dict['n_codes'] == 8
+    assert config_dict['codebook_size'] == 512
+    assert config_dict['max_grid_height'] == 32
+    assert config_dict['max_grid_width'] == 32
+    assert config_dict['n_vocab'] == 16
+    
+    # Check that computed attributes are present
+    assert 'n_pos' in config_dict
+    assert 'compression_factor' in config_dict
+    assert 'pool_sizes' in config_dict
+    
+    # Create new config from dict
+    new_config = GridDVAEConfig.from_dict(config_dict)
+    
+    # Check that all attributes match
+    assert new_config.n_dim == config.n_dim
+    assert new_config.n_head == config.n_head
+    assert new_config.n_layers == config.n_layers
+    assert new_config.n_codes == config.n_codes
+    assert new_config.codebook_size == config.codebook_size
+    assert new_config.max_grid_height == config.max_grid_height
+    assert new_config.max_grid_width == config.max_grid_width
+    assert new_config.n_vocab == config.n_vocab
+    
+    # Check that computed attributes match
+    assert new_config.n_pos == config.n_pos
+    assert new_config.compression_factor == config.compression_factor
+    assert new_config.pool_sizes == config.pool_sizes
+
+def test_grid_dvae_config_serialization_with_defaults():
+    # Create a minimal config with only required fields
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8
+    )
+    
+    # Convert to dict and back
+    config_dict = config.to_dict()
+    new_config = GridDVAEConfig.from_dict(config_dict)
+    
+    # Check that default values are preserved
+    assert new_config.codebook_size == 512  # default value
+    assert new_config.rope_base == 10_000   # default value
+    assert new_config.dropout == 0.0        # default value
+    assert new_config.max_grid_height == 32 # default value
+    assert new_config.max_grid_width == 32  # default value
+    assert new_config.n_vocab == 16         # default value
+
+def test_grid_dvae_config_json_serialization():
+    import json
+    
+    # Create a config
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8
+    )
+    
+    # Convert to dict
+    config_dict = config.to_dict()
+    
+    # Test JSON serialization
+    json_str = json.dumps(config_dict)
+    loaded_dict = json.loads(json_str)
+    
+    # Create new config from loaded dict
+    new_config = GridDVAEConfig.from_dict(loaded_dict)
+    
+    # Check that all attributes match
+    assert new_config.n_dim == config.n_dim
+    assert new_config.n_head == config.n_head
+    assert new_config.n_layers == config.n_layers
+    assert new_config.n_codes == config.n_codes
+    assert new_config.n_pos == config.n_pos
+    assert new_config.compression_factor == config.compression_factor
+    assert new_config.pool_sizes == config.pool_sizes

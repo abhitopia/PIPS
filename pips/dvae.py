@@ -553,6 +553,58 @@ class GridDVAEConfig(Config):
         all_attrs = attrs + computed_attrs
         return f"DVAEConfig({', '.join(all_attrs)})"
 
+    def to_dict(self) -> dict:
+        """Convert config to a dictionary.
+        
+        Returns:
+            dict: Dictionary containing all config values, including computed attributes
+        """
+        # Get all explicitly defined fields
+        base_dict = {
+            'n_dim': self.n_dim,
+            'n_head': self.n_head,
+            'n_layers': self.n_layers,
+            'n_codes': self.n_codes,
+            'codebook_size': self.codebook_size,
+            'rope_base': self.rope_base,
+            'dropout': self.dropout,
+            'max_grid_height': self.max_grid_height,
+            'max_grid_width': self.max_grid_width,
+            'n_vocab': self.n_vocab,
+        }
+        
+        # Add computed attributes if they exist
+        computed_attrs = ['n_pos', 'compression_factor', 'pool_sizes']
+        for attr in computed_attrs:
+            if hasattr(self, attr):
+                base_dict[attr] = getattr(self, attr)
+                
+        return base_dict
+
+    @classmethod
+    def from_dict(cls, config_dict: dict) -> 'GridDVAEConfig':
+        """Create config from a dictionary.
+        
+        Args:
+            config_dict: Dictionary containing configuration values
+            
+        Returns:
+            GridDVAEConfig: New config instance
+            
+        Raises:
+            ValueError: If required fields are missing
+        """
+        # Extract only the fields that are part of the dataclass
+        required_fields = cls.__annotations__.keys()
+        config_kwargs = {
+            key: config_dict[key] 
+            for key in required_fields 
+            if key in config_dict
+        }
+        
+        # Create new instance
+        return cls(**config_kwargs)
+
 
 
 def gumbel_softmax(logits: Tensor, tau: float=1, hard: bool=False, dim: int=-1) -> Tensor:

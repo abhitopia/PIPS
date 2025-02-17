@@ -59,6 +59,7 @@
 - [x] Non EOS token accuracy as well for validation
 - [x] Rename Accuracy logs
 - [x] Log learning rate (Already done)
+- [x] Log serialised config to wandb
 - [ ] Monitoring number of different codes in pair of input and output grids from eval set
 - [ ] Implement disentanglement monitor
 - [ ] Implement input/output token accuracy
