@@ -657,17 +657,15 @@ def train(
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
         limit_train_batches=100 if lr_find else (50 if debug_mode else None),
         limit_val_batches=0 if lr_find else (10 if debug_mode else None),
-        val_check_interval=100 if lr_find else (20 if debug_mode else val_check_interval),
+        val_check_interval=None if lr_find else (20 if debug_mode else val_check_interval),
         enable_model_summary=not lr_find
     )
-
-
 
     with trainer.init_module():
         # Initialize the model
         model = DVAETrainingModule(
             experiment_config,
-            compile_model=acceleration.compile_model  # Use compile setting from acceleration config
+            compile_model=acceleration.compile_model
         )
 
         # Load weights if a model source is specified
@@ -676,10 +674,13 @@ def train(
 
     if lr_find:
         tuner = Tuner(trainer)
-        lr_finder = tuner.lr_find(model, 
-                                train_loader, 
-                                val_loader, 
-                                update_attr=False)
+        # For lr_find, only use train_loader
+        lr_finder = tuner.lr_find(
+            model,
+            train_loader,
+            val_dataloaders=None,  # Disable validation during lr_find
+            update_attr=False
+        )
         
         print("\nLearning rate finder results:")
         print(f"Suggested learning rate: {lr_finder.suggestion()}")
@@ -687,7 +688,7 @@ def train(
         fig = lr_finder.plot(suggest=True)
         output_file = os.path.join(os.getcwd(), f"lr_finder_{run_name}.png")
         fig.savefig(output_file)
-        plt.show()
+        plt.close(fig)  # Close the figure to free memory
         return
 
     trainer.fit(
