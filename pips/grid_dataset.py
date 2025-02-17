@@ -171,11 +171,11 @@ class GridDataset(Dataset):
         self.data = None
         
         # Store the length in a class variable (shared across all instances)
-        if not hasattr(GridDataset, '_shared_length'):
+        if not hasattr(self, '_shared_length'):
             # Quick load just to get length using memory mapping
             loaders = TRAIN_GRID_LOADERS if train else VAL_GRID_LOADERS
             temp_data = load_grid_loaders(loaders, cache_dir, verbose=True)
-            GridDataset._shared_length = len(temp_data)
+            self._shared_length = len(temp_data)
             del temp_data  # Clean up the temporary mapping
 
     def _initialize_data(self):
