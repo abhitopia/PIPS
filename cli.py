@@ -246,6 +246,7 @@ def new(
         debug_mode=debug,
         lr_find=lr_find,
         acceleration=acceleration,
+        val_check_interval=5000
     )
 
 
@@ -304,6 +305,7 @@ def resume(
         debug_mode=debug,
         resume_from=local_checkpoint_path,
         acceleration=acceleration,
+        val_check_interval=5000
     )
 
 
