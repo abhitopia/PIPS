@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from pytorch_lightning.callbacks import ModelCheckpoint
 from .artifact import Artifact
+from pytorch_lightning.loggers import WandbLogger
 
 class ModelCheckpointWithWandbSync(ModelCheckpoint):
     """ModelCheckpoint that syncs only current local checkpoints as WandB artifacts.
@@ -23,12 +24,18 @@ class ModelCheckpointWithWandbSync(ModelCheckpoint):
 
     def _get_artifact_manager(self, trainer):
         if self._artifact_manager is None:
-            self._artifact_manager = Artifact(
-                entity=trainer.logger.experiment.entity,
-                project_name=trainer.logger.experiment.project,
-                run_name=trainer.logger.experiment.id,
-                verbose=self.wandb_verbose
-            )
+            # Only initialize artifact manager on rank 0 process
+            if trainer.is_global_zero:
+                if not hasattr(trainer.logger, 'experiment') or not isinstance(trainer.logger, WandbLogger):
+                    self.logger.warning("WandB logger not properly initialized. Skipping artifact sync.")
+                    return None
+                
+                self._artifact_manager = Artifact(
+                    entity=trainer.logger.experiment.entity,
+                    project_name=trainer.logger.experiment.project,
+                    run_name=trainer.logger.experiment.id,
+                    verbose=self.wandb_verbose
+                )
         return self._artifact_manager
 
     def _save_checkpoint(self, trainer, filepath):
@@ -38,6 +45,14 @@ class ModelCheckpointWithWandbSync(ModelCheckpoint):
         self._sync_wandb_artifacts(trainer)
 
     def _sync_wandb_artifacts(self, trainer):
+        """Sync artifacts only on the main process"""
+        if not trainer.is_global_zero:
+            return
+
+        artifact_manager = self._get_artifact_manager(trainer)
+        if artifact_manager is None:
+            return
+
         checkpoint_dir = Path(self.dirpath)
         # All local checkpoint files (excluding symlinks like "last.ckpt")
         local_ckpts_all = {
