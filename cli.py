@@ -48,71 +48,25 @@ def get_common_options():
     
     return {
         # Model source options
-        "model_src_option": typer.Option(
-            None,
-            "--model-src",
-            "-m",
-            help=model_src_help
-        ),
-        "model_src_argument": typer.Argument(
-            ...,
-            help=model_src_help
-        ),
+        "model_src_option": typer.Option(None, "--model-src", "-m", help=model_src_help),
+        "model_src_argument": typer.Argument(..., help=model_src_help),
         
         # Acceleration options
-        "compile_model": typer.Option(
-            True,
-            "--no-compile",
-            help="Disable model compilation if specified",
-            is_flag=True,
-            flag_value=False,
-        ),
-        "matmul_precision": typer.Option(
-            "high",
-            "--matmul-precision",
-            help="Matmul precision.",
-            case_sensitive=False,
-            show_choices=True,
-            click_type=click.Choice(list(AccelerationConfig.VALID_MATMUL_PRECISIONS))
-        ),
-        "precision": typer.Option(
-            "bf16-true",
-            "--precision",
-            help="Training precision. Note: will be overridden to '32-true' if device is cpu.",
-            case_sensitive=False,
-            show_choices=True,
-            click_type=click.Choice(list(AccelerationConfig.VALID_PRECISIONS))
-        ),
-        "device": typer.Option(
-            "auto",
-            "--device",
-            help="Device to use. 'auto' selects cuda if available, else cpu.",
-            case_sensitive=False,
-            show_choices=True,
-            click_type=click.Choice(list(AccelerationConfig.VALID_DEVICES))
-        ),
+        "compile_model": typer.Option(True, "--no-compile", help="Disable model compilation if specified", is_flag=True, flag_value=False),
+        "matmul_precision": typer.Option("high", "--matmul-precision", help="Matmul precision.", case_sensitive=False, show_choices=True, click_type=click.Choice(list(AccelerationConfig.VALID_MATMUL_PRECISIONS))),
+        "precision": typer.Option("bf16-true", "--precision", help="Training precision. Note: will be overridden to '32-true' if device is cpu.", case_sensitive=False, show_choices=True, click_type=click.Choice(list(AccelerationConfig.VALID_PRECISIONS))),
+        "device": typer.Option("auto", "--device", help="Device to use. 'auto' selects cuda if available, else cpu.", case_sensitive=False, show_choices=True, click_type=click.Choice(list(AccelerationConfig.VALID_DEVICES))),
         
         # Project tracking options
-        "project_name": typer.Option(
-            "dvae-training",
-            "--project",
-            "-p",
-            help="Project name for experiment tracking"
-        ),
-        "checkpoint_dir": typer.Option(
-            Path("./runs"),
-            "--checkpoint-dir",
-            "-d",
-            help="Base directory for checkpoints"
-        ),
-        
+        "project_name": typer.Option("dvae-training", "--project", "-p", help="Project name for experiment tracking"),
+        "checkpoint_dir": typer.Option(Path("./runs"), "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
         # Debug option
-        "debug": typer.Option(
-            False,
-            "--debug",
-            "-D",
-            help="Enable debug mode with reduced dataset and steps"
-        ),
+        "debug": typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
+        # Add val_check_interval to common options
+        "val_check_interval": typer.Option(5000, "--val-check-interval", "--vci", help="Number of steps between validation checks"),
+
+        "lr_find": typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
+
     }
 
 @dvae_app.command("train")
@@ -172,14 +126,15 @@ def new(
         "-s", 
         help="Random seed for reproducibility. If not provided, a random seed will be generated."
     ),
-    lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
 
     # Common options
+    val_check_interval: int = get_common_options()["val_check_interval"],
     debug: bool = get_common_options()["debug"],
     compile_model: bool = get_common_options()["compile_model"],
     matmul_precision: str = get_common_options()["matmul_precision"],
     precision: str = get_common_options()["precision"],
     device: str = get_common_options()["device"],
+    lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
     
@@ -246,7 +201,7 @@ def new(
         debug_mode=debug,
         lr_find=lr_find,
         acceleration=acceleration,
-        val_check_interval=5000
+        val_check_interval=val_check_interval
     )
 
 
@@ -262,7 +217,8 @@ def resume(
     device: str = get_common_options()["device"],
     batch_size: int = typer.Option(None, "--batch-size", "--bs", help="Override training batch size"),
     learning_rate: float = typer.Option(None, "--learning-rate", "--lr", help="Override learning rate"),
-    lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder before resuming training"),
+    lr_find: bool = get_common_options()["lr_find"],
+    val_check_interval: int = get_common_options()["val_check_interval"],
 ):
     """Resume training from a checkpoint."""
     
@@ -314,7 +270,7 @@ def resume(
         debug_mode=debug,
         resume_from=local_checkpoint_path,
         acceleration=acceleration,
-        val_check_interval=5000,
+        val_check_interval=val_check_interval,
         lr_find=lr_find
     )
 

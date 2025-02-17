@@ -31,7 +31,7 @@
 - [x] Make relu to kld losses optional parameter
 - [x] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm). Change default weight decay to 1e-4
 - [x] Add the ability to override batch size and learning rate
-- [ ] Add the val_check_interval to the CLI
+- [x] Add the val_check_interval to the CLI
 
 
 ## Checkpointing
