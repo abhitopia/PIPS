@@ -127,6 +127,9 @@ def new(
         help="Random seed for reproducibility. If not provided, a random seed will be generated."
     ),
 
+    # Add limit_train_batches before the Common options
+    limit_train_batches: int = typer.Option(None, "--limit-train-batches", "--ltb", help="Limit the number of training batches per epoch. None means use all batches."),
+
     # Common options
     val_check_interval: int = get_common_options()["val_check_interval"],
     debug: bool = get_common_options()["debug"],
@@ -201,7 +204,8 @@ def new(
         debug_mode=debug,
         lr_find=lr_find,
         acceleration=acceleration,
-        val_check_interval=val_check_interval
+        val_check_interval=val_check_interval,
+        limit_train_batches=limit_train_batches
     )
 
 

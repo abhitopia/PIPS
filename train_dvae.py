@@ -611,6 +611,7 @@ def train(
     resume_from: str | None = None,
     lr_find: bool = False,
     acceleration: AccelerationConfig | None = None,
+    limit_train_batches: int | None = None,
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -681,7 +682,7 @@ def train(
         ],
         max_epochs=-1,
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
-        limit_train_batches=100 if lr_find else (50 if debug_mode else None),
+        limit_train_batches=100 if lr_find else (50 if debug_mode else limit_train_batches),
         limit_val_batches=0 if lr_find else (10 if debug_mode else None),
         val_check_interval=None if lr_find else (20 if debug_mode else val_check_interval),
         enable_model_summary=not lr_find
