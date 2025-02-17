@@ -111,7 +111,7 @@ def new(
     # Regularization parameters
     tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax"),
     tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax"),
-    max_mask_pct: float = typer.Option(0.5, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
+    max_mask_pct: float = typer.Option(0.5, "--max-mask-pct", "--msk", help="Maximum masking percentage during training. Warms up with beta schedule"),
     
     # Beta values for loss components
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
