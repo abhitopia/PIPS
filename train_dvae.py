@@ -541,7 +541,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
-        drop_last=True
+        drop_last=False
     )
 
     print("Number of batches in training set: ", len(train_loader))
