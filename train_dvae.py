@@ -1,6 +1,6 @@
 from functools import partial
 import os
-from typing import Dict
+from typing import Dict, Any
 import numpy as np
 from dataclasses import dataclass
 import tempfile
@@ -267,6 +267,31 @@ class DVAETrainingModule(pl.LightningModule):
             )
         else:
             print("Model compilation disabled; skipping torch.compile.")
+
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Handle loading checkpoints with different state dict keys."""
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
+            # If we're using compile and the checkpoint wasn't compiled
+            if self.compile_model and not any("_orig_mod" in key for key in state_dict.keys()):
+                new_state_dict = {}
+                for key, value in state_dict.items():
+                    if key.startswith("model."):
+                        new_key = key.replace("model.", "model._orig_mod.")
+                        new_state_dict[new_key] = value
+                    else:
+                        new_state_dict[key] = value
+                checkpoint["state_dict"] = new_state_dict
+            # If we're not using compile but the checkpoint was compiled
+            elif not self.compile_model and any("_orig_mod" in key for key in state_dict.keys()):
+                new_state_dict = {}
+                for key, value in state_dict.items():
+                    if "_orig_mod" in key:
+                        new_key = key.replace("model._orig_mod.", "model.")
+                        new_state_dict[new_key] = value
+                    else:
+                        new_state_dict[key] = value
+                checkpoint["state_dict"] = new_state_dict
 
     def get_scheduled_values(self, step: int) -> Dict[str, float]:
         """Returns all scheduled values for the current step."""

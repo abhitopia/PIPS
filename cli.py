@@ -260,6 +260,9 @@ def resume(
     matmul_precision: str = get_common_options()["matmul_precision"],
     precision: str = get_common_options()["precision"],
     device: str = get_common_options()["device"],
+    batch_size: int = typer.Option(None, "--batch-size", "--bs", help="Override training batch size"),
+    learning_rate: float = typer.Option(None, "--learning-rate", "--lr", help="Override learning rate"),
+    lr_find: bool = typer.Option(False, "--lr-find", help="Run learning rate finder before resuming training"),
 ):
     """Resume training from a checkpoint."""
     
@@ -289,6 +292,12 @@ def resume(
     # Load config and resume training
     config = ExperimentConfig.from_checkpoint(str(local_checkpoint_path))
     
+    # Override batch size and learning rate if provided
+    if batch_size is not None:
+        config.batch_size = batch_size
+    if learning_rate is not None:
+        config.learning_rate = learning_rate
+
     # Create acceleration config (will validate and resolve settings)
     acceleration = AccelerationConfig(
         device=device,
@@ -305,7 +314,8 @@ def resume(
         debug_mode=debug,
         resume_from=local_checkpoint_path,
         acceleration=acceleration,
-        val_check_interval=5000
+        val_check_interval=5000,
+        lr_find=lr_find
     )
 
 
