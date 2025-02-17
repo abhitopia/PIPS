@@ -30,6 +30,7 @@
 - [x] Scale the KLD loss by the one over number of latents
 - [x] Make relu to kld losses optional parameter
 - [x] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm). Change default weight decay to 1e-4
+- [ ] Add the ability to override batch size and learning rate
 
 
 ## Checkpointing

@@ -482,9 +482,6 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     Args:
         experiment_config: Configuration containing batch_size and padding_idx
         debug_mode: If True, uses reduced workers for debugging
-    
-    Returns:
-        tuple: (train_loader, val_loader)
     """
     project_size = (experiment_config.model_config.max_grid_height, 
                    experiment_config.model_config.max_grid_width)
@@ -495,14 +492,17 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
     train_dataset = GridDataset(train=True)
 
+    num_workers = min(8, os.cpu_count() or 1)
+    
     train_loader = DataLoader(
         train_dataset, 
         batch_size=batch_size, 
         collate_fn=collate_fn_train,
         shuffle=True, 
-        num_workers=4,
+        num_workers=num_workers,
         persistent_workers=True,
-        worker_init_fn=worker_init_fn
+        worker_init_fn=worker_init_fn,
+        drop_last=True
     )
 
     # Create validation dataloader
@@ -513,9 +513,10 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         batch_size=batch_size,
         collate_fn=collate_fn_val,
         shuffle=False, 
-        num_workers=4,
+        num_workers=num_workers,
         persistent_workers=True,
-        worker_init_fn=worker_init_fn
+        worker_init_fn=worker_init_fn,
+        drop_last=True
     )
 
     print("Number of batches in training set: ", len(train_loader))
