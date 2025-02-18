@@ -435,8 +435,8 @@ class DVAETrainingModule(pl.LightningModule):
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy_no_pad(TOKENS)': acc_no_pad.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
-            'avg_entropy': losses['avg_entropy'],
-            'avg_perplexity': losses['avg_perplexity']
+            'avg_entropy': losses['avg_entropy'].detach(),
+            'avg_perplexity': losses['avg_perplexity'].detach()
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):

@@ -816,10 +816,10 @@ class GridDVAE(nn.Module):
         # if one code is dominant, entropy will be near 0.
         epsilon = 1e-8
         entropy_vals = -(soft_code * torch.log(soft_code + epsilon)).sum(dim=-1)    # Shape: [Batch, n_codes]
-        avg_entropy = entropy_vals.mean().item()
+        avg_entropy = entropy_vals.mean()
         # Perplexity is computed as the exp of entropy --
         # it can be interpreted as the effective number of codes being used.
-        avg_perplexity = torch.exp(entropy_vals).mean().item()
+        avg_perplexity = torch.exp(entropy_vals).mean()
 
         # Compute the KL disentanglement loss with the provided q_z_marg
         kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=apply_relu)
