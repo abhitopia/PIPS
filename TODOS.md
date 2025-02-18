@@ -35,6 +35,14 @@
 - [ ] Codebook initialisation to 0.02 std and mean 0.0
 
 
+## Debug/Issues
+- [x] Add normalisations to the pooling layers
+- [ ] May be add the MLP to the pooling layers too!
+- [ ] Change the initialisation of the pooling layer queries to match something else? 
+- [ ] Why is TC loss negative?
+    - Come back to it when training. Probably due to approximation, large batch size may fix it.
+
+
 ## Checkpointing
 - [x] Implement Checkpointing
 - [x] Prevent saving everything or at least deleting unnecessary artifacts (Write a Wandb Sync Callback)
@@ -106,9 +114,6 @@
 - [ ] Implement Orthograd Optimizer
 - [ ] Use 32bit float CE loss
 
-## Debug/Issues
-- [ ] Why is TC loss negative?
-    - Come back to it when training. Probably due to approximation, large batch size may fix it.
 
 ## Archived
 - [ ] Dynamically adjust the beta? (It should be possible to do this by monitoring the rate of decay of the two loss components and adjusting the beta accordingly)

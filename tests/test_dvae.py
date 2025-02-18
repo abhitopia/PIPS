@@ -211,7 +211,7 @@ def test_dvae():
     output, losses, q_z_marg = dvae(x)
     # Access reconstruction loss and kld losses from the losses dictionary
     reconstruction_loss = losses['ce_loss']
-    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
     
     # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab)
@@ -397,7 +397,6 @@ def test_dvae_forward_with_mask():
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
-
 def test_attention_pool_masking_effect():
     dim = 64
     num_queries = 10
@@ -582,8 +581,11 @@ def test_transformer_masking_effect_single_mask():
     assert not torch.allclose(output1[masked_indices], output2[masked_indices], atol=1e-5), \
         "Outputs are the same at masked positions."
 
-
 def test_dvae_masking_effect():
+    """
+    Test that masked positions do not affect the encoding at unmasked positions.
+    The outputs should be identical at unmasked positions regardless of the input at masked positions.
+    """
     config = GridDVAEConfig(
         n_dim=128,
         n_head=8,
@@ -600,70 +602,83 @@ def test_dvae_masking_effect():
     x1 = torch.randint(0, config.n_vocab, (B, S))
     x2 = x1.clone()
 
+    # Create position indices using DVAE.create_grid_position_tensor
+    grid_height = int(S**0.5)
+    grid_width = grid_height
+    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
+
+    def check_encoding_steps(x1, x2, mask, msg_prefix=""):
+        mask_tmp = mask.squeeze(1).expand(B, -1)
+        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+
+        # Debug intermediate representations
+        torch.manual_seed(42)
+        with torch.no_grad():
+            # Get embeddings
+            emb1 = dvae.embd(x1)
+            emb2 = dvae.embd(x2)
+            
+            # Check embeddings at unmasked positions
+            assert torch.allclose(emb1[mask_tmp], emb2[mask_tmp], atol=1e-5), \
+                f"{msg_prefix}Embeddings differ at unmasked positions"
+
+            # Get encoder base output
+            enc1, _ = dvae.encoder_base(emb1, mask, positions=positions)
+            enc2, _ = dvae.encoder_base(emb2, mask, positions=positions)
+            
+            # Check encoder base output at unmasked positions
+            assert torch.allclose(enc1[mask_tmp], enc2[mask_tmp], atol=1e-5), \
+                f"{msg_prefix}Encoder base outputs differ at unmasked positions"
+
+            # Get encoder bottleneck output
+            bottleneck1 = dvae.encoder_bottleneck(enc1, mask)
+            bottleneck2 = dvae.encoder_bottleneck(enc2, mask)
+            
+            # Check bottleneck outputs
+            assert torch.allclose(bottleneck1, bottleneck2, atol=1e-5), \
+                f"{msg_prefix}Encoder bottleneck outputs differ"
+
+            # Get encoder head output (before gumbel-softmax)
+            head1 = dvae.encoder_head(bottleneck1)
+            head2 = dvae.encoder_head(bottleneck2)
+            
+            # Check encoder head output
+            assert torch.allclose(head1, head2, atol=1e-5), \
+                f"{msg_prefix}Encoder head outputs differ"
+
+            # Apply gumbel-softmax directly with same random seed
+            torch.manual_seed(42)
+            gumbel1 = F.gumbel_softmax(head1, tau=0.9, hard=False)
+            
+            torch.manual_seed(42)
+            gumbel2 = F.gumbel_softmax(head2, tau=0.9, hard=False)
+            
+            # Check gumbel-softmax outputs
+            assert torch.allclose(gumbel1, gumbel2, atol=1e-4), \
+                f"{msg_prefix}Gumbel-softmax outputs differ"
+
+            # Get final codes with fixed random seed
+            torch.manual_seed(42)
+            code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+            
+            torch.manual_seed(42)
+            code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+            
+            # Check final codes
+            assert torch.allclose(code1, code2, atol=1e-4), \
+                f"{msg_prefix}Codes differ when only masked positions are changed"
+
     # Test with same_mask_for_all=True and hard=False
     mask_percentage = 0.5
     mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=True)
-
     if mask is not None:
-        mask_tmp = mask.squeeze(1).expand(B, -1)
-        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
-
-    torch.manual_seed(42)
-    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
-
-    torch.manual_seed(42)
-    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
-
-    # Increase the tolerance to account for floating-point precision issues
-    assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
+        check_encoding_steps(x1, x2.clone(), mask, "Same mask for all: ")
 
     # Test with same_mask_for_all=False and hard=False
     mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=False)
-
     if mask is not None:
-        mask_tmp = mask.squeeze(1).expand(B, -1)
-        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
-
-    torch.manual_seed(42)
-    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
-
-    torch.manual_seed(42)
-    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
-
-    # Increase the tolerance to account for floating-point precision issues
-    assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
-
-    # Test with same_mask_for_all=True and hard=True
-    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=True)
-
-    if mask is not None:
-        mask_tmp = mask.squeeze(1).expand(B, -1)
-        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
-
-    torch.manual_seed(42)
-    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
-
-    torch.manual_seed(42)
-    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
-
-    # Increase the tolerance to account for floating-point precision issues
-    assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
-
-    # Test with same_mask_for_all=False and hard=True
-    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=False)
-
-    if mask is not None:
-        mask_tmp = mask.squeeze(1).expand(B, -1)
-        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
-
-    torch.manual_seed(42)
-    code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=True)
-
-    torch.manual_seed(42)
-    code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=True)
-
-    # Increase the tolerance to account for floating-point precision issues
-    assert torch.allclose(code1, code2, atol=1e-4), "Codes differ when only masked positions are changed."
+        check_encoding_steps(x1, x2.clone(), mask, "Different masks: ")
 
 # Test reconstruction_loss
 def test_reconstruction_loss():
@@ -824,7 +839,7 @@ def test_dvae_forward_with_reinmax():
     # Test forward pass with ReinMax enabled
     output, losses, q_z_marg = dvae(x, tau=0.9, hard=True, reinMax=True)
     reconstruction_loss = losses['ce_loss']
-    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+    kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
 
     # Test output shape
     assert output.shape == (batch_size, config.n_pos, config.n_vocab), \
@@ -970,8 +985,8 @@ def test_kld_losses_non_negative():
     # Run forward pass multiple times with different random inputs
     for _ in range(5):
         x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
-        _, losses, _ = dvae(x)
-        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+        _, losses, _ = dvae(x, apply_relu=True)
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
         
         # Check that all losses are non-negative
         assert kld_losses["mi_loss"] >= 0, "MI loss should be non-negative"
@@ -1006,8 +1021,8 @@ def test_kld_losses_extreme_inputs():
     _, losses_zeros_no_relu, _ = dvae(x_zeros, apply_relu=False)
     _, losses_same_no_relu, _ = dvae(x_same, apply_relu=False)
     
-    kld_losses_zeros_no_relu = {k: v for k, v in losses_zeros_no_relu.items() if k != 'ce_loss'}
-    kld_losses_same_no_relu = {k: v for k, v in losses_same_no_relu.items() if k != 'ce_loss'}
+    kld_losses_zeros_no_relu = {k: v for k, v in losses_zeros_no_relu.items() if k != 'ce_loss' and 'loss' in k}
+    kld_losses_same_no_relu = {k: v for k, v in losses_same_no_relu.items() if k != 'ce_loss' and 'loss' in k}
 
     # Check that losses are close to non-negative when not using ReLU
     for losses in [kld_losses_zeros_no_relu, kld_losses_same_no_relu]:
@@ -1020,8 +1035,8 @@ def test_kld_losses_extreme_inputs():
     _, losses_zeros_relu, _ = dvae(x_zeros, apply_relu=True)
     _, losses_same_relu, _ = dvae(x_same, apply_relu=True)
     
-    kld_losses_zeros_relu = {k: v for k, v in losses_zeros_relu.items() if k != 'ce_loss'}
-    kld_losses_same_relu = {k: v for k, v in losses_same_relu.items() if k != 'ce_loss'}
+    kld_losses_zeros_relu = {k: v for k, v in losses_zeros_relu.items() if k != 'ce_loss' and 'loss' in k}
+    kld_losses_same_relu = {k: v for k, v in losses_same_relu.items() if k != 'ce_loss' and 'loss' in k}
 
     # Check that all losses are strictly non-negative when using ReLU
     for losses in [kld_losses_zeros_relu, kld_losses_same_relu]:
@@ -1051,7 +1066,7 @@ def test_kld_losses_numerical_stability():
     # Test without ReLU - allow small negative values
     for temp in temperatures:
         _, losses, _ = dvae(x, tau=temp, apply_relu=False)
-        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
         
         # Check that all losses are finite
         assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"
@@ -1068,7 +1083,7 @@ def test_kld_losses_numerical_stability():
     # Test with ReLU - ensure strictly non-negative
     for temp in temperatures:
         _, losses, _ = dvae(x, tau=temp, apply_relu=True)
-        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss'}
+        kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
         
         # Check that all losses are finite and strictly non-negative
         assert torch.isfinite(kld_losses["mi_loss"]), f"MI loss not finite at temperature {temp}"

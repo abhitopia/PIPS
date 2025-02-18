@@ -428,6 +428,10 @@ class AttentionPool(nn.Module):
         self.k_proj = nn.Linear(dim, dim, bias=False)
         self.v_proj = nn.Linear(dim, dim, bias=False)
         self.q_proj = nn.Linear(dim, dim, bias=False)
+        
+        # Apply RMSNorm to x before projection (pre-norm)
+        self.norm = RMSNorm(dim)
+        
         self.out_proj = nn.Linear(dim, dim, bias=False)
         
     def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
@@ -441,10 +445,13 @@ class AttentionPool(nn.Module):
         B, S, D = x.shape
         assert D == self.dim, f"Expected input dimension {self.dim}, got {D}."
 
+        # Apply RMSNorm before any projections
+        x_norm = self.norm(x)
+        
         # Project the queries, keys, and values
         q = self.q_proj(self.queries).unsqueeze(0)  # [1, K, D]
-        k = self.k_proj(x)  # [B, S, D]
-        v = self.v_proj(x)  # [B, S, D]
+        k = self.k_proj(x_norm)  # [B, S, D]
+        v = self.v_proj(x_norm)  # [B, S, D]
 
         # Check attn_mask dimensions if provided
         if attn_mask is not None:
@@ -473,8 +480,8 @@ class StackedPooling(nn.Module):
         Args:
             dim (int): Embedding dimension.
             pool_sizes (List[int]): The output sequence lengths for each compression stage.
-                                    Example: [256, 64, 8]
-                                    means Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
+                                    Example: [256, 64, 8] means:
+                                    Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
         """
         super().__init__()
         self.dim = dim
@@ -484,28 +491,33 @@ class StackedPooling(nn.Module):
         self.pool_layers = nn.ModuleList([
             AttentionPool(dim, num_queries=size) for size in pool_sizes
         ])
-
+        # Add an RMSNorm layer for the final output of the stacking
+        self.out_norm = RMSNorm(dim)
+    
     def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x (Tensor): shape [B, S, D] input to the first stage
             attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S] or [B, 1, S] to be applied to the first AttentionPool
         Returns:
-            Tensor: shape [B, final_size, D] after all stages
+            Tensor: shape [B, final_size, D] after all stages, normalized by RMSNorm.
         """
         B, S, D = x.shape
 
-        # Assert correct mask shape if provided
         if attn_mask is not None:
-            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
+            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], (
+                f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
+            )
 
         for i, pool in enumerate(self.pool_layers):
             if i == 0 and attn_mask is not None:
                 # Apply the attention mask only to the first AttentionPool
                 x = pool(x, attn_mask=attn_mask)
             else:
-                x = pool(x)  # compress from current S -> next S'
-        return x
+                x = pool(x)
+        
+        # Apply RMSNorm to the final output
+        return self.out_norm(x)
 
 
 
