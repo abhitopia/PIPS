@@ -428,8 +428,6 @@ class ResidualProjection(nn.Module):
         self.proj = nn.Linear(S, K)
         # Normalization over tokens (if enabled) applied to tensors of shape (B, d, K).
         self.norm_tokens = nn.LayerNorm(K) if token_norm else nn.Identity()
-        # RMSNorm (or any feature normalization) applied to each token's d-dimensional embedding.
-        self.norm_features = RMSNorm(d)
         
     def forward(self, x, mask=None):
         """
@@ -466,8 +464,6 @@ class ResidualProjection(nn.Module):
         # Transpose to (B, K, d) so that each token is a d-dimensional vector
         x = x.transpose(1, 2)
         
-        # Apply feature-level RMSNorm to each token's d-dimensional embedding
-        x = self.norm_features(x)
         return x
 
 

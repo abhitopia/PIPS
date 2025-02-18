@@ -1005,36 +1005,28 @@ def test_residual_projection_masking_effect(S, K, batch_specific_mask):
     (16, 16),  # same size
 ])
 def test_residual_projection_normalization(S, K):
-    """Test both token and feature normalization effects."""
+    """Test token normalization effects."""
     B, d = 4, 64
     
     # Test 1: Token normalization effect
     # Create projections with and without token normalization
     proj_with_norm = ResidualProjection(S=S, K=K, d=d, token_norm=True)
     proj_without_norm = ResidualProjection(S=S, K=K, d=d, token_norm=False)
-    
+
     x = torch.randn(B, S, d)
-    
+
     # Ensure outputs have correct shapes
     output_with_norm = proj_with_norm(x)
     output_without_norm = proj_without_norm(x)
-    
+
     assert output_with_norm.shape == (B, K, d), \
         f"Unexpected output shape with token_norm: {output_with_norm.shape}"
     assert output_without_norm.shape == (B, K, d), \
         f"Unexpected output shape without token_norm: {output_without_norm.shape}"
-    
+
     # Outputs should be different when token normalization is applied
     assert not torch.allclose(output_with_norm, output_without_norm, atol=1e-5), \
         f"Outputs are identical with and without token normalization (S={S}, K={K})"
-    
-    # Test 2: Feature normalization
-    # Check that each feature vector has unit RMS for both variants
-    for output, norm_type in [(output_with_norm, "with token_norm"), 
-                             (output_without_norm, "without token_norm")]:
-        feature_rms = torch.sqrt(torch.mean(output ** 2, dim=-1))
-        assert torch.allclose(feature_rms, torch.ones_like(feature_rms), atol=1e-5), \
-            f"Feature vectors do not have unit RMS after normalization ({norm_type}, S={S}, K={K})"
 
 @pytest.mark.parametrize("S,K", [
     (16, 8),   # compression
