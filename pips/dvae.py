@@ -410,6 +410,69 @@ class Transformer(nn.Module):
         return x, loop_kv_caches
     
 
+class ResidualProjection(nn.Module):
+    def __init__(self, S, K, d, token_norm=False):
+        """
+        Projects from a sequence length S to a new sequence length K
+        for each feature channel (dimension d), and applies normalization.
+        
+        Args:
+            S (int): Original sequence length.
+            K (int): Target sequence length.
+            d (int): Feature dimension.
+            token_norm (bool): If True, apply normalization on the token dimension before projection.
+        """
+        super().__init__()
+        self.token_norm = token_norm
+        # A linear layer that projects the S dimension to K for each feature channel.
+        self.proj = nn.Linear(S, K)
+        # Normalization over tokens (if enabled) applied to tensors of shape (B, d, K).
+        self.norm_tokens = nn.LayerNorm(K) if token_norm else nn.Identity()
+        # RMSNorm (or any feature normalization) applied to each token's d-dimensional embedding.
+        self.norm_features = RMSNorm(d)
+        
+    def forward(self, x, mask=None):
+        """
+        Args:
+            x (Tensor): Input tensor of shape (B, S, d).
+            mask (Tensor, optional): Boolean tensor of shape (B, 1, S) or (1, 1, S)
+                                     where True indicates a valid token.
+        Returns:
+            Tensor: Output tensor of shape (B, K, d).
+        """
+        # Transpose to (B, d, S) to apply the projection along S.
+        B, S, D = x.shape
+        x = x.transpose(1, 2)  # (B, d, S)
+        
+        if mask is not None:
+
+            # Check attn_mask dimensions if provided
+            if mask is not None:
+                assert mask.shape in [(1, 1, S), (B, 1, S)], \
+                    f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {mask.shape}"
+
+            # Expand mask to match (B, d, S)
+            if mask.shape[0] == 1 and x.shape[0] > 1:
+                mask = mask.expand(x.shape[0], -1, -1)
+            else:
+                mask = mask.expand(-1, x.shape[1], -1)
+            # Use masked_fill to zero out masked tokens.
+            x = x.masked_fill(~mask, 0.0)
+        
+        # Apply the learned linear projection across the S dimension.
+        x = self.proj(x)  # Now shape: (B, d, K)
+        
+        # Optional: Normalize over the token dimension (axis=-1 for shape (B, d, K)).
+        x = self.norm_tokens(x)
+        
+        # Transpose to (B, K, d) so that each token is a d-dimensional vector.
+        x = x.transpose(1, 2)
+        
+        # Apply feature-level RMSNorm to each token's d-dimensional embedding.
+        x = self.norm_features(x)
+        return x
+
+
 class AttentionPool(nn.Module):
     def __init__(self, dim: int, num_queries: int):
         super().__init__()
@@ -452,8 +515,8 @@ class AttentionPool(nn.Module):
 
         # Check attn_mask dimensions if provided
         if attn_mask is not None:
-            assert attn_mask.shape in [(1, 1, S), (B, 1, S), (B, self.num_queries, S)], \
-                f"Expected attn_mask shape [(1, 1, S), (B, 1, S), (B, {self.num_queries}, S)], got {attn_mask.shape}"
+            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], \
+                f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
 
         # Compute attention
         attn_output = F.scaled_dot_product_attention(
@@ -467,17 +530,8 @@ class AttentionPool(nn.Module):
         # Project attention output
         attn_output = self.out_proj(attn_output)  # [B, K, D]
         
-        # Create residual connection using adaptive pooling
-        # If K < S: average pooling to reduce sequence length
-        # If K > S: interpolation to increase sequence length
-        if K <= S:
-            residual = F.adaptive_avg_pool1d(x.transpose(1, 2), K).transpose(1, 2)  # [B, K, D]
-        else:
-            # Use linear interpolation for upsampling
-            residual = F.interpolate(x.transpose(1, 2), size=K, mode='linear', align_corners=False).transpose(1, 2)
-        
         # Add residual and apply dropout
-        return attn_output + residual
+        return attn_output
     
 
 class StackedPooling(nn.Module):

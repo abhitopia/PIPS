@@ -14,7 +14,8 @@ from pips.dvae import (
     GridDVAE,
     AttentionPool,
     StackedPooling,
-    Transformer
+    Transformer,
+    ResidualProjection
 )
 import torch.nn.functional as F
 
@@ -857,8 +858,9 @@ def test_dvae_forward_with_reinmax():
     assert torch.allclose(probs.sum(dim=-1), torch.ones_like(probs.sum(dim=-1)))
 
     # Test that output contains logits (not all zeros or NaNs)
-    assert not torch.allclose(output, torch.zeros_like(output))
-    assert not torch.any(torch.isnan(output))
+    assert not torch.allclose(output, torch.zeros_like(output)), \
+        "Output should not be all zeros when ReinMax is applied."
+    assert not torch.any(torch.isnan(output)), "Output should not contain NaNs when ReinMax is applied."
 
 # Add this test to your existing test suite 
 
@@ -1195,3 +1197,113 @@ def test_grid_dvae_config_json_serialization():
     assert new_config.n_pos == config.n_pos
     assert new_config.compression_factor == config.compression_factor
     assert new_config.pool_sizes == config.pool_sizes
+
+@pytest.mark.parametrize("S,K", [
+    (16, 8),   # compression
+    (8, 16),   # expansion
+    (16, 16),  # same size
+])
+@pytest.mark.parametrize("batch_specific_mask", [
+    False,    # single mask for all batches [1, 1, S]
+    True,     # batch-specific masks [B, 1, S]
+])
+@pytest.mark.parametrize("token_norm", [
+    False,    # no token normalization
+    True,     # with token normalization
+])
+def test_residual_projection_masking_effect(S, K, batch_specific_mask, token_norm):
+    """Test that masked inputs produce identical outputs when only masked values differ."""
+    B, d = 4, 64
+    proj = ResidualProjection(S=S, K=K, d=d, token_norm=token_norm)
+    
+    # Create two identical inputs
+    x1 = torch.randn(B, S, d)
+    x2 = x1.clone()
+    
+    # Create mask [B, 1, S] or [1, 1, S] depending on batch_specific_mask
+    batch_size = B if batch_specific_mask else 1
+    mask = torch.rand(batch_size, 1, S) > 0.5
+    
+    # Modify x2 at masked positions with random values
+    mask_expanded = mask.expand(B, 1, S)
+    x2[~mask_expanded.squeeze(1)] = torch.randn(torch.sum(~mask_expanded).item(), d)
+    
+    # Apply projection with mask
+    output1 = proj(x1, mask=mask)
+    output2 = proj(x2, mask=mask)
+    
+    # Outputs should be identical since differences were only in masked positions
+    assert torch.allclose(output1, output2, atol=1e-5), \
+        f"Outputs differ when only masked positions are changed (S={S}, K={K}, batch_specific_mask={batch_specific_mask}, token_norm={token_norm})"
+
+@pytest.mark.parametrize("S,K", [
+    (16, 8),   # compression
+    (8, 16),   # expansion
+    (16, 16),  # same size
+])
+def test_residual_projection_normalization(S, K):
+    """Test both token and feature normalization effects."""
+    B, d = 4, 64
+    
+    # Test 1: Token normalization effect
+    # Create projections with and without token normalization
+    proj_with_norm = ResidualProjection(S=S, K=K, d=d, token_norm=True)
+    proj_without_norm = ResidualProjection(S=S, K=K, d=d, token_norm=False)
+    
+    x = torch.randn(B, S, d)
+    
+    # Ensure outputs have correct shapes
+    output_with_norm = proj_with_norm(x)
+    output_without_norm = proj_without_norm(x)
+    
+    assert output_with_norm.shape == (B, K, d), \
+        f"Unexpected output shape with token_norm: {output_with_norm.shape}"
+    assert output_without_norm.shape == (B, K, d), \
+        f"Unexpected output shape without token_norm: {output_without_norm.shape}"
+    
+    # Outputs should be different when token normalization is applied
+    assert not torch.allclose(output_with_norm, output_without_norm, atol=1e-5), \
+        f"Outputs are identical with and without token normalization (S={S}, K={K})"
+    
+    # Test 2: Feature normalization
+    # Check that each feature vector has unit RMS for both variants
+    for output, norm_type in [(output_with_norm, "with token_norm"), 
+                             (output_without_norm, "without token_norm")]:
+        feature_rms = torch.sqrt(torch.mean(output ** 2, dim=-1))
+        assert torch.allclose(feature_rms, torch.ones_like(feature_rms), atol=1e-5), \
+            f"Feature vectors do not have unit RMS after normalization ({norm_type}, S={S}, K={K})"
+
+@pytest.mark.parametrize("S,K", [
+    (16, 8),   # compression
+    (8, 16),   # expansion
+    (16, 16),  # same size
+])
+@pytest.mark.parametrize("mask_shape", [
+    (1, 1, 16),    # valid: single mask for all batches
+    (4, 1, 8),     # valid: batch-specific mask
+    (1, 2, 16),    # invalid: wrong middle dimension
+    (4, 2, 8),     # invalid: wrong middle dimension
+    (2, 1, 8),     # invalid: batch size doesn't match
+])
+def test_residual_projection_mask_shape_validation(S, K, mask_shape):
+    """Test that mask shape validation works correctly."""
+    B, d = 4, 64
+    proj = ResidualProjection(S=S, K=K, d=d)
+    x = torch.randn(B, S, d)
+    mask = torch.ones(mask_shape, dtype=torch.bool)  # Create boolean mask
+    
+    # Check if the mask shape is valid
+    is_valid_shape = mask_shape in [(1, 1, S), (B, 1, S)]
+    
+    if is_valid_shape:
+        # Should not raise an error
+        try:
+            proj(x, mask=mask)
+        except AssertionError as e:
+            pytest.fail(f"Unexpected assertion error for valid mask shape {mask_shape}: {e}")
+    else:
+        # Should raise an AssertionError
+        with pytest.raises(AssertionError) as excinfo:
+            proj(x, mask=mask)
+        assert "Expected attn_mask shape" in str(excinfo.value), \
+            f"Expected assertion error for invalid mask shape {mask_shape}"

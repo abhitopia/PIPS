@@ -40,6 +40,13 @@
 - [x] Change the initialisation of the pooling layer queries to match something else? 
 - [x] Log the model gradients
 - [x] Add residual connection to the pooling layers
+- [x] Create ResidualProjection class 
+- [x] Add tests for the ResidualProjection class
+- [ ] Modify stacked pooling to be simpler and use transformer blocks
+- [ ] Adjust tests for the new stacked pooling
+- [ ] Check whether token normalisation is needed
+- [ ] Fix masking for the pooling layers
+- [ ] Add pooling as well as interpolation tests
 - [ ] May be add the MLP to the pooling layers too!
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
