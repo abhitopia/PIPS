@@ -421,7 +421,8 @@ class AttentionPool(nn.Module):
         self.dim = dim
         
         # Learned query vectors
-        self.queries = nn.Parameter(torch.randn(num_queries, dim))
+        self.queries = nn.Parameter(torch.empty(num_queries, dim))
+        nn.init.normal_(self.queries, mean=0.0, std=0.02)
         
         # Projection layers
         self.k_proj = nn.Linear(dim, dim, bias=False)
@@ -645,10 +646,12 @@ class GridDVAE(nn.Module):
         self.config = config
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
+        nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         self.encoder_base = Transformer(config=config)
         self.encoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[1:])
         self.encoder_head = nn.Linear(config.n_dim, config.codebook_size)
-        self.codebook = nn.Parameter(torch.randn(config.codebook_size, config.n_dim))
+        self.codebook = nn.Parameter(torch.empty(config.codebook_size, config.n_dim))
+        nn.init.normal_(self.codebook, mean=0.0, std=0.02)  # Smaller initialization
         self.decoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[::-1][1:])
         self.decoder_base = Transformer(config=config)
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)

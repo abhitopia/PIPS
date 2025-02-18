@@ -32,6 +32,7 @@
 - [x] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm). Change default weight decay to 1e-4
 - [x] Add the ability to override batch size and learning rate
 - [x] Add the val_check_interval to the CLI
+- [ ] Codebook initialisation to 0.02 std and mean 0.0
 
 
 ## Checkpointing
