@@ -454,6 +454,26 @@ class DVAETrainingModule(pl.LightningModule):
         if updated_q_z_marg is not None:
             self.q_z_marg.copy_(updated_q_z_marg.detach())
         
+        # Log gradients after backward pass
+        if self.trainer.global_step % 100 == 0:  # Log every 100 steps to avoid overhead
+            for name, param in self.named_parameters():
+                if param.requires_grad and param.grad is not None:
+                    # Log gradient norm
+                    grad_norm = param.grad.norm().item()
+                    self.log(f'grads/{name}_norm', grad_norm, on_step=True, on_epoch=False)
+                    
+                    # Log gradient statistics
+                    if param.grad.numel() > 1:  # Only log stats for non-scalar parameters
+                        grad_mean = param.grad.mean().item()
+                        grad_std = param.grad.std().item()
+                        grad_max = param.grad.max().item()
+                        grad_min = param.grad.min().item()
+                        
+                        self.log(f'grads/{name}_mean', grad_mean, on_step=True, on_epoch=False)
+                        self.log(f'grads/{name}_std', grad_std, on_step=True, on_epoch=False)
+                        self.log(f'grads/{name}_max', grad_max, on_step=True, on_epoch=False)
+                        self.log(f'grads/{name}_min', grad_min, on_step=True, on_epoch=False)
+        
         return output_dict
     
     def validation_step(self, batch, batch_idx):
