@@ -808,6 +808,19 @@ class GridDVAE(nn.Module):
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
         code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
 
+
+        # ===== DEBUGGING CODE: Logging soft-code statistics =====
+        # Compute entropy per latent:
+        # For each latent distribution (over the codebook), we have
+        # entropy = -sum(p * log(p)). If the distribution is uniform, entropy is high;
+        # if one code is dominant, entropy will be near 0.
+        epsilon = 1e-8
+        entropy_vals = -(soft_code * torch.log(soft_code + epsilon)).sum(dim=-1)    # Shape: [Batch, n_codes]
+        avg_entropy = entropy_vals.mean().item()
+        # Perplexity is computed as the exp of entropy --
+        # it can be interpreted as the effective number of codes being used.
+        avg_perplexity = torch.exp(entropy_vals).mean().item()
+
         # Compute the KL disentanglement loss with the provided q_z_marg
         kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=apply_relu)
 
@@ -818,7 +831,9 @@ class GridDVAE(nn.Module):
         # Combine all losses into a single dictionary
         losses = {
             "ce_loss": ce_loss,
-            **kld_losses  # Unpack KL-related losses
+            **kld_losses,  # Unpack KL-related losses
+            'avg_entropy': avg_entropy,
+            'avg_perplexity': avg_perplexity
         }
 
         # Return the logits, combined losses dictionary, and updated q_z_marg

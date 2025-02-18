@@ -105,6 +105,8 @@ class LoggingCallback(pl.Callback):
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
+            elif key in ['avg_entropy', 'avg_perplexity']:
+                metric_name = f'Codebook/{key}_{phase}'
             # Handle any remaining metrics
             elif key.strip():
                 metric_name = f'{key.capitalize()}/{key}_{phase}'
@@ -432,7 +434,9 @@ class DVAETrainingModule(pl.LightningModule):
             'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy_no_pad(TOKENS)': acc_no_pad.detach(),
-            'accuracy(SAMPLES)': sample_accuracy.detach()
+            'accuracy(SAMPLES)': sample_accuracy.detach(),
+            'avg_entropy': losses['avg_entropy'],
+            'avg_perplexity': losses['avg_perplexity']
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
