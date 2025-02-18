@@ -44,6 +44,8 @@
 - [x] Add tests for the ResidualProjection class
 - [x] Remove AttentionPool, add TransformerProjection
 - [x] Add tests for the TransformerProjection class
+- [x] Change the mask shape to not be attention mask for ResidualProjection
+- [ ] Change the mask shape to not be attention mask for TransformerProjection
 - [ ] Modify stacked pooling to be simpler and use transformer blocks
 - [ ] Adjust tests for the new stacked pooling
 - [ ] Check whether token normalisation is needed

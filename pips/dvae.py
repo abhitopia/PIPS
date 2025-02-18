@@ -435,7 +435,7 @@ class ResidualProjection(nn.Module):
         """
         Args:
             x (Tensor): Input tensor of shape (B, S, d).
-            mask (Tensor, optional): Boolean tensor of shape (B, 1, S) or (1, 1, S)
+            mask (Tensor, optional): Boolean tensor of shape (B, S) or (1, S)
                                      where True indicates a valid token.
         Returns:
             Tensor: Output tensor of shape (B, K, d).
@@ -445,30 +445,28 @@ class ResidualProjection(nn.Module):
         x = x.transpose(1, 2)  # (B, d, S)
         
         if mask is not None:
+            # Check mask dimensions
+            assert mask.dim() == 2 and mask.size(-1) == S, \
+                f"Expected mask shape [(1, S), (B, S)], got {mask.shape}"
 
-            # Check attn_mask dimensions if provided
-            if mask is not None:
-                assert mask.shape in [(1, 1, S), (B, 1, S)], \
-                    f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {mask.shape}"
-
-            # Expand mask to match (B, d, S)
-            if mask.shape[0] == 1 and x.shape[0] > 1:
-                mask = mask.expand(x.shape[0], -1, -1)
-            else:
-                mask = mask.expand(-1, x.shape[1], -1)
-            # Use masked_fill to zero out masked tokens.
+            # Expand mask if needed and add dimension for broadcasting
+            if mask.size(0) == 1 and B > 1:
+                mask = mask.expand(B, -1)
+            mask = mask.unsqueeze(1)  # Shape: (B, 1, S) for broadcasting with (B, d, S)
+            
+            # Use masked_fill to zero out masked tokens
             x = x.masked_fill(~mask, 0.0)
         
-        # Apply the learned linear projection across the S dimension.
+        # Apply the learned linear projection across the S dimension
         x = self.proj(x)  # Now shape: (B, d, K)
         
-        # Optional: Normalize over the token dimension (axis=-1 for shape (B, d, K)).
+        # Optional: Normalize over the token dimension
         x = self.norm_tokens(x)
         
-        # Transpose to (B, K, d) so that each token is a d-dimensional vector.
+        # Transpose to (B, K, d) so that each token is a d-dimensional vector
         x = x.transpose(1, 2)
         
-        # Apply feature-level RMSNorm to each token's d-dimensional embedding.
+        # Apply feature-level RMSNorm to each token's d-dimensional embedding
         x = self.norm_features(x)
         return x
 
@@ -1003,8 +1001,6 @@ class GridDVAE(nn.Module):
         = E{q(z|x_i)} [log q(z|x_i) - log ∏ p(z_j) + log q(z) - log q(z) + log ∏ q(z_j) - log ∏ q(z_j) ]
 
         = E{q(z|x_i)} [log q(z|x_i)/q(z) + log q(z)/∏ q(z_j) + log ∏ q(z_j)/p(z_j) ]
-
-        = Σ{z} [q(z|x_i) * (log q(z|x_i)/log q(z) + log q(z)/∏ q(z_j) + log ∏ q(z_j)/p(z_j) )]
 
         = Σ{z} [q(z|x_i) * (log q(z|x_i)/log q(z) + log q(z)/∏ q(z_j) + Σ{j} log q(z_j)/p(z_j) )]
 

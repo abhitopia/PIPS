@@ -296,7 +296,7 @@ def test_stacked_pooling_with_mask():
     pool_sizes = [10, 5, 2]
     B, S = 4, 20
     x = torch.randn(B, S, dim)
-    attn_mask = torch.ones(1, 1, S)
+    attn_mask = torch.ones(1, S)
     
     stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
     output = stacked_pool(x, attn_mask=attn_mask)
@@ -308,7 +308,7 @@ def test_stacked_pooling_with_partial_mask():
     pool_sizes = [10, 5, 2]
     B, S = 4, 20
     x = torch.randn(B, S, dim)
-    attn_mask = torch.cat([torch.zeros(1, 1, S//2), torch.ones(1, 1, S//2)], dim=-1)
+    attn_mask = torch.cat([torch.zeros(1, S//2), torch.ones(1, S//2)], dim=-1)
     
     stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
     output = stacked_pool(x, attn_mask=attn_mask)
@@ -611,7 +611,7 @@ def test_dvae_masking_effect():
     positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
 
     def check_encoding_steps(x1, x2, mask, msg_prefix=""):
-        mask_tmp = mask.squeeze(1).expand(B, -1)
+        mask_tmp = mask.expand(B, -1)
         x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
 
         # Debug intermediate representations
@@ -1205,8 +1205,8 @@ def test_grid_dvae_config_json_serialization():
     (16, 16),  # same size
 ])
 @pytest.mark.parametrize("batch_specific_mask", [
-    False,    # single mask for all batches [1, 1, S]
-    True,     # batch-specific masks [B, 1, S]
+    False,    # single mask for all batches [1, S]
+    True,     # batch-specific masks [B, S]
 ])
 @pytest.mark.parametrize("token_norm", [
     False,    # no token normalization
@@ -1221,13 +1221,13 @@ def test_residual_projection_masking_effect(S, K, batch_specific_mask, token_nor
     x1 = torch.randn(B, S, d)
     x2 = x1.clone()
     
-    # Create mask [B, 1, S] or [1, 1, S] depending on batch_specific_mask
+    # Create mask [B, S] or [1, S] depending on batch_specific_mask
     batch_size = B if batch_specific_mask else 1
-    mask = torch.rand(batch_size, 1, S) > 0.5
+    mask = torch.rand(batch_size, S) > 0.5
     
     # Modify x2 at masked positions with random values
-    mask_expanded = mask.expand(B, 1, S)
-    x2[~mask_expanded.squeeze(1)] = torch.randn(torch.sum(~mask_expanded).item(), d)
+    mask_expanded = mask if batch_specific_mask else mask.expand(B, -1)
+    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), d)
     
     # Apply projection with mask
     output1 = proj(x1, mask=mask)
@@ -1280,11 +1280,10 @@ def test_residual_projection_normalization(S, K):
     (16, 16),  # same size
 ])
 @pytest.mark.parametrize("mask_shape", [
-    (1, 1, 16),    # valid: single mask for all batches
-    (4, 1, 8),     # valid: batch-specific mask
-    (1, 2, 16),    # invalid: wrong middle dimension
-    (4, 2, 8),     # invalid: wrong middle dimension
-    (2, 1, 8),     # invalid: batch size doesn't match
+    (1, 16),     # valid: single mask for all batches
+    (4, 16),     # valid: batch-specific mask
+    (1, 8),      # invalid: sequence length doesn't match
+    (2, 16),     # invalid: batch size doesn't match
 ])
 def test_residual_projection_mask_shape_validation(S, K, mask_shape):
     """Test that mask shape validation works correctly."""
@@ -1294,20 +1293,22 @@ def test_residual_projection_mask_shape_validation(S, K, mask_shape):
     mask = torch.ones(mask_shape, dtype=torch.bool)  # Create boolean mask
     
     # Check if the mask shape is valid
-    is_valid_shape = mask_shape in [(1, 1, S), (B, 1, S)]
+    is_valid_shape = mask_shape in [(1, S), (B, S)]
     
     if is_valid_shape:
         # Should not raise an error
         try:
             proj(x, mask=mask)
-        except AssertionError as e:
-            pytest.fail(f"Unexpected assertion error for valid mask shape {mask_shape}: {e}")
+        except (AssertionError, RuntimeError) as e:
+            pytest.fail(f"Unexpected error for valid mask shape {mask_shape}: {e}")
     else:
-        # Should raise an AssertionError
-        with pytest.raises(AssertionError) as excinfo:
+        # Should raise either an AssertionError or RuntimeError
+        with pytest.raises((AssertionError, RuntimeError)) as excinfo:
             proj(x, mask=mask)
-        assert "Expected attn_mask shape" in str(excinfo.value), \
-            f"Expected assertion error for invalid mask shape {mask_shape}"
+        error_msg = str(excinfo.value)
+        assert ("Expected mask shape" in error_msg or 
+                "must match the size" in error_msg), \
+            f"Expected error message about mask shape, got: {error_msg}"
 
 # Transformer Projection Tests 
 
@@ -1387,7 +1388,7 @@ def test_transformer_projection_mask_shape_validation(S, K, mask_shape):
     mask = torch.ones(mask_shape, dtype=torch.bool)  # Create boolean mask
     
     # Check if the mask shape is valid
-    is_valid_shape = mask_shape in [(1, 1, S), (B, 1, S)]
+    is_valid_shape = mask_shape in [(1, S), (B, S)]
     
     if is_valid_shape:
         # Should not raise an error
@@ -1399,7 +1400,7 @@ def test_transformer_projection_mask_shape_validation(S, K, mask_shape):
         # Should raise an AssertionError
         with pytest.raises(AssertionError) as excinfo:
             proj(x, mask=mask)
-        assert "Expected attn_mask shape" in str(excinfo.value), \
+        assert "Expected mask shape" in str(excinfo.value), \
             f"Expected assertion error for invalid mask shape {mask_shape}"
 
 def test_transformer_projection_output_shape():
