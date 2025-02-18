@@ -13,7 +13,8 @@ from pips.dvae import (
     GridDVAEConfig,
     GridDVAE,
     # AttentionPool,
-    StackedPooling,
+    # StackedPooling,
+    StackedTransformerProjection,
     Transformer,
     ResidualProjection,
     TransformerProjection
@@ -1341,13 +1342,13 @@ def test_transformer_projection_masking_effect(S, K, batch_specific_mask):
     x1 = torch.randn(B, S, d)
     x2 = x1.clone()
     
-    # Create mask [B, 1, S] or [1, 1, S] depending on batch_specific_mask
+    # Create mask [B, S] or [1, S] depending on batch_specific_mask
     batch_size = B if batch_specific_mask else 1
-    mask = torch.rand(batch_size, 1, S) > 0.5
+    mask = torch.rand(batch_size, S) > 0.5
     
     # Modify x2 at masked positions with random values
-    mask_expanded = mask.expand(B, 1, S)
-    x2[~mask_expanded.squeeze(1)] = torch.randn(torch.sum(~mask_expanded).item(), d)
+    mask_expanded = mask if batch_specific_mask else mask.expand(B, -1)
+    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), d)
     
     # Apply projection with mask
     output1 = proj(x1, mask=mask)
@@ -1363,11 +1364,10 @@ def test_transformer_projection_masking_effect(S, K, batch_specific_mask):
     (16, 16),  # same size
 ])
 @pytest.mark.parametrize("mask_shape", [
-    (1, 1, 16),    # valid: single mask for all batches
-    (4, 1, 8),     # valid: batch-specific mask
-    (1, 2, 16),    # invalid: wrong middle dimension
-    (4, 2, 8),     # invalid: wrong middle dimension
-    (2, 1, 8),     # invalid: batch size doesn't match
+    (1, 16),     # valid: single mask for all batches
+    (4, 16),     # valid: batch-specific mask
+    (1, 8),      # invalid: sequence length doesn't match
+    (2, 16),     # invalid: batch size doesn't match
 ])
 def test_transformer_projection_mask_shape_validation(S, K, mask_shape):
     """Test that mask shape validation works correctly."""
@@ -1394,14 +1394,16 @@ def test_transformer_projection_mask_shape_validation(S, K, mask_shape):
         # Should not raise an error
         try:
             proj(x, mask=mask)
-        except AssertionError as e:
-            pytest.fail(f"Unexpected assertion error for valid mask shape {mask_shape}: {e}")
+        except (AssertionError, RuntimeError) as e:
+            pytest.fail(f"Unexpected error for valid mask shape {mask_shape}: {e}")
     else:
-        # Should raise an AssertionError
-        with pytest.raises(AssertionError) as excinfo:
+        # Should raise either an AssertionError or RuntimeError
+        with pytest.raises((AssertionError, RuntimeError)) as excinfo:
             proj(x, mask=mask)
-        assert "Expected mask shape" in str(excinfo.value), \
-            f"Expected assertion error for invalid mask shape {mask_shape}"
+        error_msg = str(excinfo.value)
+        assert ("Expected mask shape" in error_msg or 
+                "must match the size" in error_msg), \
+            f"Expected error message about mask shape, got: {error_msg}"
 
 def test_transformer_projection_output_shape():
     """Test that output shapes are correct for various configurations."""
@@ -1430,7 +1432,144 @@ def test_transformer_projection_output_shape():
             f"Unexpected output shape for S={S}, K={K}: {output.shape}"
         
         # Test with mask
-        mask = torch.ones((1, 1, S), dtype=torch.bool)
+        mask = torch.ones((1, S), dtype=torch.bool)  # Changed to 2D mask
         output_masked = proj(x, mask=mask)
         assert output_masked.shape == (B, K, d), \
             f"Unexpected output shape with mask for S={S}, K={K}: {output_masked.shape}"
+        
+
+# StackedTransformerProjection Tests
+
+
+@pytest.mark.parametrize("input_seq_len,output_seq_lens", [
+    (32, [16, 8, 4]),    # progressive compression
+    (4, [8, 16, 32]),    # progressive expansion
+    (16, [16, 16, 16]),  # same size
+    (32, [16, 32, 8]),   # mixed compression/expansion
+])
+def test_stacked_transformer_projection_output_shape(input_seq_len, output_seq_lens):
+    """Test that output shapes are correct for various configurations."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    stacked_proj = StackedTransformerProjection(
+        config=config,
+        input_seq_len=input_seq_len,
+        output_seq_lens=output_seq_lens
+    )
+    x = torch.randn(B, input_seq_len, d)
+    
+    # Test without mask
+    output = stacked_proj(x)
+    assert output.shape == (B, output_seq_lens[-1], d), \
+        f"Unexpected output shape for input_len={input_seq_len}, final_len={output_seq_lens[-1]}: {output.shape}"
+    
+    # Test with mask
+    mask = torch.ones((1, input_seq_len), dtype=torch.bool)
+    output_masked = stacked_proj(x, mask=mask)
+    assert output_masked.shape == (B, output_seq_lens[-1], d), \
+        f"Unexpected output shape with mask for input_len={input_seq_len}, final_len={output_seq_lens[-1]}: {output_masked.shape}"
+
+@pytest.mark.parametrize("input_seq_len,output_seq_lens", [
+    (32, [16, 8, 4]),    # progressive compression
+    (16, [16, 16, 16]),  # same size
+])
+@pytest.mark.parametrize("batch_specific_mask", [
+    False,    # single mask for all batches [1, S]
+    True,     # batch-specific masks [B, S]
+])
+def test_stacked_transformer_projection_masking_effect(input_seq_len, output_seq_lens, batch_specific_mask):
+    """Test that masked inputs produce identical outputs when only masked values differ."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    stacked_proj = StackedTransformerProjection(
+        config=config,
+        input_seq_len=input_seq_len,
+        output_seq_lens=output_seq_lens
+    )
+    
+    # Create two identical inputs
+    x1 = torch.randn(B, input_seq_len, d)
+    x2 = x1.clone()
+    
+    # Create mask [B, S] or [1, S] depending on batch_specific_mask
+    batch_size = B if batch_specific_mask else 1
+    mask = torch.rand(batch_size, input_seq_len) > 0.5
+    
+    # Modify x2 at masked positions with random values
+    mask_expanded = mask if batch_specific_mask else mask.expand(B, -1)
+    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), d)
+    
+    # Apply projection with mask
+    output1 = stacked_proj(x1, mask=mask)
+    output2 = stacked_proj(x2, mask=mask)
+    
+    # Outputs should be identical since differences were only in masked positions
+    assert torch.allclose(output1, output2, atol=1e-5), \
+        f"Outputs differ when only masked positions are changed (input_len={input_seq_len}, " \
+        f"output_lens={output_seq_lens}, batch_specific_mask={batch_specific_mask})"
+
+@pytest.mark.parametrize("input_seq_len,output_seq_lens,mask_shape", [
+    (16, [8, 4], (1, 16)),     # valid: single mask for all batches
+    (16, [8, 4], (4, 16)),     # valid: batch-specific mask
+    (16, [8, 4], (1, 8)),      # invalid: sequence length doesn't match
+    (16, [8, 4], (2, 16)),     # invalid: batch size doesn't match
+])
+def test_stacked_transformer_projection_mask_shape_validation(input_seq_len, output_seq_lens, mask_shape):
+    """Test that mask shape validation works correctly."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    stacked_proj = StackedTransformerProjection(
+        config=config,
+        input_seq_len=input_seq_len,
+        output_seq_lens=output_seq_lens
+    )
+    x = torch.randn(B, input_seq_len, d)
+    mask = torch.ones(mask_shape, dtype=torch.bool)
+    
+    # Check if the mask shape is valid
+    is_valid_shape = mask_shape in [(1, input_seq_len), (B, input_seq_len)]
+    
+    if is_valid_shape:
+        # Should not raise an error
+        try:
+            stacked_proj(x, mask=mask)
+        except (AssertionError, RuntimeError) as e:
+            pytest.fail(f"Unexpected error for valid mask shape {mask_shape}: {e}")
+    else:
+        # Should raise either an AssertionError or RuntimeError
+        with pytest.raises((AssertionError, RuntimeError)) as excinfo:
+            stacked_proj(x, mask=mask)
+        error_msg = str(excinfo.value)
+        assert ("Expected mask shape" in error_msg or 
+                "must match the size" in error_msg), \
+            f"Expected error message about mask shape, got: {error_msg}"

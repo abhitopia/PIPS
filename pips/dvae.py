@@ -508,14 +508,15 @@ class TransformerProjection(nn.Module):
         """
         Args:
             x (Tensor): Input tensor [B, S, D]
-            attn_mask (Optional[Tensor]): Attention mask [1, 1, S] or [B, 1, S]
+            mask (Optional[Tensor]): Boolean mask of shape [B, S] or [1, S]
+                                   where True indicates a valid token. It applied to ResidualProjection only.
         Returns:
             Tensor: Output tensor [B, K, D]
         """
         B, S, D = x.shape
         assert S == self.input_seq_len, f"Expected input sequence length {self.input_seq_len}, got {S}"
         
-        # Project from S to K tokens
+        # Project from S to K tokens using 2D mask
         x = self.residual_proj(x, mask=mask)
         
         # Process with transformer block, passing the positions
@@ -524,51 +525,65 @@ class TransformerProjection(nn.Module):
         return x
 
 
-class StackedPooling(nn.Module):
+class StackedTransformerProjection(nn.Module):
     """
-    Applies multiple AttentionPool blocks in succession, reducing or increasing sequence length
-    from S -> S1 -> S2 -> ... -> SK step by step.
+    Applies multiple TransformerProjection blocks in succession, reducing or increasing sequence length
+    from S -> S1 -> S2 -> ... -> SK step by step using transformer-based projections.
     """
-    def __init__(self, dim: int, pool_sizes: List[int]):
+    def __init__(self, config: Config, input_seq_len: int, output_seq_lens: List[int]):
         """
         Args:
-            dim (int): Embedding dimension.
-            pool_sizes (List[int]): The output sequence lengths for each compression stage.
-                                    Example: [256, 64, 8] means:
-                                    Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
+            config (Config): Configuration object containing transformer parameters.
+            input_seq_len (int): Initial sequence length S.
+            output_seq_lens (List[int]): Target sequence lengths for each projection stage.
+                                        Example: [256, 64, 8] means:
+                                        Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
         """
         super().__init__()
-        self.dim = dim
-        self.pool_sizes = pool_sizes
+        self.config = config
+        self.input_seq_len = input_seq_len
+        self.output_seq_lens = output_seq_lens
         
-        # Create one AttentionPool module for each size in pool_sizes
-        self.pool_layers = nn.ModuleList([
-            AttentionPool(dim, num_queries=size) for size in pool_sizes
-        ])
-        # Add an RMSNorm layer for the final output of the stacking
-        self.out_norm = RMSNorm(dim)
+        # Create TransformerProjection layers for sequential projection
+        self.projection_layers = nn.ModuleList()
+        current_seq_len = input_seq_len
+        
+        for target_seq_len in output_seq_lens:
+            self.projection_layers.append(
+                TransformerProjection(
+                    config=config,
+                    input_seq_len=current_seq_len,
+                    output_seq_len=target_seq_len
+                )
+            )
+            current_seq_len = target_seq_len
+        
+        # Add an RMSNorm layer for the final output
+        self.out_norm = RMSNorm(config.n_dim)
     
-    def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x (Tensor): shape [B, S, D] input to the first stage
-            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S] or [B, 1, S] to be applied to the first AttentionPool
+            mask (Optional[Tensor]): Boolean mask of shape [B, S] or [1, S] where True indicates valid tokens.
+                                   Applied only to the first projection layer.
         Returns:
-            Tensor: shape [B, final_size, D] after all stages, normalized by RMSNorm.
+            Tensor: shape [B, final_size, D] after all projection stages, normalized by RMSNorm.
         """
         B, S, D = x.shape
+        assert S == self.input_seq_len, f"Expected input sequence length {self.input_seq_len}, got {S}"
 
-        if attn_mask is not None:
-            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], (
-                f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
+        if mask is not None:
+            assert mask.dim() == 2 and mask.size(-1) == S, (
+                f"Expected mask shape [(1, S), (B, S)], got {mask.shape}"
             )
 
-        for i, pool in enumerate(self.pool_layers):
-            if i == 0 and attn_mask is not None:
-                # Apply the attention mask only to the first AttentionPool
-                x = pool(x, attn_mask=attn_mask)
+        for i, proj in enumerate(self.projection_layers):
+            if i == 0:
+                # Apply mask only to the first projection layer
+                x = proj(x, mask=mask)
             else:
-                x = pool(x)
+                x = proj(x)
         
         # Apply RMSNorm to the final output
         return self.out_norm(x)
