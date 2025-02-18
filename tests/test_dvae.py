@@ -12,10 +12,11 @@ from pips.dvae import (
     RMSNorm,
     GridDVAEConfig,
     GridDVAE,
-    AttentionPool,
+    # AttentionPool,
     StackedPooling,
     Transformer,
-    ResidualProjection
+    ResidualProjection,
+    TransformerProjection
 )
 import torch.nn.functional as F
 
@@ -1307,3 +1308,128 @@ def test_residual_projection_mask_shape_validation(S, K, mask_shape):
             proj(x, mask=mask)
         assert "Expected attn_mask shape" in str(excinfo.value), \
             f"Expected assertion error for invalid mask shape {mask_shape}"
+
+# Transformer Projection Tests 
+
+@pytest.mark.parametrize("S,K", [
+    (16, 8),   # compression
+    (8, 16),   # expansion
+    (16, 16),  # same size
+])
+@pytest.mark.parametrize("batch_specific_mask", [
+    False,    # single mask for all batches [1, 1, S]
+    True,     # batch-specific masks [B, 1, S]
+])
+def test_transformer_projection_masking_effect(S, K, batch_specific_mask):
+    """Test that masked inputs produce identical outputs when only masked values differ."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    proj = TransformerProjection(config=config, input_seq_len=S, output_seq_len=K)
+    
+    # Create two identical inputs
+    x1 = torch.randn(B, S, d)
+    x2 = x1.clone()
+    
+    # Create mask [B, 1, S] or [1, 1, S] depending on batch_specific_mask
+    batch_size = B if batch_specific_mask else 1
+    mask = torch.rand(batch_size, 1, S) > 0.5
+    
+    # Modify x2 at masked positions with random values
+    mask_expanded = mask.expand(B, 1, S)
+    x2[~mask_expanded.squeeze(1)] = torch.randn(torch.sum(~mask_expanded).item(), d)
+    
+    # Apply projection with mask
+    output1 = proj(x1, mask=mask)
+    output2 = proj(x2, mask=mask)
+    
+    # Outputs should be identical since differences were only in masked positions
+    assert torch.allclose(output1, output2, atol=1e-5), \
+        f"Outputs differ when only masked positions are changed (S={S}, K={K}, batch_specific_mask={batch_specific_mask})"
+
+@pytest.mark.parametrize("S,K", [
+    (16, 8),   # compression
+    (8, 16),   # expansion
+    (16, 16),  # same size
+])
+@pytest.mark.parametrize("mask_shape", [
+    (1, 1, 16),    # valid: single mask for all batches
+    (4, 1, 8),     # valid: batch-specific mask
+    (1, 2, 16),    # invalid: wrong middle dimension
+    (4, 2, 8),     # invalid: wrong middle dimension
+    (2, 1, 8),     # invalid: batch size doesn't match
+])
+def test_transformer_projection_mask_shape_validation(S, K, mask_shape):
+    """Test that mask shape validation works correctly."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    proj = TransformerProjection(config=config, input_seq_len=S, output_seq_len=K)
+    x = torch.randn(B, S, d)
+    mask = torch.ones(mask_shape, dtype=torch.bool)  # Create boolean mask
+    
+    # Check if the mask shape is valid
+    is_valid_shape = mask_shape in [(1, 1, S), (B, 1, S)]
+    
+    if is_valid_shape:
+        # Should not raise an error
+        try:
+            proj(x, mask=mask)
+        except AssertionError as e:
+            pytest.fail(f"Unexpected assertion error for valid mask shape {mask_shape}: {e}")
+    else:
+        # Should raise an AssertionError
+        with pytest.raises(AssertionError) as excinfo:
+            proj(x, mask=mask)
+        assert "Expected attn_mask shape" in str(excinfo.value), \
+            f"Expected assertion error for invalid mask shape {mask_shape}"
+
+def test_transformer_projection_output_shape():
+    """Test that output shapes are correct for various configurations."""
+    B, d = 4, 64
+    config = GridDVAEConfig(
+        n_dim=d,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    
+    # Test different input/output sequence lengths
+    test_sizes = [(16, 8), (8, 16), (16, 16)]
+    
+    for S, K in test_sizes:
+        proj = TransformerProjection(config=config, input_seq_len=S, output_seq_len=K)
+        x = torch.randn(B, S, d)
+        
+        # Test without mask
+        output = proj(x)
+        assert output.shape == (B, K, d), \
+            f"Unexpected output shape for S={S}, K={K}: {output.shape}"
+        
+        # Test with mask
+        mask = torch.ones((1, 1, S), dtype=torch.bool)
+        output_masked = proj(x, mask=mask)
+        assert output_masked.shape == (B, K, d), \
+            f"Unexpected output shape with mask for S={S}, K={K}: {output_masked.shape}"

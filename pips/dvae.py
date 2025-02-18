@@ -473,66 +473,58 @@ class ResidualProjection(nn.Module):
         return x
 
 
-class AttentionPool(nn.Module):
-    def __init__(self, dim: int, num_queries: int):
+class TransformerProjection(nn.Module):
+    """
+    A transformer block that projects sequence length from S to K tokens using 
+    learned projections followed by transformer processing.
+
+    Args:
+        config (Config): Configuration object containing n_dim and other parameters
+        input_seq_len (int): Input sequence length S
+        output_seq_len (int): Target sequence length K
+    """
+    def __init__(self, config: Config, input_seq_len: int, output_seq_len: int):
         super().__init__()
-        self.num_queries = num_queries  # K: number of output tokens
-        self.dim = dim                  # D: embedding dimension
+        self.config = config
+        self.input_seq_len = input_seq_len    # S: input sequence length
+        self.output_seq_len = output_seq_len  # K: output sequence length
         
-        # Learned query vectors [K, D]
-        self.queries = nn.Parameter(torch.empty(num_queries, dim), requires_grad=True)
-        nn.init.xavier_normal_(self.queries, gain=1/math.sqrt(dim))
+        # Project from S to K tokens
+        self.residual_proj = ResidualProjection(S=input_seq_len, K=output_seq_len, d=config.n_dim)
         
-        # Projection layers
-        self.k_proj = nn.Linear(dim, dim, bias=False)    # [D, D]
-        self.v_proj = nn.Linear(dim, dim, bias=False)    # [D, D]
-        self.out_proj = nn.Linear(dim, dim, bias=False)  # [D, D]
+        # Initialize 1D RoPE for the output sequence length
+        rope = RotaryPositionalEmbeddings(
+            dim=config.n_dim // config.n_head,  # RoPE dim is per head
+            max_seq_len=config.max_grid_height * config.max_grid_width,
+            base=config.rope_base
+        )
         
-        # Pre-norm
-        self.norm = RMSNorm(dim)
+        # Process with transformer block with RoPE
+        self.transformer = TransformerBlock(config, rope=rope)
+
+        # Register position indices buffer
+        pos_indices = torch.arange(output_seq_len, dtype=torch.long)
+        self.register_buffer('pos_indices', pos_indices.unsqueeze_(0), persistent=False)
         
-    def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
+    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
             x (Tensor): Input tensor [B, S, D]
-            attn_mask (Optional[Tensor]): Attention mask [1, 1, S], [B, 1, S], or [B, K, S]
+            attn_mask (Optional[Tensor]): Attention mask [1, 1, S] or [B, 1, S]
         Returns:
             Tensor: Output tensor [B, K, D]
         """
         B, S, D = x.shape
-        K = self.num_queries
-        assert D == self.dim, f"Expected input dimension {self.dim}, got {D}."
-
-        # Apply RMSNorm before any projections
-        x_norm = self.norm(x)  # [B, S, D]
+        assert S == self.input_seq_len, f"Expected input sequence length {self.input_seq_len}, got {S}"
         
-        # Project keys and values
-        k = self.k_proj(x_norm)  # [B, S, D]
-        v = self.v_proj(x_norm)  # [B, S, D]
-
-        # Use queries directly
-        q = self.queries.unsqueeze(0).expand(B, -1, -1)  # [B, K, D]
-
-        # Check attn_mask dimensions if provided
-        if attn_mask is not None:
-            assert attn_mask.shape in [(1, 1, S), (B, 1, S)], \
-                f"Expected attn_mask shape [(1, 1, S), (B, 1, S)], got {attn_mask.shape}"
-
-        # Compute attention
-        attn_output = F.scaled_dot_product_attention(
-            q,                          # [B, K, D]
-            k,                          # [B, S, D]
-            v,                          # [B, S, D]
-            attn_mask=attn_mask,        
-            scale=self.dim ** -0.5
-        )  # [B, K, D]
+        # Project from S to K tokens
+        x = self.residual_proj(x, mask=mask)
         
-        # Project attention output
-        attn_output = self.out_proj(attn_output)  # [B, K, D]
+        # Process with transformer block, passing the positions
+        x, _ = self.transformer(x, attn_mask=None, positions=self.pos_indices.expand(B, -1))
         
-        # Add residual and apply dropout
-        return attn_output
-    
+        return x
+
 
 class StackedPooling(nn.Module):
     """
