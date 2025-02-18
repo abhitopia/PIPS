@@ -49,12 +49,9 @@
 - [x] Modify stacked pooling to StackedTransformerProjection be simpler and use TransformerProjection
 - [x] Adjust tests for the new stacked pooling
 - [x] Fix transformer tests
-- [ ] Upgrade rest of the code to use StackedTransformerProjection
-- [ ] Fix all the remaining tests
+- [x] Upgrade rest of the code to use StackedTransformerProjection
+- [x] Fix all the remaining tests
 - [ ] Check whether token normalisation is needed
-- [ ] Fix masking for the pooling layers
-- [ ] Add pooling as well as interpolation tests
-- [ ] May be add the MLP to the pooling layers too!
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
 

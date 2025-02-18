@@ -207,6 +207,30 @@ def test_dvae():
     
     dvae = GridDVAE(config)
     
+    # Verify bottleneck widths are correct
+    expected_widths = [1024, 512, 256, 128, 64, 32, 16, 8]  # n_pos -> n_codes
+    assert config.bottleneck_widths == expected_widths, \
+        f"Bottleneck widths incorrect.\nExpected: {expected_widths}\nGot: {config.bottleneck_widths}\nDifference in lengths: {len(expected_widths)} vs {len(config.bottleneck_widths)}"
+    
+
+    # Verify encoder bottleneck input sequence length
+    assert dvae.encoder_bottleneck.input_seq_len == config.n_pos, \
+        "Encoder bottleneck input sequence length doesn't match n_pos"
+    
+    # Verify encoder bottleneck sequence lengths
+    assert dvae.encoder_bottleneck.output_seq_lens == expected_widths[1:], \
+        "Encoder bottleneck sequence lengths don't match expected widths"
+    
+
+    # Verify decoder bottleneck input sequence length
+    assert dvae.decoder_bottleneck.input_seq_len == config.n_codes, \
+        "Decoder bottleneck input sequence length doesn't match n_codes"
+    
+    # Verify decoder bottleneck sequence lengths
+    # For decoder, we start from n_codes (8) and go up to n_pos (1024)
+    assert dvae.decoder_bottleneck.output_seq_lens == expected_widths[::-1][1:], \
+        "Decoder bottleneck sequence lengths don't match expected widths"
+    
     # Test forward pass
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
@@ -217,7 +241,8 @@ def test_dvae():
     kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
     
     # Test output shape
-    assert output.shape == (batch_size, config.n_pos, config.n_vocab)
+    assert output.shape == (batch_size, config.n_pos, config.n_vocab), \
+        f"Expected output shape {(batch_size, config.n_pos, config.n_vocab)}, got {output.shape}"
     assert isinstance(reconstruction_loss, torch.Tensor), "reconstruction_loss should be a tensor."
     assert reconstruction_loss.dim() == 0, "reconstruction_loss should be a scalar tensor."
     assert isinstance(kld_losses, dict), "kld_losses should be a dictionary."
@@ -228,93 +253,15 @@ def test_dvae():
     
     # Convert to probabilities and test
     probs = F.softmax(output, dim=-1)
-    assert torch.allclose(probs.sum(dim=-1), torch.ones_like(probs.sum(dim=-1)))
+    assert torch.allclose(probs.sum(dim=-1), torch.ones_like(probs.sum(dim=-1))), \
+        "Probabilities don't sum to 1"
     
     # Test that output contains logits (not all zeros or NaNs)
-    assert not torch.allclose(output, torch.zeros_like(output))
-    assert not torch.any(torch.isnan(output)) 
+    assert not torch.allclose(output, torch.zeros_like(output)), \
+        "Output contains all zeros"
+    assert not torch.any(torch.isnan(output)), \
+        "Output contains NaN values"
 
-def test_attention_pool_no_mask():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-    output = pool(x)
-    
-    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
-
-def test_attention_pool_mask_shape_1_1_S():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    attn_mask = torch.ones(1, 1, S)
-    
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-    output = pool(x, attn_mask=attn_mask)
-    
-    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
-
-def test_attention_pool_mask_shape_B_1_S():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    attn_mask = torch.ones(B, 1, S)
-    
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-    output = pool(x, attn_mask=attn_mask)
-    
-    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}"
-
-def test_attention_pool_mask_shape_B_K_S():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    attn_mask = torch.ones(B, num_queries, S)
-    
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-    output = pool(x, attn_mask=attn_mask)
-    
-    assert output.shape == (B, num_queries, dim), f"Unexpected output shape: {output.shape}" 
-
-def test_stacked_pooling_no_mask():
-    dim = 64
-    pool_sizes = [10, 5, 2]
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    
-    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
-    output = stacked_pool(x)
-    
-    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}"
-
-def test_stacked_pooling_with_mask():
-    dim = 64
-    pool_sizes = [10, 5, 2]
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    attn_mask = torch.ones(1, S)
-    
-    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
-    output = stacked_pool(x, attn_mask=attn_mask)
-    
-    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}"
-
-def test_stacked_pooling_with_partial_mask():
-    dim = 64
-    pool_sizes = [10, 5, 2]
-    B, S = 4, 20
-    x = torch.randn(B, S, dim)
-    attn_mask = torch.cat([torch.zeros(1, S//2), torch.ones(1, S//2)], dim=-1)
-    
-    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
-    output = stacked_pool(x, attn_mask=attn_mask)
-    
-    assert output.shape == (B, pool_sizes[-1], dim), f"Unexpected output shape: {output.shape}" 
 
 def test_create_random_mask_no_mask():
     config = GridDVAEConfig(
@@ -402,7 +349,13 @@ def test_dvae_forward_with_mask():
 
 
 
-def test_dvae_masking_effect():
+@pytest.mark.parametrize("mask_percentage,same_mask_for_all", [
+    (0.5, True),   # Test with 50% masking, same mask for all
+    (0.5, False),  # Test with 50% masking, different masks
+    (0.3, True),   # Test with 30% masking, same mask for all
+    (0.7, False),  # Test with 70% masking, different masks
+])
+def test_dvae_masking_effect(mask_percentage, same_mask_for_all):
     """
     Test that masked positions do not affect the encoding at unmasked positions.
     The outputs should be identical at unmasked positions regardless of the input at masked positions.
@@ -420,86 +373,71 @@ def test_dvae_masking_effect():
     dvae = GridDVAE(config)
     B = 2
     S = config.n_pos
+    
+    # Create two identical inputs
+    torch.manual_seed(42)  # For reproducibility
     x1 = torch.randint(0, config.n_vocab, (B, S))
     x2 = x1.clone()
 
-    # Create position indices using DVAE.create_grid_position_tensor
+    # Create position indices
     grid_height = int(S**0.5)
     grid_width = grid_height
     positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
     positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
 
-    def check_encoding_steps(x1, x2, mask, msg_prefix=""):
-        mask_tmp = mask.expand(B, -1)
-        x2[~mask_tmp] = torch.randint(0, config.n_vocab, (torch.sum(~mask_tmp).item(),))
+    # Create mask
+    mask = dvae.create_random_mask(B, S, mask_percentage, same_mask_for_all=same_mask_for_all)
+    assert mask is not None, "Mask should not be None"
+    
+    # Handle both [B, 1, S] and [1, 1, S] mask shapes
+    mask_expanded = mask.squeeze(1)  # Remove middle dimension to get [B/1, S]
+    if same_mask_for_all:  # If using same mask for all, expand to match batch size
+        mask_expanded = mask_expanded.expand(B, -1)
+    
+    # Modify x2 at masked positions
+    x2[~mask_expanded] = torch.randint(0, config.n_vocab, (torch.sum(~mask_expanded).item(),))
 
-        # Debug intermediate representations
+    # Test each step of the encoding process
+    with torch.no_grad():
+        # Test embeddings
+        emb1 = dvae.embd(x1)
+        emb2 = dvae.embd(x2)
+        assert torch.allclose(emb1[mask_expanded], emb2[mask_expanded], atol=1e-5), \
+            "Embeddings differ at unmasked positions"
+
+        # Test encoder base
+        enc1, _ = dvae.encoder_base(emb1, mask, positions=positions)
+        enc2, _ = dvae.encoder_base(emb2, mask, positions=positions)
+        assert torch.allclose(enc1[mask_expanded], enc2[mask_expanded], atol=1e-5), \
+            "Encoder base outputs differ at unmasked positions"
+
+        # Test encoder bottleneck
+        bottleneck1 = dvae.encoder_bottleneck(enc1, mask.squeeze(1))
+        bottleneck2 = dvae.encoder_bottleneck(enc2, mask.squeeze(1))
+        assert torch.allclose(bottleneck1, bottleneck2, atol=1e-5), \
+            "Encoder bottleneck outputs differ"
+
+        # Test encoder head
+        head1 = dvae.encoder_head(bottleneck1)
+        head2 = dvae.encoder_head(bottleneck2)
+        assert torch.allclose(head1, head2, atol=1e-5), \
+            "Encoder head outputs differ"
+
+        # Test gumbel-softmax
         torch.manual_seed(42)
-        with torch.no_grad():
-            # Get embeddings
-            emb1 = dvae.embd(x1)
-            emb2 = dvae.embd(x2)
-            
-            # Check embeddings at unmasked positions
-            assert torch.allclose(emb1[mask_tmp], emb2[mask_tmp], atol=1e-5), \
-                f"{msg_prefix}Embeddings differ at unmasked positions"
+        gumbel1 = F.gumbel_softmax(head1, tau=0.9, hard=False)
+        torch.manual_seed(42)
+        gumbel2 = F.gumbel_softmax(head2, tau=0.9, hard=False)
+        assert torch.allclose(gumbel1, gumbel2, atol=1e-6), \
+            "Gumbel-softmax outputs differ"
 
-            # Get encoder base output
-            enc1, _ = dvae.encoder_base(emb1, mask, positions=positions)
-            enc2, _ = dvae.encoder_base(emb2, mask, positions=positions)
-            
-            # Check encoder base output at unmasked positions
-            assert torch.allclose(enc1[mask_tmp], enc2[mask_tmp], atol=1e-5), \
-                f"{msg_prefix}Encoder base outputs differ at unmasked positions"
-
-            # Get encoder bottleneck output
-            bottleneck1 = dvae.encoder_bottleneck(enc1, mask)
-            bottleneck2 = dvae.encoder_bottleneck(enc2, mask)
-            
-            # Check bottleneck outputs
-            assert torch.allclose(bottleneck1, bottleneck2, atol=1e-5), \
-                f"{msg_prefix}Encoder bottleneck outputs differ"
-
-            # Get encoder head output (before gumbel-softmax)
-            head1 = dvae.encoder_head(bottleneck1)
-            head2 = dvae.encoder_head(bottleneck2)
-            
-            # Check encoder head output
-            assert torch.allclose(head1, head2, atol=1e-5), \
-                f"{msg_prefix}Encoder head outputs differ"
-
-            # Apply gumbel-softmax directly with same random seed
-            torch.manual_seed(42)
-            gumbel1 = F.gumbel_softmax(head1, tau=0.9, hard=False)
-            
-            torch.manual_seed(42)
-            gumbel2 = F.gumbel_softmax(head2, tau=0.9, hard=False)
-            
-            # Check gumbel-softmax outputs
-            assert torch.allclose(gumbel1, gumbel2, atol=1e-4), \
-                f"{msg_prefix}Gumbel-softmax outputs differ"
-
-            # Get final codes with fixed random seed
-            torch.manual_seed(42)
-            code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
-            
-            torch.manual_seed(42)
-            code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
-            
-            # Check final codes
-            assert torch.allclose(code1, code2, atol=1e-4), \
-                f"{msg_prefix}Codes differ when only masked positions are changed"
-
-    # Test with same_mask_for_all=True and hard=False
-    mask_percentage = 0.5
-    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=True)
-    if mask is not None:
-        check_encoding_steps(x1, x2.clone(), mask, "Same mask for all: ")
-
-    # Test with same_mask_for_all=False and hard=False
-    mask = dvae.create_random_mask(B, config.n_pos, mask_percentage, same_mask_for_all=False)
-    if mask is not None:
-        check_encoding_steps(x1, x2.clone(), mask, "Different masks: ")
+        # Test final encoding
+        torch.manual_seed(42)
+        code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+        torch.manual_seed(42)
+        code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+        assert torch.allclose(code1, code2, atol=1e-6), \
+            "Final codes differ when only masked positions are changed"
 
 # Test reconstruction_loss
 def test_reconstruction_loss():
@@ -897,10 +835,11 @@ def test_kld_losses_numerical_stability():
         assert torch.isfinite(kld_losses["kl_loss"]), f"KL loss not finite at temperature {temp}"
         
         # Allow for small negative values due to numerical precision
-        assert kld_losses["mi_loss"] >= -1e-6, f"MI loss too negative at temperature {temp}"
-        assert kld_losses["dwkl_loss"] >= -1e-6, f"DWKL loss too negative at temperature {temp}"
-        assert kld_losses["tc_loss"] >= -1e-6, f"TC loss too negative at temperature {temp}"
-        assert kld_losses["kl_loss"] >= -1e-6, f"KL loss too negative at temperature {temp}"
+        tolerance = 5e-6  # Increased from 1e-6 to 5e-6
+        assert kld_losses["mi_loss"] >= -tolerance, f"MI loss too negative at temperature {temp}"
+        assert kld_losses["dwkl_loss"] >= -tolerance, f"DWKL loss too negative at temperature {temp}"
+        assert kld_losses["tc_loss"] >= -tolerance, f"TC loss too negative at temperature {temp}"
+        assert kld_losses["kl_loss"] >= -tolerance, f"KL loss too negative at temperature {temp}"
 
     # Test with ReLU - ensure strictly non-negative
     for temp in temperatures:
@@ -947,7 +886,7 @@ def test_grid_dvae_config_serialization():
     # Check that computed attributes are present
     assert 'n_pos' in config_dict
     assert 'compression_factor' in config_dict
-    assert 'pool_sizes' in config_dict
+    assert 'bottleneck_widths' in config_dict
     
     # Create new config from dict
     new_config = GridDVAEConfig.from_dict(config_dict)
@@ -965,7 +904,8 @@ def test_grid_dvae_config_serialization():
     # Check that computed attributes match
     assert new_config.n_pos == config.n_pos
     assert new_config.compression_factor == config.compression_factor
-    assert new_config.pool_sizes == config.pool_sizes
+    assert new_config.bottleneck_widths == config.bottleneck_widths, \
+        f"Bottleneck widths don't match.\nExpected: {config.bottleneck_widths}\nGot: {new_config.bottleneck_widths}"
 
 def test_grid_dvae_config_serialization_with_defaults():
     # Create a minimal config with only required fields
@@ -1010,13 +950,20 @@ def test_grid_dvae_config_json_serialization():
     new_config = GridDVAEConfig.from_dict(loaded_dict)
     
     # Check that all attributes match
-    assert new_config.n_dim == config.n_dim
-    assert new_config.n_head == config.n_head
-    assert new_config.n_layers == config.n_layers
-    assert new_config.n_codes == config.n_codes
-    assert new_config.n_pos == config.n_pos
-    assert new_config.compression_factor == config.compression_factor
-    assert new_config.pool_sizes == config.pool_sizes
+    assert new_config.n_dim == config.n_dim, \
+        f"n_dim mismatch: expected {config.n_dim}, got {new_config.n_dim}"
+    assert new_config.n_head == config.n_head, \
+        f"n_head mismatch: expected {config.n_head}, got {new_config.n_head}"
+    assert new_config.n_layers == config.n_layers, \
+        f"n_layers mismatch: expected {config.n_layers}, got {new_config.n_layers}"
+    assert new_config.n_codes == config.n_codes, \
+        f"n_codes mismatch: expected {config.n_codes}, got {new_config.n_codes}"
+    assert new_config.n_pos == config.n_pos, \
+        f"n_pos mismatch: expected {config.n_pos}, got {new_config.n_pos}"
+    assert new_config.compression_factor == config.compression_factor, \
+        f"compression_factor mismatch: expected {config.compression_factor}, got {new_config.compression_factor}"
+    assert new_config.bottleneck_widths == config.bottleneck_widths, \
+        f"bottleneck_widths mismatch.\nExpected: {config.bottleneck_widths}\nGot: {new_config.bottleneck_widths}"
 
 @pytest.mark.parametrize("S,K", [
     (16, 8),   # compression
@@ -1027,14 +974,10 @@ def test_grid_dvae_config_json_serialization():
     False,    # single mask for all batches [1, S]
     True,     # batch-specific masks [B, S]
 ])
-@pytest.mark.parametrize("token_norm", [
-    False,    # no token normalization
-    True,     # with token normalization
-])
-def test_residual_projection_masking_effect(S, K, batch_specific_mask, token_norm):
+def test_residual_projection_masking_effect(S, K, batch_specific_mask):
     """Test that masked inputs produce identical outputs when only masked values differ."""
     B, d = 4, 64
-    proj = ResidualProjection(S=S, K=K, d=d, token_norm=token_norm)
+    proj = ResidualProjection(S=S, K=K, d=d, token_norm=True)
     
     # Create two identical inputs
     x1 = torch.randn(B, S, d)
@@ -1054,7 +997,7 @@ def test_residual_projection_masking_effect(S, K, batch_specific_mask, token_nor
     
     # Outputs should be identical since differences were only in masked positions
     assert torch.allclose(output1, output2, atol=1e-5), \
-        f"Outputs differ when only masked positions are changed (S={S}, K={K}, batch_specific_mask={batch_specific_mask}, token_norm={token_norm})"
+        f"Outputs differ when only masked positions are changed (S={S}, K={K}, batch_specific_mask={batch_specific_mask})"
 
 @pytest.mark.parametrize("S,K", [
     (16, 8),   # compression

@@ -623,14 +623,15 @@ class GridDVAEConfig(Config):
         assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
 
         self.compression_factor = self.n_pos // self.n_codes
-        self.pool_sizes = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
+        # Calculate intermediate sequence lengths for the bottleneck
+        self.bottleneck_widths = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
 
     def __repr__(self) -> str:
         attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
         computed_attrs = [
             f"n_pos={self.n_pos}",
             f"compression_factor={self.compression_factor}",
-            f"pool_sizes={self.pool_sizes}"
+            f"bottleneck_widths={self.bottleneck_widths}"
         ]
         all_attrs = attrs + computed_attrs
         return f"DVAEConfig({', '.join(all_attrs)})"
@@ -656,7 +657,7 @@ class GridDVAEConfig(Config):
         }
         
         # Add computed attributes if they exist
-        computed_attrs = ['n_pos', 'compression_factor', 'pool_sizes']
+        computed_attrs = ['n_pos', 'compression_factor', 'bottleneck_widths']
         for attr in computed_attrs:
             if hasattr(self, attr):
                 base_dict[attr] = getattr(self, attr)
@@ -728,22 +729,39 @@ class GridDVAE(nn.Module):
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
-        self.encoder_base = Transformer(config=config)
-        self.encoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[1:])
+        
+        # Keep the base transformer blocks
+        self.encoder_base = Transformer(config)
+        self.decoder_base = Transformer(config)
+        
+        # Replace bottleneck components with StackedTransformerProjection
+        self.encoder_bottleneck = StackedTransformerProjection(
+            config=config,
+            input_seq_len=config.n_pos,
+            output_seq_lens=config.bottleneck_widths[1:]  # Skip the first width as it's the input size
+        )
         self.encoder_head = nn.Linear(config.n_dim, config.codebook_size)
+        
+        # Initialize codebook
         self.codebook = nn.Parameter(torch.empty(config.codebook_size, config.n_dim))
-        nn.init.normal_(self.codebook, mean=0.0, std=0.02)  # Smaller initialization
-        self.decoder_bottleneck = StackedPooling(dim=config.n_dim, pool_sizes=config.pool_sizes[::-1][1:])
-        self.decoder_base = Transformer(config=config)
+        nn.init.normal_(self.codebook, mean=0.0, std=0.02)
+        
+        # Replace decoder bottleneck with StackedTransformerProjection
+        self.decoder_bottleneck = StackedTransformerProjection(
+            config=config,
+            input_seq_len=config.n_codes,
+            output_seq_lens=config.bottleneck_widths[::-1][1:]  # Reverse and skip the last width
+        )
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
+        
+        # Initialize position indices
         pos_indices = self.create_grid_position_tensor(
-                            config.max_grid_height,
-                            config.max_grid_width, 
-                            requires_grad=False).unsqueeze_(0)
+            config.max_grid_height,
+            config.max_grid_width, 
+            requires_grad=False).unsqueeze_(0)
 
-        # persistent=False prevents it from saved to statedict
+        # Register buffer with persistent=False
         self.register_buffer('pos_indices', pos_indices, persistent=False)
-
         self.q_z_marg = None
 
     @staticmethod
@@ -813,14 +831,18 @@ class GridDVAE(nn.Module):
 
         assert S == self.n_pos, f"Input Sequence must be of length {self.n_pos}"
 
-        # Pass to the encoder network with the attention mask
-        encoded, _ = self.encoder_base(x, attn_mask, positions)
-
-        # Compress to Codebook Space with the attention mask
-        encoded_compressed = self.encoder_bottleneck(encoded, attn_mask)
-
-        # Map n_codes to logits
-        encoded_logits = self.encoder_head(encoded_compressed)
+        # First pass through base transformer
+        x, _ = self.encoder_base(x, attn_mask=attn_mask, positions=positions)
+        
+        # Convert attn_mask from [B, 1, S] or [1, 1, S] to [B, S] or [1, S] for encoder_bottleneck
+        bottleneck_mask = attn_mask.squeeze(1) if attn_mask is not None else None
+        
+        # Then through bottleneck
+        encoded = self.encoder_bottleneck(x, mask=bottleneck_mask)
+        
+        # Map to logits
+        encoded_logits = self.encoder_head(encoded)
+        
         # Use gumbel softmax to sample from the Codebook
         soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
 
