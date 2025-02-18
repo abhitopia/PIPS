@@ -245,7 +245,7 @@ class DVAETrainingModule(pl.LightningModule):
         self.compile_model = compile_model
         self.save_hyperparameters()
         # Initialize q_z_marg with correct size but all zeros
-        self.register_buffer('q_z_marg', torch.zeros(16, 512), persistent=True)
+        self.register_buffer('q_z_marg', torch.zeros(self.model_config.n_codes, self.model_config.codebook_size), persistent=True)
     
     def configure_model(self):
         """
@@ -361,6 +361,7 @@ class DVAETrainingModule(pl.LightningModule):
         }
 
     def forward(self, x, q_z_marg=None, train=True):
+
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hard = scheduled_values['hard']
@@ -372,13 +373,10 @@ class DVAETrainingModule(pl.LightningModule):
             max_mask_pct = scheduled_values['max_pct(MASK)']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
-        # Check if q_z_marg should be treated as None
-        effective_q_z_marg = None if q_z_marg.sum() == 0 else q_z_marg
-        
         # Forward pass with current scheduled values and provided q_z_marg
         logits, losses, updated_q_z_marg = self.model.forward(
             x, 
-            q_z_marg=effective_q_z_marg,
+            q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
             hard=hard, 
             reinMax=reinMax,
@@ -438,19 +436,32 @@ class DVAETrainingModule(pl.LightningModule):
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
+        torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
-        output_dict, updated_q_z_marg = self(x, q_z_marg=self.q_z_marg, train=True)
-        
-        # Update the global q_z_marg estimate
-        self.q_z_marg = updated_q_z_marg
+        # Clone q_z_marg before passing it to forward to avoid CUDA graph issues
+        q_z_marg_clone = self.q_z_marg.clone() if self.q_z_marg is not None else None
+            
+        # Check if q_z_marg should be treated as None
+        effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
+
+        output_dict, updated_q_z_marg = self(x, q_z_marg=effective_q_z_marg, train=True)
+
+        # Update the global q_z_marg estimate using copy_ instead of assignment
+        if updated_q_z_marg is not None:
+            self.q_z_marg.copy_(updated_q_z_marg.detach())
         
         return output_dict
     
     def validation_step(self, batch, batch_idx):
+        torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
+        q_z_marg_clone = self.q_z_marg.clone() if self.q_z_marg is not None else None
+
+        # Check if q_z_marg should be treated as None
+        effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
 
         # No update of q_z_marg in validation
-        output_dict, _ = self(x, q_z_marg=self.q_z_marg, train=False)
+        output_dict, _ = self(x, q_z_marg=effective_q_z_marg, train=False)
     
         return output_dict
 
