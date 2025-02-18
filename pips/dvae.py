@@ -411,24 +411,19 @@ class Transformer(nn.Module):
     
 
 class AttentionPool(nn.Module):
-    """
-    Transforms variable-length sequences to fixed-length sequences using attention.
-    Input: BxSxD -> Output: BxKxD, where K is a fixed number of learned queries.
-    """
     def __init__(self, dim: int, num_queries: int):
         super().__init__()
         self.num_queries = num_queries
         self.dim = dim
         
         # Learned query vectors
-        self.queries = nn.Parameter(torch.empty(num_queries, dim))
+        self.queries = nn.Parameter(torch.empty(num_queries, dim), requires_grad=True)
         # Initialize using Xavier/Glorot with gain for attention
         nn.init.xavier_normal_(self.queries, gain=1/math.sqrt(dim))
         
-        # Projection layers
+        # Projection layers (only for keys and values)
         self.k_proj = nn.Linear(dim, dim, bias=False)
         self.v_proj = nn.Linear(dim, dim, bias=False)
-        self.q_proj = nn.Linear(dim, dim, bias=False)
         
         # Apply RMSNorm to x before projection (pre-norm)
         self.norm = RMSNorm(dim)
@@ -449,10 +444,12 @@ class AttentionPool(nn.Module):
         # Apply RMSNorm before any projections
         x_norm = self.norm(x)
         
-        # Project the queries, keys, and values
-        q = self.q_proj(self.queries).unsqueeze(0)  # [1, K, D]
+        # Project keys and values (no need to project queries)
         k = self.k_proj(x_norm)  # [B, S, D]
         v = self.v_proj(x_norm)  # [B, S, D]
+
+        # Use queries directly
+        q = self.queries.unsqueeze(0).expand(B, -1, -1)  # [B, K, D]
 
         # Check attn_mask dimensions if provided
         if attn_mask is not None:
