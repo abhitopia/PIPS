@@ -413,38 +413,37 @@ class Transformer(nn.Module):
 class AttentionPool(nn.Module):
     def __init__(self, dim: int, num_queries: int):
         super().__init__()
-        self.num_queries = num_queries
-        self.dim = dim
+        self.num_queries = num_queries  # K: number of output tokens
+        self.dim = dim                  # D: embedding dimension
         
-        # Learned query vectors
+        # Learned query vectors [K, D]
         self.queries = nn.Parameter(torch.empty(num_queries, dim), requires_grad=True)
-        # Initialize using Xavier/Glorot with gain for attention
         nn.init.xavier_normal_(self.queries, gain=1/math.sqrt(dim))
         
-        # Projection layers (only for keys and values)
-        self.k_proj = nn.Linear(dim, dim, bias=False)
-        self.v_proj = nn.Linear(dim, dim, bias=False)
+        # Projection layers
+        self.k_proj = nn.Linear(dim, dim, bias=False)    # [D, D]
+        self.v_proj = nn.Linear(dim, dim, bias=False)    # [D, D]
+        self.out_proj = nn.Linear(dim, dim, bias=False)  # [D, D]
         
-        # Apply RMSNorm to x before projection (pre-norm)
+        # Pre-norm
         self.norm = RMSNorm(dim)
-        
-        self.out_proj = nn.Linear(dim, dim, bias=False)
         
     def forward(self, x: Tensor, attn_mask: Optional[Tensor] = None) -> Tensor:
         """
         Args:
-            x (Tensor): Input tensor of shape [B, S, D]
-            attn_mask (Optional[Tensor]): Attention mask of shape [1, 1, S], [B, 1, S], or [B, K, S]
+            x (Tensor): Input tensor [B, S, D]
+            attn_mask (Optional[Tensor]): Attention mask [1, 1, S], [B, 1, S], or [B, K, S]
         Returns:
-            Tensor: Output tensor of shape [B, K, D]
+            Tensor: Output tensor [B, K, D]
         """
         B, S, D = x.shape
+        K = self.num_queries
         assert D == self.dim, f"Expected input dimension {self.dim}, got {D}."
 
         # Apply RMSNorm before any projections
-        x_norm = self.norm(x)
+        x_norm = self.norm(x)  # [B, S, D]
         
-        # Project keys and values (no need to project queries)
+        # Project keys and values
         k = self.k_proj(x_norm)  # [B, S, D]
         v = self.v_proj(x_norm)  # [B, S, D]
 
@@ -458,14 +457,27 @@ class AttentionPool(nn.Module):
 
         # Compute attention
         attn_output = F.scaled_dot_product_attention(
-            q,                          # [1, K, D]
+            q,                          # [B, K, D]
             k,                          # [B, S, D]
             v,                          # [B, S, D]
-            attn_mask=attn_mask,        # Apply attention mask if provided
+            attn_mask=attn_mask,        
             scale=self.dim ** -0.5
         )  # [B, K, D]
         
-        return self.out_proj(attn_output)
+        # Project attention output
+        attn_output = self.out_proj(attn_output)  # [B, K, D]
+        
+        # Create residual connection using adaptive pooling
+        # If K < S: average pooling to reduce sequence length
+        # If K > S: interpolation to increase sequence length
+        if K <= S:
+            residual = F.adaptive_avg_pool1d(x.transpose(1, 2), K).transpose(1, 2)  # [B, K, D]
+        else:
+            # Use linear interpolation for upsampling
+            residual = F.interpolate(x.transpose(1, 2), size=K, mode='linear', align_corners=False).transpose(1, 2)
+        
+        # Add residual and apply dropout
+        return attn_output + residual
     
 
 class StackedPooling(nn.Module):

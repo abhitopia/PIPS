@@ -39,6 +39,7 @@
 - [x] Add normalisations to the pooling layers
 - [x] Change the initialisation of the pooling layer queries to match something else? 
 - [x] Log the model gradients
+- [x] Add residual connection to the pooling layers
 - [ ] May be add the MLP to the pooling layers too!
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
