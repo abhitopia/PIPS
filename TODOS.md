@@ -48,6 +48,7 @@
 - [x] Change the mask shape to not be attention mask for TransformerProjection
 - [x] Modify stacked pooling to StackedTransformerProjection be simpler and use TransformerProjection
 - [x] Adjust tests for the new stacked pooling
+- [x] Fix transformer tests
 - [ ] Upgrade rest of the code to use StackedTransformerProjection
 - [ ] Fix all the remaining tests
 - [ ] Check whether token normalisation is needed

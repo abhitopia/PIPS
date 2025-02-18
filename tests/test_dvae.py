@@ -400,189 +400,7 @@ def test_dvae_forward_with_mask():
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
-def test_attention_pool_masking_effect():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x1 = torch.randn(B, S, dim)
-    x2 = x1.clone()
 
-    # Create a random mask
-    mask_percentage = 0.5
-    mask = torch.rand(1, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    mask = mask.squeeze(1).expand(B, -1)  # Ensure mask is [B, S]
-    x2[~mask, :] = torch.randn(torch.sum(~mask).item(), dim)
-
-    # Initialize AttentionPool
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-
-    # Test forward pass with the same mask
-    output1 = pool(x1, attn_mask=mask.unsqueeze(1))  # Expand mask to [1, 1, S]
-    output2 = pool(x2, attn_mask=mask.unsqueeze(1))
-
-    # Check that the outputs are the same
-    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
-
-def test_attention_pool_masking_effect_batch_mask():
-    dim = 64
-    num_queries = 10
-    B, S = 4, 20
-    x1 = torch.randn(B, S, dim)
-    x2 = x1.clone()
-
-    # Create a random mask for each batch
-    mask_percentage = 0.5
-    mask = torch.rand(B, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), dim)
-
-    # Initialize AttentionPool
-    pool = AttentionPool(dim=dim, num_queries=num_queries)
-
-    # Test forward pass with the same mask
-    output1 = pool(x1, attn_mask=mask)
-    output2 = pool(x2, attn_mask=mask)
-
-    # Check that the outputs are the same
-    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
-
-def test_stacked_pooling_masking_effect_single_mask():
-    dim = 64
-    pool_sizes = [10, 5, 2]
-    B, S = 4, 20
-    x1 = torch.randn(B, S, dim)
-    x2 = x1.clone()
-
-    # Create a random mask
-    mask_percentage = 0.5
-    mask = torch.rand(1, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    mask = mask.squeeze(1).expand(B, -1)  # Ensure mask is [B, S]
-    x2[~mask] = torch.randn(torch.sum(~mask).item(), dim)
-
-    # Initialize StackedPooling
-    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
-
-    # Test forward pass with the same mask
-    output1 = stacked_pool(x1, attn_mask=mask.unsqueeze(1))  # Expand mask to [1, 1, S]
-    output2 = stacked_pool(x2, attn_mask=mask.unsqueeze(1))
-
-    # Check that the outputs are the same
-    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
-
-def test_stacked_pooling_masking_effect_batch_mask():
-    dim = 64
-    pool_sizes = [10, 5, 2]
-    B, S = 4, 20
-    x1 = torch.randn(B, S, dim)
-    x2 = x1.clone()
-
-    # Create a random mask for each batch
-    mask_percentage = 0.5
-    mask = torch.rand(B, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), dim)
-
-    # Initialize StackedPooling
-    stacked_pool = StackedPooling(dim=dim, pool_sizes=pool_sizes)
-
-    # Test forward pass with the same mask
-    output1 = stacked_pool(x1, attn_mask=mask)
-    output2 = stacked_pool(x2, attn_mask=mask)
-
-    # Check that the outputs are the same
-    assert torch.allclose(output1, output2, atol=1e-5), "Outputs differ when only masked positions are changed."
-
-
-def test_transformer_masking_effect():
-    config = GridDVAEConfig(
-        n_dim=128,
-        n_head=8,
-        n_layers=6,
-        n_codes=8,
-        codebook_size=512,
-        max_grid_height=32,
-        max_grid_width=32,
-        n_vocab=16
-    )
-    transformer = Transformer(config)
-    B, S = 2, config.n_pos
-    x1 = torch.randn(B, S, config.n_dim)
-    x2 = x1.clone()
-
-    # Create a random mask
-    mask_percentage = 0.5
-    mask = torch.rand(B, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    x2[~mask.squeeze(1)] = torch.randn(torch.sum(~mask).item(), config.n_dim)
-
-    # Create position indices using DVAE.create_grid_position_tensor
-    grid_height = int(S**0.5)
-    grid_width = grid_height
-    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
-    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
-
-    # Test forward pass with the same mask
-    output1, _ = transformer(x1, attn_mask=mask, positions=positions)
-    output2, _ = transformer(x2, attn_mask=mask, positions=positions)
-
-    # Check that the outputs are the same for unmasked positions
-    assert torch.allclose(output1[mask.squeeze(1)], output2[mask.squeeze(1)], atol=1e-5), \
-        "Outputs differ at unmasked positions."
-
-    # Check that the outputs are different for masked positions
-    assert not torch.allclose(output1[~mask.squeeze(1)], output2[~mask.squeeze(1)], atol=1e-5), \
-        "Outputs are the same at masked positions."
-
-def test_transformer_masking_effect_single_mask():
-    config = GridDVAEConfig(
-        n_dim=128,
-        n_head=8,
-        n_layers=6,
-        n_codes=8,
-        codebook_size=512,
-        max_grid_height=32,
-        max_grid_width=32,
-        n_vocab=16
-    )
-    transformer = Transformer(config)
-    B, S = 2, config.n_pos
-    x1 = torch.randn(B, S, config.n_dim)
-    x2 = x1.clone()
-
-    # Create a single mask for all batches
-    mask_percentage = 0.5
-    mask = torch.rand(1, 1, S) > mask_percentage
-
-    # Alter x2 at masked positions
-    mask_expanded = mask.expand(B, -1, -1).squeeze(1)  # Expand mask to [B, S]
-    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), config.n_dim)
-
-    # Create position indices using DVAE.create_grid_position_tensor
-    grid_height = int(S**0.5)
-    grid_width = grid_height
-    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
-    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
-
-    # Test forward pass with the same mask
-    output1, _ = transformer(x1, attn_mask=mask, positions=positions)
-    output2, _ = transformer(x2, attn_mask=mask, positions=positions)
-
-    # Check that the outputs are the same for unmasked positions
-    unmasked_indices = mask.squeeze(0).expand(B, -1)  # Expand mask to [B, S]
-    assert torch.allclose(output1[unmasked_indices], output2[unmasked_indices], atol=1e-5), \
-        "Outputs differ at unmasked positions."
-
-    # Check that the outputs are different for masked positions
-    masked_indices = ~mask.squeeze(0).expand(B, -1)  # Expand mask to [B, S]
-    assert not torch.allclose(output1[masked_indices], output2[masked_indices], atol=1e-5), \
-        "Outputs are the same at masked positions."
 
 def test_dvae_masking_effect():
     """
@@ -1573,3 +1391,107 @@ def test_stacked_transformer_projection_mask_shape_validation(input_seq_len, out
         assert ("Expected mask shape" in error_msg or 
                 "must match the size" in error_msg), \
             f"Expected error message about mask shape, got: {error_msg}"
+
+
+## Transformer Masking Effect Tests
+
+@pytest.mark.parametrize("batch_specific_mask", [
+    False,    # single mask for all batches [1, 1, S]
+    True,     # batch-specific masks [B, 1, S]
+])
+def test_transformer_masking_effect(batch_specific_mask):
+    """Test that masked inputs produce identical outputs when only masked values differ."""
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    transformer = Transformer(config)
+    B, S = 2, config.n_pos
+    x1 = torch.randn(B, S, config.n_dim)
+    x2 = x1.clone()
+
+    # Create mask based on batch_specific parameter
+    mask_percentage = 0.5
+    if batch_specific_mask:
+        mask = torch.rand(B, 1, S) > mask_percentage
+        mask_expanded = mask.squeeze(1)  # [B, S]
+    else:
+        mask = torch.rand(1, 1, S) > mask_percentage
+        mask_expanded = mask.expand(B, -1, -1).squeeze(1)  # [B, S]
+
+    # Alter x2 at masked positions
+    x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), config.n_dim)
+
+    # Create position indices using DVAE.create_grid_position_tensor
+    grid_height = int(S**0.5)
+    grid_width = grid_height
+    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = positions.unsqueeze(0).expand(B, -1, -1)  # Expand to [B, S, 2]
+
+    # Test forward pass with the same mask
+    output1, _ = transformer(x1, attn_mask=mask, positions=positions)
+    output2, _ = transformer(x2, attn_mask=mask, positions=positions)
+
+    # Get appropriate indices based on mask type
+    unmasked_indices = mask_expanded  # [B, S]
+    masked_indices = ~mask_expanded   # [B, S]
+
+    # Check that the outputs are the same for unmasked positions
+    assert torch.allclose(output1[unmasked_indices], output2[unmasked_indices], atol=1e-5), \
+        f"Outputs differ at unmasked positions (batch_specific_mask={batch_specific_mask})"
+
+    # Check that the outputs are different for masked positions
+    assert not torch.allclose(output1[masked_indices], output2[masked_indices], atol=1e-5), \
+        f"Outputs are the same at masked positions (batch_specific_mask={batch_specific_mask})"
+
+
+@pytest.mark.parametrize("batch_specific_mask,mask_shape,expected_error", [
+    (True, (2, 1, 1024), None),              # valid: batch-specific mask
+    (False, (1, 1, 1024), None),             # valid: single mask for all batches
+    (True, (2, 1, 8), RuntimeError),         # invalid: wrong sequence length
+    (True, (2, 2, 1024), RuntimeError),      # invalid: wrong middle dimension
+])
+def test_transformer_mask_shape_validation(batch_specific_mask, mask_shape, expected_error):
+    """Test that mask shape validation works correctly."""
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    transformer = Transformer(config)
+    B, S = 2, config.n_pos  # S is 1024 (32*32)
+    x = torch.randn(B, S, config.n_dim)
+    
+    # Create position indices
+    grid_height = int(S**0.5)
+    grid_width = grid_height
+    positions = GridDVAE.create_grid_position_tensor(grid_height, grid_width, requires_grad=False)
+    positions = positions.unsqueeze(0).expand(B, -1, -1)
+    
+    # Create mask with specified shape
+    mask = torch.ones(mask_shape, dtype=torch.bool)
+    
+    if expected_error is None:
+        # Should not raise an error
+        try:
+            transformer(x, attn_mask=mask, positions=positions)
+        except Exception as e:
+            pytest.fail(f"Unexpected error for valid mask shape {mask_shape}: {e}")
+    else:
+        # Should raise the expected error
+        with pytest.raises(expected_error) as excinfo:
+            transformer(x, attn_mask=mask, positions=positions)
+        error_msg = str(excinfo.value)
+        assert "size" in error_msg.lower(), \
+            f"Expected error message about tensor size mismatch, got: {error_msg}"
