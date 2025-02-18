@@ -62,8 +62,13 @@ def get_common_options():
         "checkpoint_dir": typer.Option(Path("./runs"), "--checkpoint-dir", "-d", help="Base directory for checkpoints"),
         # Debug option
         "debug": typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
-        # Add val_check_interval to common options
-        "val_check_interval": typer.Option(5000, "--val-check-interval", "--vci", help="Number of steps between validation checks"),
+        # Modify val_check_interval help text to include info about negative values
+        "val_check_interval": typer.Option(
+            5000, 
+            "--val-check-interval", 
+            "--vci", 
+            help="Number of steps between validation checks. Set to negative value to disable validation."
+        ),
 
         "lr_find": typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
 
@@ -167,6 +172,7 @@ def new(
     )
     
     config = ExperimentConfig(
+        reinMax=False,  # Disable ReinMax for now to see if thing's improve
         model_config=model_config,
         model_src=model_src,
         hard_from=hard_from,

@@ -628,6 +628,13 @@ def train(
    
     # Create dataloaders
     train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
+    
+    # Disable validation if val_check_interval is negative
+    validation_disabled = val_check_interval is not None and val_check_interval < 0
+    if validation_disabled:
+        print("Validation disabled. Checkpoints will not be saved.")
+        val_loader = None
+        val_check_interval = None
 
     # Initialize wandb logger
     wandb_logger = WandbLogger(
@@ -646,18 +653,11 @@ def train(
     logging_callback = LoggingCallback()
     custom_progress_bar = CustomRichProgressBar()
 
-    trainer = pl.Trainer(
-        default_root_dir=tempfile.gettempdir() if lr_find else None,
-        log_every_n_steps=1,
-        num_sanity_val_steps=0,
-        enable_progress_bar=True,
-        accelerator=acceleration.device,
-        precision=acceleration.precision,
-        devices='auto',
-        logger=wandb_logger,
-        gradient_clip_val=experiment_config.gradient_clip_val,
-        accumulate_grad_batches=experiment_config.accumulate_grad_batches,
-        callbacks=[
+    # Only add checkpoint callbacks if validation is enabled
+    callbacks = [logging_callback, custom_progress_bar]
+    
+    if not validation_disabled:
+        callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
                 monitor='CE/loss_val',
@@ -676,15 +676,26 @@ def train(
                 auto_insert_metric_name=False,
                 filename='backup-step{step:07d}-ce{CE/loss_val:.4f}-mi{MI/loss_val:.4f}-tc{TC/loss_val:.4f}-dwkl{DWKL/loss_val:.4f}-kl{KL/loss_val:.4f}',
                 wandb_verbose=debug_mode
-            ),
-            logging_callback,
-            custom_progress_bar
-        ],
+            )
+        ])
+
+    trainer = pl.Trainer(
+        default_root_dir=tempfile.gettempdir() if lr_find else None,
+        log_every_n_steps=1,
+        num_sanity_val_steps=0,
+        enable_progress_bar=True,
+        accelerator=acceleration.device,
+        precision=acceleration.precision,
+        devices='auto',
+        logger=wandb_logger,
+        gradient_clip_val=experiment_config.gradient_clip_val,
+        accumulate_grad_batches=experiment_config.accumulate_grad_batches,
+        callbacks=callbacks,
         max_epochs=-1,
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
         limit_train_batches=100 if lr_find else (50 if debug_mode else limit_train_batches),
-        limit_val_batches=0 if lr_find else (10 if debug_mode else None),
-        val_check_interval=None if lr_find else (20 if debug_mode else val_check_interval),
+        limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
+        val_check_interval=None if lr_find or validation_disabled else (20 if debug_mode else val_check_interval),
         enable_model_summary=not lr_find
     )
 
