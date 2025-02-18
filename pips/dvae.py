@@ -422,7 +422,8 @@ class AttentionPool(nn.Module):
         
         # Learned query vectors
         self.queries = nn.Parameter(torch.empty(num_queries, dim))
-        nn.init.normal_(self.queries, mean=0.0, std=0.02)
+        # Initialize using Xavier/Glorot with gain for attention
+        nn.init.xavier_normal_(self.queries, gain=1/math.sqrt(dim))
         
         # Projection layers
         self.k_proj = nn.Linear(dim, dim, bias=False)

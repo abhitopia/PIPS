@@ -37,8 +37,8 @@
 
 ## Debug/Issues
 - [x] Add normalisations to the pooling layers
+- [x] Change the initialisation of the pooling layer queries to match something else? 
 - [ ] May be add the MLP to the pooling layers too!
-- [ ] Change the initialisation of the pooling layer queries to match something else? 
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
 
