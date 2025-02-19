@@ -93,12 +93,7 @@ def new(
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     
     # Sampling parameters
-    hard_from: int = typer.Option(
-        None, 
-        "--hard-from", 
-        "--hf",
-        help="When to start hard sampling. None: after LR warmup, 0: always hard, >0: after specific step"
-    ),
+    hard_from: int = typer.Option(None, "--hard-from", "--hf", help="When to start hard sampling. None: after LR warmup, 0: always hard, >0: after specific step"),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -124,16 +119,9 @@ def new(
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
     beta_kl: float = typer.Option(2.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     
-    # Add seed parameter
-    seed: int = typer.Option(
-        None, 
-        "--seed", 
-        "-s", 
-        help="Random seed for reproducibility. If not provided, a random seed will be generated."
-    ),
-
-    # Add limit_train_batches before the Common options
+    seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
     limit_train_batches: int = typer.Option(None, "--limit-train-batches", "--ltb", help="Limit the number of training batches per epoch. None means use all batches."),
+    use_mask_norm: bool = typer.Option(False, "--use-mask-norm", "--umn", help="Whether to use mask normalization in residual projections"),
 
     # Common options
     val_check_interval: int = get_common_options()["val_check_interval"],
@@ -169,6 +157,7 @@ def new(
         n_vocab=16,  # Fixed for grid world
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
+        use_mask_norm=use_mask_norm,
     )
     
     config = ExperimentConfig(

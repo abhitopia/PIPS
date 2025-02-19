@@ -499,8 +499,13 @@ class TransformerProjection(nn.Module):
         self.input_seq_len = input_seq_len    # S: input sequence length
         self.output_seq_len = output_seq_len  # K: output sequence length
         
-        # Project from S to K tokens
-        self.residual_proj = ResidualProjection(S=input_seq_len, K=output_seq_len, d=config.n_dim)
+        # Project from S to K tokens, passing use_mask_norm from config
+        self.residual_proj = ResidualProjection(
+            S=input_seq_len, 
+            K=output_seq_len, 
+            d=config.n_dim,
+            use_mask_norm=config.use_mask_norm
+        )
         
         # Initialize 1D RoPE for the output sequence length
         rope = RotaryPositionalEmbeddings(
@@ -615,6 +620,7 @@ class GridDVAEConfig(Config):
     max_grid_height: int = 32  # New default value
     max_grid_width: int = 32   # New default value
     n_vocab: int = 16
+    use_mask_norm: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:

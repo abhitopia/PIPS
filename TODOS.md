@@ -56,11 +56,17 @@
 - [x] Make the output normalisation from transformer optional
 - [x] Make the output normalisation from StackedTransformerProjection optional
 - [x] Correctly handle output normalisation in the DVAE
-- [ ] Make mask normalisation a parameter in Config
+- [x] Make mask normalisation a parameter in Config
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
 
+
+## Training Tests
+- [ ] Overfit on 100 batches (without betas and masking)
+- [ ] Overfit on 100 batches (with masking and without betas)
+- [ ] Overfit on 100 batches (with masking and betas)
+- [ ] Check whether use_mask_norm is needed
 
 ## Checkpointing
 - [x] Implement Checkpointing
