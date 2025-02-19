@@ -372,17 +372,18 @@ class TransformerBlock(nn.Module):
     
 
 class Transformer(nn.Module):
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, out_norm: bool = True) -> None:
         super().__init__()
         self.config = config
+        self.out_norm = out_norm
 
         rope_2d = RoPE2D(config.n_dim // config.n_head,
                         max_height=config.max_grid_height,
                         max_width=config.max_grid_width,
                         base=config.rope_base)
         self.blocks = nn.ModuleList([TransformerBlock(config, rope=rope_2d) for _ in range(config.n_layers)])
-        self.rms_out = RMSNorm(config.n_dim)
-
+        # Only create RMSNorm if out_norm is True
+        self.rms_out = RMSNorm(config.n_dim) if out_norm else nn.Identity()
 
     def forward(self,
             x: Tensor, 
@@ -541,7 +542,7 @@ class StackedTransformerProjection(nn.Module):
     Applies multiple TransformerProjection blocks in succession, reducing or increasing sequence length
     from S -> S1 -> S2 -> ... -> SK step by step using transformer-based projections.
     """
-    def __init__(self, config: Config, input_seq_len: int, output_seq_lens: List[int]):
+    def __init__(self, config: Config, input_seq_len: int, output_seq_lens: List[int], out_norm: bool = True):
         """
         Args:
             config (Config): Configuration object containing transformer parameters.
@@ -549,6 +550,7 @@ class StackedTransformerProjection(nn.Module):
             output_seq_lens (List[int]): Target sequence lengths for each projection stage.
                                         Example: [256, 64, 8] means:
                                         Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
+            out_norm (bool): Whether to apply RMSNorm to the final output. If False, uses identity.
         """
         super().__init__()
         self.config = config
@@ -569,8 +571,8 @@ class StackedTransformerProjection(nn.Module):
             )
             current_seq_len = target_seq_len
         
-        # Add an RMSNorm layer for the final output
-        self.out_norm = RMSNorm(config.n_dim)
+        # Add either RMSNorm or Identity for the final output
+        self.out_norm = RMSNorm(config.n_dim) if out_norm else nn.Identity()
     
     def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
         """
@@ -741,15 +743,24 @@ class GridDVAE(nn.Module):
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         
+
+        ## The choice of out_norm is inspired by Llama. We can think of both Encoder and Decoder as Llama models.
+        ## With the difference that some of the layers are replaced by TransformerProjection blocks.
+        ## Like in Llama, the token embeddings flow through unnormalized until the head is applied.
+        ## In my case, we normalise the final output of the encoder as well as that of decoder before applyin their
+        ## respective heads. Nothing gets normalised from base to bottleneck and vice versa.
+
+        
         # Keep the base transformer blocks
-        self.encoder_base = Transformer(config)
-        self.decoder_base = Transformer(config)
+        self.encoder_base = Transformer(config, out_norm=False)
+        self.decoder_base = Transformer(config, out_norm=True)
         
         # Replace bottleneck components with StackedTransformerProjection
         self.encoder_bottleneck = StackedTransformerProjection(
             config=config,
             input_seq_len=config.n_pos,
-            output_seq_lens=config.bottleneck_widths[1:]  # Skip the first width as it's the input size
+            output_seq_lens=config.bottleneck_widths[1:],  # Skip the first width as it's the input size
+            out_norm=True
         )
         self.encoder_head = nn.Linear(config.n_dim, config.codebook_size)
         
@@ -761,7 +772,8 @@ class GridDVAE(nn.Module):
         self.decoder_bottleneck = StackedTransformerProjection(
             config=config,
             input_seq_len=config.n_codes,
-            output_seq_lens=config.bottleneck_widths[::-1][1:]  # Reverse and skip the last width
+            output_seq_lens=config.bottleneck_widths[::-1][1:],  # Reverse and skip the last width
+            out_norm=False
         )
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
         
