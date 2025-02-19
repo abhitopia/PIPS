@@ -433,7 +433,7 @@ class ResidualProjection(nn.Module):
         
         # This linear layer projects from S -> K along the sequence dimension.
         # It will be applied on tensors of shape (B, d, S) so that it operates on the last dimension.
-        self.proj = nn.Linear(S, K)
+        self.proj = nn.Linear(S, K, bias=False)
         
     def forward(self, x, mask=None):
         """
