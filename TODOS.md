@@ -52,11 +52,11 @@
 - [x] Upgrade rest of the code to use StackedTransformerProjection
 - [x] Fix all the remaining tests
 - [x] Remove feature normalisation from the residual projection
-- [ ] Check if token normalisation done the way it is makes sense.
+- [x] Check if token normalisation done the way it is makes sense. Changed to Mask Normalisation
 - [ ] Make the output normalisation from transformer optional
 - [ ] Make the output normalisation from StackedTransformerProjection optional
+- [ ] Make mask normalisation a parameter in Config
 - [ ] Correctly handle output normalisation in the DVAE
-- [ ] Make token_normalisation a parameter in Config
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.

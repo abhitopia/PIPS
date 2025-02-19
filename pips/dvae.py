@@ -411,23 +411,28 @@ class Transformer(nn.Module):
     
 
 class ResidualProjection(nn.Module):
-    def __init__(self, S, K, d, token_norm=False):
+    def __init__(self, S, K, d, use_mask_norm=False, eps=1e-6):
         """
-        Projects from a sequence length S to a new sequence length K
-        for each feature channel (dimension d), and applies normalization.
+        Projects from sequence length S to K for each feature channel (dimension d).
+        Optionally compensates for missing tokens by computing a normalization factor
+        via the learned projection weights.
         
         Args:
-            S (int): Original sequence length.
+            S (int): Input sequence length.
             K (int): Target sequence length.
             d (int): Feature dimension.
-            token_norm (bool): If True, apply normalization on the token dimension before projection.
+            use_mask_norm (bool): If True, use the mask to compute a normalization factor.
+            eps (float): A small constant to prevent division by zero.
         """
         super().__init__()
-        self.token_norm = token_norm
-        # A linear layer that projects the S dimension to K for each feature channel.
+        self.S = S
+        self.K = K
+        self.use_mask_norm = use_mask_norm
+        self.eps = eps
+        
+        # This linear layer projects from S -> K along the sequence dimension.
+        # It will be applied on tensors of shape (B, d, S) so that it operates on the last dimension.
         self.proj = nn.Linear(S, K)
-        # Normalization over tokens (if enabled) applied to tensors of shape (B, d, K).
-        self.norm_tokens = nn.LayerNorm(K) if token_norm else nn.Identity()
         
     def forward(self, x, mask=None):
         """
@@ -438,31 +443,41 @@ class ResidualProjection(nn.Module):
         Returns:
             Tensor: Output tensor of shape (B, K, d).
         """
-        # Transpose to (B, d, S) to apply the projection along S.
-        B, S, D = x.shape
-        x = x.transpose(1, 2)  # (B, d, S)
+        B, S, d = x.shape
+        assert S == self.S, f"Expected S={self.S}, but got {S}"
         
-        if mask is not None:
-            # Check mask dimensions
-            assert mask.dim() == 2 and mask.size(-1) == S, \
-                f"Expected mask shape [(1, S), (B, S)], got {mask.shape}"
+        norm_factor = None
 
-            # Expand mask if needed and add dimension for broadcasting
+        # --- Apply mask and compute normalization factor on the original (B, S, d) ---
+        if mask is not None:
+            # Ensure mask is (B, S)
+            if mask.dim() == 1:
+                mask = mask.unsqueeze(0)
             if mask.size(0) == 1 and B > 1:
                 mask = mask.expand(B, -1)
-            mask = mask.unsqueeze(1)  # Shape: (B, 1, S) for broadcasting with (B, d, S)
+            # Apply the mask to x: broadcast mask from (B, S) to (B, S, d)
+            x = x.masked_fill(~mask.unsqueeze(-1), 0.0)
             
-            # Use masked_fill to zero out masked tokens
-            x = x.masked_fill(~mask, 0.0)
+            if self.use_mask_norm:
+                # Compute a per-sample, per-output normalization factor.
+                # Convert mask to float (shape: [B, S]) and apply the same projection weights.
+                mask_float = mask.float()  # shape: (B, S)
+                # F.linear applies: output = mask_float * weight^T, weight shape is (K, S)
+                norm_factor = F.linear(mask_float, self.proj.weight, bias=None)  # (B, K)
+                norm_factor = norm_factor.unsqueeze(-1)  # (B, K, 1)
+
+        # --- Transpose for projection ---
+        # We need to apply the linear projection along the S dimension.
+        # x is of shape (B, S, d), so we transpose to (B, d, S).
+        x = x.transpose(1, 2)  # Now (B, d, S)
+        # Apply the learned projection along the last dimension.
+        x = self.proj(x)       # Now (B, d, K)
+        # Transpose back to (B, K, d)
+        x = x.transpose(1, 2)  # Now (B, K, d)
         
-        # Apply the learned linear projection across the S dimension
-        x = self.proj(x)  # Now shape: (B, d, K)
-        
-        # Optional: Normalize over the token dimension
-        x = self.norm_tokens(x)
-        
-        # Transpose to (B, K, d) so that each token is a d-dimensional vector
-        x = x.transpose(1, 2)
+        # --- Apply the computed normalization factor (if available) ---
+        if norm_factor is not None:
+            x = x / (norm_factor + self.eps)
         
         return x
 

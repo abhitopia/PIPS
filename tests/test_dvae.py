@@ -965,19 +965,19 @@ def test_grid_dvae_config_json_serialization():
     assert new_config.bottleneck_widths == config.bottleneck_widths, \
         f"bottleneck_widths mismatch.\nExpected: {config.bottleneck_widths}\nGot: {new_config.bottleneck_widths}"
 
-@pytest.mark.parametrize("S,K", [
-    (16, 8),   # compression
-    (8, 16),   # expansion
-    (16, 16),  # same size
+@pytest.mark.parametrize("batch_specific_mask,S,K", [
+    (False, 16, 8),   # single mask, compression
+    (False, 8, 16),   # single mask, expansion
+    (False, 16, 16),  # single mask, same size
+    (True, 16, 8),    # batch-specific masks, compression
+    (True, 8, 16),    # batch-specific masks, expansion
+    (True, 16, 16),   # batch-specific masks, same size
 ])
-@pytest.mark.parametrize("batch_specific_mask", [
-    False,    # single mask for all batches [1, S]
-    True,     # batch-specific masks [B, S]
-])
-def test_residual_projection_masking_effect(S, K, batch_specific_mask):
+def test_residual_projection_masking_effect(batch_specific_mask, S, K):
     """Test that masked inputs produce identical outputs when only masked values differ."""
     B, d = 4, 64
-    proj = ResidualProjection(S=S, K=K, d=d, token_norm=True)
+    
+    proj = ResidualProjection(S=S, K=K, d=d, use_mask_norm=True)
     
     # Create two identical inputs
     x1 = torch.randn(B, S, d)
@@ -987,7 +987,7 @@ def test_residual_projection_masking_effect(S, K, batch_specific_mask):
     batch_size = B if batch_specific_mask else 1
     mask = torch.rand(batch_size, S) > 0.5
     
-    # Modify x2 at masked positions with random values
+    # Modify x2 at masked positions
     mask_expanded = mask if batch_specific_mask else mask.expand(B, -1)
     x2[~mask_expanded] = torch.randn(torch.sum(~mask_expanded).item(), d)
     
@@ -996,37 +996,54 @@ def test_residual_projection_masking_effect(S, K, batch_specific_mask):
     output2 = proj(x2, mask=mask)
     
     # Outputs should be identical since differences were only in masked positions
-    assert torch.allclose(output1, output2, atol=1e-5), \
-        f"Outputs differ when only masked positions are changed (S={S}, K={K}, batch_specific_mask={batch_specific_mask})"
+    assert torch.allclose(output1, output2, atol=1e-5)
 
-@pytest.mark.parametrize("S,K", [
-    (16, 8),   # compression
-    (8, 16),   # expansion
-    (16, 16),  # same size
-])
-def test_residual_projection_normalization(S, K):
-    """Test token normalization effects."""
-    B, d = 4, 64
+def test_residual_projection_use_mask_norm():
+    # Use a simple configuration where we can manually compute the expected output.
+    # Let S = 4 (input sequence length), K = 2 (output sequence length), and d = 1 (one feature channel).
+    S, K, d = 4, 2, 1
+    B = 1  # batch size
+    rp = ResidualProjection(S, K, d, use_mask_norm=True)
     
-    # Test 1: Token normalization effect
-    # Create projections with and without token normalization
-    proj_with_norm = ResidualProjection(S=S, K=K, d=d, token_norm=True)
-    proj_without_norm = ResidualProjection(S=S, K=K, d=d, token_norm=False)
-
-    x = torch.randn(B, S, d)
-
-    # Ensure outputs have correct shapes
-    output_with_norm = proj_with_norm(x)
-    output_without_norm = proj_without_norm(x)
-
-    assert output_with_norm.shape == (B, K, d), \
-        f"Unexpected output shape with token_norm: {output_with_norm.shape}"
-    assert output_without_norm.shape == (B, K, d), \
-        f"Unexpected output shape without token_norm: {output_without_norm.shape}"
-
-    # Outputs should be different when token normalization is applied
-    assert not torch.allclose(output_with_norm, output_without_norm, atol=1e-5), \
-        f"Outputs are identical with and without token normalization (S={S}, K={K})"
+    # Set the projection weights to 1 and bias to 0 for a deterministic behavior.
+    with torch.no_grad():
+        rp.proj.weight.fill_(1.0)
+        if rp.proj.bias is not None:
+            rp.proj.bias.zero_()
+    
+    # Define an input x: shape (B, S, d). For example, [1, 2, 3, 4].
+    x = torch.tensor([[[1.0], [2.0], [3.0], [4.0]]])  # shape: (1, 4, 1)
+    
+    # Case 1: All tokens are valid.
+    mask_all = torch.tensor([[True, True, True, True]])
+    # The projection sums the input over S: 1+2+3+4 = 10.
+    # The normalization factor is computed by projecting the mask:
+    # For a mask of [1,1,1,1] and weight ones, the factor is 1+1+1+1 = 4 for each output.
+    # Thus, the expected output for each output channel is 10 / 4 = 2.5.
+    expected_all = torch.tensor([[[2.5], [2.5]]])  # shape: (1, 2, 1)
+    
+    out_all = rp(x, mask=mask_all)
+    np.testing.assert_allclose(out_all.detach().numpy(), expected_all.numpy(), atol=1e-5)
+    
+    # Case 2: Only the first two tokens are valid.
+    mask_partial = torch.tensor([[True, True, False, False]])
+    # Then x becomes [1, 2, 0, 0] so the sum is 1+2 = 3.
+    # The normalization factor becomes 1+1+0+0 = 2.
+    # So expected output is 3 / 2 = 1.5 for each output.
+    expected_partial = torch.tensor([[[1.5], [1.5]]])
+    
+    out_partial = rp(x, mask=mask_partial)
+    np.testing.assert_allclose(out_partial.detach().numpy(), expected_partial.numpy(), atol=1e-5)
+    
+    # Case 3: Alternating tokens are valid.
+    mask_alternate = torch.tensor([[True, False, True, False]])
+    # Then x becomes [1, 0, 3, 0] so the sum is 1+3 = 4.
+    # The normalization factor becomes 1+0+1+0 = 2.
+    # So expected output is 4 / 2 = 2.0 for each output.
+    expected_alternate = torch.tensor([[[2.0], [2.0]]])
+    
+    out_alternate = rp(x, mask=mask_alternate)
+    np.testing.assert_allclose(out_alternate.detach().numpy(), expected_alternate.numpy(), atol=1e-5)
 
 @pytest.mark.parametrize("S,K", [
     (16, 8),   # compression
