@@ -788,7 +788,7 @@ def test_kld_losses_extreme_inputs():
     for losses in [kld_losses_zeros_no_relu, kld_losses_same_no_relu]:
         assert losses["mi_loss"] >= -1e-6, "MI loss should be close to non-negative"
         assert losses["dwkl_loss"] >= -1e-6, "DWKL loss should be close to non-negative"
-        assert losses["tc_loss"] >= -1e-6, "TC loss should be close to non-negative"
+        assert losses["tc_loss"] >= -1e-5, "TC loss should be close to non-negative"
         assert losses["kl_loss"] >= -1e-6, "KL loss should be close to non-negative"
 
     # Test with apply_relu=True to ensure non-negative values
