@@ -163,21 +163,24 @@ class ExperimentConfig:
     mask_schedule_type: str = 'cosine_anneal'
 
     padding_idx: int | None = None
+    eos_idx: int | None = None  # Add this field
 
     model_src: str | None = None
 
     def __post_init__(self):
         if self.hard_from is None:
-            self.hard_from = self.warmup_steps_lr # Use LR warmup for hard schedule
+            self.hard_from = self.warmup_steps_lr
         elif self.hard_from < 0:
             raise ValueError("hard_from must be None, 0, or a positive integer")
         
         if self.accumulate_grad_batches < 1:
             raise ValueError("accumulate_grad_batches must be >= 1")
             
-        # Automatically set padding_idx if not provided
+        # Automatically set padding_idx and eos_idx if not provided
         if self.padding_idx is None:
             self.padding_idx = self.model_config.n_vocab - 1
+        if self.eos_idx is None:
+            self.eos_idx = self.model_config.n_vocab - 2
             
         # Generate random seed if none provided
         if self.seed is None:
@@ -543,13 +546,18 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         experiment_config: Configuration containing batch_size and padding_idx
         debug_mode: If True, uses reduced workers for debugging
     """
-    project_size = (experiment_config.model_config.max_grid_height, 
-                   experiment_config.model_config.max_grid_width)
+    max_size = experiment_config.model_config.max_grid_height * experiment_config.model_config.max_grid_width
     padding_idx = experiment_config.padding_idx
+    eos_idx = experiment_config.eos_idx  # Get eos_idx from config
     batch_size = experiment_config.batch_size
 
     # Create training dataloader
-    collate_fn_train = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=True, project_size=project_size)
+    collate_fn_train = partial(GridDataset.collate_fn, 
+                             pad_value=padding_idx, 
+                             eos_value=eos_idx,  # Add eos_value parameter
+                             permute=True,
+                             max_size=max_size
+                             )
     train_dataset = GridDataset(train=True)
 
     num_workers = min(8, os.cpu_count() or 1)
@@ -566,7 +574,11 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     )
 
     # Create validation dataloader
-    collate_fn_val = partial(GridDataset.collate_fn, pad_value=padding_idx, permute=False, project_size=project_size)
+    collate_fn_val = partial(GridDataset.collate_fn, 
+                             pad_value=padding_idx, 
+                             eos_value=eos_idx,  # Add eos_value parameter
+                             permute=False,
+                             max_size=max_size)
     val_dataset = GridDataset(train=False)
     val_loader = DataLoader(
         val_dataset, 
