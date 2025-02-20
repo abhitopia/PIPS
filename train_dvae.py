@@ -162,9 +162,6 @@ class ExperimentConfig:
     max_mask_pct: float = 0.5
     mask_schedule_type: str = 'cosine_anneal'
 
-    padding_idx: int | None = None
-    eos_idx: int | None = None  # Add this field
-
     model_src: str | None = None
 
     def __post_init__(self):
@@ -175,12 +172,6 @@ class ExperimentConfig:
         
         if self.accumulate_grad_batches < 1:
             raise ValueError("accumulate_grad_batches must be >= 1")
-            
-        # Automatically set padding_idx and eos_idx if not provided
-        if self.padding_idx is None:
-            self.padding_idx = self.model_config.n_vocab - 1
-        if self.eos_idx is None:
-            self.eos_idx = self.model_config.n_vocab - 2
             
         # Generate random seed if none provided
         if self.seed is None:
@@ -244,6 +235,7 @@ class DVAETrainingModule(pl.LightningModule):
     def __init__(self, experiment_config: ExperimentConfig, compile_model: bool = False):
         super(DVAETrainingModule, self).__init__()
         self.experiment_config = experiment_config
+        self.padding_idx = experiment_config.model_config.padding_idx
         self.model_config = experiment_config.model_config
         self.model = None
         self.learning_rate = experiment_config.learning_rate
@@ -366,7 +358,6 @@ class DVAETrainingModule(pl.LightningModule):
         }
 
     def forward(self, x, q_z_marg=None, train=True):
-
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hard = scheduled_values['hard']
@@ -388,18 +379,16 @@ class DVAETrainingModule(pl.LightningModule):
             tau=scheduled_values['tau']
         )
 
-        # Calculate token accuracy
-        predictions = logits.argmax(dim=-1)
-        correct_tokens = (predictions == x).float()
-        token_accuracy = correct_tokens.mean()
-
         # Calculate token accuracy excluding padding tokens
-        padding_idx = self.experiment_config.padding_idx
-        non_padding_mask = (x != padding_idx)
-        acc_no_pad = (correct_tokens * non_padding_mask).sum() / non_padding_mask.sum()
+        non_padding_mask = (x != self.padding_idx)
+        masked_correct_tokens = logits.argmax(dim=-1) == x
+        masked_correct_tokens = masked_correct_tokens * non_padding_mask
+        
+        # Calculate token accuracy
+        token_accuracy = masked_correct_tokens.sum() / non_padding_mask.sum()
 
-        # Calculate sample accuracy
-        sample_correct = correct_tokens.all(dim=1).float()
+        # Calculate sample accuracy (all non-padding tokens must be correct)
+        sample_correct = (masked_correct_tokens.sum(dim=1) == non_padding_mask.sum(dim=1)).float()
         sample_accuracy = sample_correct.mean()
 
         # The problem is that reconstruction loss (output tokens) is computed in a different space than the KLD losses (latent codes)
@@ -436,7 +425,6 @@ class DVAETrainingModule(pl.LightningModule):
             **{k: v for k, v in scheduled_values.items()},
             'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
-            'accuracy_no_pad(TOKENS)': acc_no_pad.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
             'avg_entropy': losses['avg_entropy'].detach(),
             'avg_perplexity': losses['avg_perplexity'].detach()
@@ -547,8 +535,8 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
         debug_mode: If True, uses reduced workers for debugging
     """
     max_size = experiment_config.model_config.max_grid_height * experiment_config.model_config.max_grid_width
-    padding_idx = experiment_config.padding_idx
-    eos_idx = experiment_config.eos_idx  # Get eos_idx from config
+    padding_idx = experiment_config.model_config.padding_idx
+    eos_idx = experiment_config.model_config.eos_idx  # Get eos_idx from config
     batch_size = experiment_config.batch_size
 
     # Create training dataloader

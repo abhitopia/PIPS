@@ -60,7 +60,7 @@
 - [x] Update the flatten function to Grid to handle padding and EOS
 - [x] Change the collate function to use the new flatten function
 - [x] Introduce eos_value in the config
-- [ ] Change the loss to discount pad_value
+- [x] Change the loss to discount pad_value
 - [ ] Test with vanilla softmax!
 - [ ] introduce soft to hard interpolation
 - [ ] Check whether token normalisation is needed

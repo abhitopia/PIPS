@@ -621,6 +621,8 @@ class GridDVAEConfig(Config):
     max_grid_width: int = 32   # New default value
     n_vocab: int = 16
     use_mask_norm: bool = False
+    padding_idx: int | None = None
+    eos_idx: int | None = None
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -644,6 +646,12 @@ class GridDVAEConfig(Config):
         self.compression_factor = self.n_pos // self.n_codes
         # Calculate intermediate sequence lengths for the bottleneck
         self.bottleneck_widths = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
+
+        # Set default padding_idx and eos_idx if not provided
+        if self.padding_idx is None:
+            self.padding_idx = self.n_vocab - 1
+        if self.eos_idx is None:
+            self.eos_idx = self.n_vocab - 2
 
     def __repr__(self) -> str:
         attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
@@ -673,6 +681,8 @@ class GridDVAEConfig(Config):
             'max_grid_height': self.max_grid_height,
             'max_grid_width': self.max_grid_width,
             'n_vocab': self.n_vocab,
+            'padding_idx': self.padding_idx,
+            'eos_idx': self.eos_idx,
         }
         
         # Add computed attributes if they exist
@@ -747,6 +757,7 @@ class GridDVAE(nn.Module):
         self.config = config
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
+        self.pad_value = config.padding_idx  # Store padding value here
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         
 
@@ -961,7 +972,7 @@ class GridDVAE(nn.Module):
 
         # Compute the reconstruction loss
         decoded_logits = self.decode(code)
-        ce_loss = self.reconstruction_loss(decoded_logits, x)
+        ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
 
         # Combine all losses into a single dictionary
         losses = {
@@ -976,11 +987,25 @@ class GridDVAE(nn.Module):
         return decoded_logits, losses, updated_q_z_marg
     
 
-    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor) -> Tensor:
+    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1) -> Tensor:
         """
-        Compute the reconstruction loss using cross-entropy per sample (and not per token)
+        Compute the reconstruction loss using cross-entropy per sample (and not per token),
+        ignoring tokens that match pad_value.
+
+        Args:
+            decoded_logits (Tensor): Predicted logits of shape [B, S, V]
+            x (Tensor): Target tokens of shape [B, S]
+            pad_value (int): Token value to ignore in loss computation (default: -1)
+
+        Returns:
+            Tensor: Average reconstruction loss per sample, ignoring padded tokens
         """
-        return F.cross_entropy(decoded_logits.view(-1, decoded_logits.size(-1)), x.view(-1), reduction='sum') / x.size(0)
+        return F.cross_entropy(
+            decoded_logits.view(-1, decoded_logits.size(-1)),
+            x.view(-1),
+            ignore_index=pad_value,
+            reduction='sum'
+        ) / x.size(0)
     
 
     def kld_disentanglement_loss(self, q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
