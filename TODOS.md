@@ -57,6 +57,7 @@
 - [x] Make the output normalisation from StackedTransformerProjection optional
 - [x] Correctly handle output normalisation in the DVAE
 - [x] Make mask normalisation a parameter in Config
+- [ ] Test with vanilla softmax!
 - [ ] Introduce EOS separate from padding token
 - [ ] introduce soft to hard interpolation
 - [ ] Check whether token normalisation is needed
