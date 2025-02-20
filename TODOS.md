@@ -57,8 +57,9 @@
 - [x] Make the output normalisation from StackedTransformerProjection optional
 - [x] Correctly handle output normalisation in the DVAE
 - [x] Make mask normalisation a parameter in Config
+- [x] Update the flatten function to Grid to handle padding and EOS
+- [ ] Change the collate function to use the new flatten function
 - [ ] Test with vanilla softmax!
-- [ ] Introduce EOS separate from padding token
 - [ ] introduce soft to hard interpolation
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?

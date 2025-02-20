@@ -817,3 +817,78 @@ def test_grid_permute_ident_transform():
 
     # Ensure the permuted grid is a valid Grid object
     assert isinstance(permuted, Grid), "Permuted result should be a Grid instance"
+
+def test_grid_flatten():
+    # Create a test grid
+    array = np.array([[1, 2, 3], [4, 5, 6]])
+    grid = Grid(array)
+
+    # Test case 1: Simple flatten (original behavior)
+    flattened = grid.flatten()
+    np.testing.assert_array_equal(flattened, np.array([1, 2, 3, 4, 5, 6]))
+
+    # Test case 2: Flatten with EOS markers
+    flattened_eos = grid.flatten(eos_value=-2)
+    np.testing.assert_array_equal(
+        flattened_eos,
+        np.array([1, 2, 3, -2, 4, 5, 6, -2])
+    )
+
+    # Test case 3: Flatten with padding
+    flattened_pad = grid.flatten(max_size=10, pad_value=-1)
+    np.testing.assert_array_equal(
+        flattened_pad,
+        np.array([1, 2, 3, 4, 5, 6, -1, -1, -1, -1])
+    )
+
+    # Test case 4: Flatten with both EOS and padding
+    flattened_both = grid.flatten(max_size=10, pad_value=-1, eos_value=-2)
+    np.testing.assert_array_equal(
+        flattened_both,
+        np.array([1, 2, 3, -2, 4, 5, 6, -2, -1, -1])
+    )
+
+def test_grid_flatten_edge_cases():
+    # Test with 1x1 grid
+    single_grid = Grid(np.array([[1]]))
+    
+    # Simple flatten
+    np.testing.assert_array_equal(single_grid.flatten(), np.array([1]))
+    
+    # With EOS
+    np.testing.assert_array_equal(
+        single_grid.flatten(eos_value=-2),
+        np.array([1, -2])
+    )
+    
+    # With padding
+    np.testing.assert_array_equal(
+        single_grid.flatten(max_size=3, pad_value=-1),
+        np.array([1, -1, -1])
+    )
+
+def test_grid_flatten_errors():
+    grid = Grid(np.array([[1, 2], [3, 4]]))
+    
+    # Test error when max_size is too small
+    with pytest.raises(ValueError) as exc_info:
+        grid.flatten(max_size=3, eos_value=-2)
+    assert "Required size (6) exceeds max_size (3)" in str(exc_info.value)
+    
+    # Test error when max_size is too small for simple flatten
+    with pytest.raises(ValueError) as exc_info:
+        grid.flatten(max_size=3)
+    assert "Required size (4) exceeds max_size (3)" in str(exc_info.value)
+
+def test_grid_flatten_dtype_preservation():
+    # Test with different dtypes
+    grid_int = Grid(np.array([[1, 2], [3, 4]], dtype=np.int32))
+    grid_float = Grid(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
+    
+    # Check dtype preservation for different cases
+    assert grid_int.flatten().dtype == np.int32
+    assert grid_float.flatten().dtype == np.float32
+    
+    # Check dtype preservation with EOS and padding
+    assert grid_int.flatten(max_size=6, pad_value=-1, eos_value=-2).dtype == np.int32
+    assert grid_float.flatten(max_size=6, pad_value=-1, eos_value=-2).dtype == np.float32
