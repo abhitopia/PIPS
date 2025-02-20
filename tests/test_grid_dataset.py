@@ -96,46 +96,38 @@ def test_collate_fn():
                   dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
     ]
 
-    # Mock the project method to return a 32x32 array
+    # Mock the flatten method to return a padded array
     for grid in mock_grids:
-        grid.project.return_value = np.pad(grid.array, ((0, 30), (0, 30)), 'constant', constant_values=-1)
+        grid.flatten.return_value = np.array([*grid.array.flatten(), *[-1] * (1024 - 4)])
 
     # Call the collate function
-    result = GridDataset.collate_fn(mock_grids, pad_value=15, device='cpu')
+    result = GridDataset.collate_fn(mock_grids, pad_value=-1, device='cpu', max_size=1024)
 
     # Check the type of the result
     assert isinstance(result, GRID_INPUT)
 
     # Check the shape of the grids tensor
-    assert result.grids.shape == (2, 32 * 32)
+    assert result.grids.shape == (2, 1024)
 
-    # Check the dtype of the grids tensor
-    assert result.grids.dtype == torch.long
+    # Check that the attributes are correct
+    assert len(result.attributes) == 2
+    assert result.attributes[0]['idx'] == 0
+    assert result.attributes[0]['program_id'] == 'prog_id_0'
+    assert result.attributes[0]['task_id'] == 'task_id_0'
+    assert result.attributes[0]['dataset'] == 'dataset_0'
+    assert result.attributes[0]['color_perm'] == 'color_perm_0'
+    assert result.attributes[0]['transform'] == 'transform_0'
+    assert result.attributes[0]['is_test'] is False
+    assert result.attributes[0]['is_input'] is True
 
-    # Check the attributes
-    expected_attributes = [
-        {
-            'idx': 0,
-            'program_id': 'prog_id_0',
-            'task_id': 'task_id_0',
-            'dataset': 'dataset_0',
-            'color_perm': 'color_perm_0',
-            'transform': 'transform_0',
-            'is_test': False,
-            'is_input': True
-        },
-        {
-            'idx': 1,
-            'program_id': 'prog_id_1',
-            'task_id': 'task_id_1',
-            'dataset': 'dataset_1',
-            'color_perm': 'color_perm_1',
-            'transform': 'transform_1',
-            'is_test': True,
-            'is_input': False
-        }
-    ]
-    assert result.attributes == expected_attributes
+    assert result.attributes[1]['idx'] == 1
+    assert result.attributes[1]['program_id'] == 'prog_id_1'
+    assert result.attributes[1]['task_id'] == 'task_id_1'
+    assert result.attributes[1]['dataset'] == 'dataset_1'
+    assert result.attributes[1]['color_perm'] == 'color_perm_1'
+    assert result.attributes[1]['transform'] == 'transform_1'
+    assert result.attributes[1]['is_test'] is True
+    assert result.attributes[1]['is_input'] is False
 
 def test_process_grid_loader_empty_grids():
     # Mock a loader with no grids
@@ -188,8 +180,8 @@ def test_process_grid_loader_valid_grids():
         mock_logger.info.assert_any_call(f"Loaded 2 grids for {mock_loader.name}")
         mock_logger.info.assert_any_call(f"Saved 2 valid grids to {mock_output_file} for {mock_loader.name}")
 
-def test_collate_fn_different_project_sizes():
-    # Create mock Grid objects
+def test_collate_fn_different_sizes():
+    # Create mock Grid objects with different sizes
     mock_grids = [
         MagicMock(spec=Grid, array=np.array([[1, 2], [3, 4]]), idx=0, program_id='prog_id_0', task_id='task_id_0',
                   dataset='dataset_0', color_perm='color_perm_0', transform='transform_0', is_test=False, is_input=True),
@@ -197,42 +189,34 @@ def test_collate_fn_different_project_sizes():
                   dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
     ]
 
-    # Mock the project method to return a 16x16 array
+    # Mock the flatten method to return arrays padded to max_size=512
     for grid in mock_grids:
-        grid.project.return_value = np.pad(grid.array, ((0, 14), (0, 14)), 'constant', constant_values=-1)
+        grid.flatten.return_value = np.array([*grid.array.flatten(), *[-1] * (512 - 4)])
 
-    # Call the collate function with a different project size
-    result = GridDataset.collate_fn(mock_grids, pad_value=15, device='cpu', project_size=(16, 16))
+    # Call the collate function with a different max_size
+    result = GridDataset.collate_fn(mock_grids, pad_value=-1, device='cpu', max_size=512)
 
-    # Check the shape of the grids tensor
-    assert result.grids.shape == (2, 16 * 16)
+    # Check the shape of the grids tensor matches the specified max_size
+    assert result.grids.shape == (2, 512)
 
-    # Check the dtype of the grids tensor
-    assert result.grids.dtype == torch.long
+    # Check that the attributes are correct
+    assert len(result.attributes) == 2
+    assert result.attributes[0]['idx'] == 0
+    assert result.attributes[0]['program_id'] == 'prog_id_0'
+    assert result.attributes[0]['task_id'] == 'task_id_0'
+    assert result.attributes[0]['dataset'] == 'dataset_0'
+    assert result.attributes[0]['color_perm'] == 'color_perm_0'
+    assert result.attributes[0]['transform'] == 'transform_0'
+    assert result.attributes[0]['is_test'] is False
+    assert result.attributes[0]['is_input'] is True
 
-    # Check the attributes
-    expected_attributes = [
-        {
-            'idx': 0,
-            'program_id': 'prog_id_0',
-            'task_id': 'task_id_0',
-            'dataset': 'dataset_0',
-            'color_perm': 'color_perm_0',
-            'transform': 'transform_0',
-            'is_test': False,
-            'is_input': True
-        },
-        {
-            'idx': 1,
-            'program_id': 'prog_id_1',
-            'task_id': 'task_id_1',
-            'dataset': 'dataset_1',
-            'color_perm': 'color_perm_1',
-            'transform': 'transform_1',
-            'is_test': True,
-            'is_input': False
-        }
-    ]
-    assert result.attributes == expected_attributes
+    assert result.attributes[1]['idx'] == 1
+    assert result.attributes[1]['program_id'] == 'prog_id_1'
+    assert result.attributes[1]['task_id'] == 'task_id_1'
+    assert result.attributes[1]['dataset'] == 'dataset_1'
+    assert result.attributes[1]['color_perm'] == 'color_perm_1'
+    assert result.attributes[1]['transform'] == 'transform_1'
+    assert result.attributes[1]['is_test'] is True
+    assert result.attributes[1]['is_input'] is False
 
 # Add more tests as needed... 

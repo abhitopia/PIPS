@@ -58,7 +58,9 @@
 - [x] Correctly handle output normalisation in the DVAE
 - [x] Make mask normalisation a parameter in Config
 - [x] Update the flatten function to Grid to handle padding and EOS
-- [ ] Change the collate function to use the new flatten function
+- [x] Change the collate function to use the new flatten function
+- [ ] Introduce eos_value in the config
+- [ ] Change the loss to discount pad_value
 - [ ] Test with vanilla softmax!
 - [ ] introduce soft to hard interpolation
 - [ ] Check whether token normalisation is needed

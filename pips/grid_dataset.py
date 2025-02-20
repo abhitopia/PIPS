@@ -218,7 +218,7 @@ class GridDataset(Dataset):
         return grid
 
     @staticmethod
-    def collate_fn(batch, pad_value=-1, device=torch.device('cpu'), permute=False, project_size=(32, 32)) -> GRID_INPUT:
+    def collate_fn(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_size=1024, eos_value=None) -> GRID_INPUT:
         """Collate function to process a batch of Grids.
 
         Args:
@@ -226,12 +226,13 @@ class GridDataset(Dataset):
             pad_value (int): The value to use for padding. Default is -1.
             device (str or torch.device): The device to move the tensors to. Default is 'cpu'.
             permute (bool): Whether to permute the grid before projection. Default is False.
-            project_size (tuple): The desired size for grid projection. Default is (32, 32).
+            max_size (int): Maximum length for the flattened arrays. Default is 1024.
+            eos_value (Optional[int]): Value to use for end-of-sequence markers. If None, no EOS markers are added.
 
         Returns:
-            GRID_INPUT: A named tuple containing the projected grids and their attributes.
+            GRID_INPUT: A named tuple containing the flattened grids and their attributes.
         """
-        projected_grids = []
+        flattened_grids = []
         attributes = []
 
         for grid in batch:
@@ -239,9 +240,9 @@ class GridDataset(Dataset):
             if permute:
                 grid = grid.permute()
 
-            # Project each grid to the specified size
-            projected_array = grid.project(new_height=project_size[0], new_width=project_size[1], pad_value=pad_value)
-            projected_grids.append(projected_array)
+            # Flatten each grid with optional EOS markers and padding
+            flattened_array = grid.flatten(max_size=max_size, pad_value=pad_value, eos_value=eos_value)
+            flattened_grids.append(flattened_array)
 
             # Collect attributes and convert numpy types to native Python types
             attributes.append({
@@ -255,14 +256,11 @@ class GridDataset(Dataset):
                 'is_input': bool(grid.is_input)
             })
 
-        # Convert the list of numpy arrays to a single numpy array before converting to a tensor
-        projected_grids = np.array(projected_grids)
-        projected_grids = torch.tensor(projected_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+        # Convert the list of numpy arrays to a single tensor
+        flattened_grids = np.array(flattened_grids)
+        flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
-        # Flatten the projected grids to shape BSx(project_size[0] * project_size[1])
-        projected_grids = projected_grids.view(projected_grids.size(0), -1)
-
-        return GRID_INPUT(grids=projected_grids, attributes=attributes)
+        return GRID_INPUT(grids=flattened_grids, attributes=attributes)
 
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):
