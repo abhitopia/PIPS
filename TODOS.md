@@ -57,6 +57,8 @@
 - [x] Make the output normalisation from StackedTransformerProjection optional
 - [x] Correctly handle output normalisation in the DVAE
 - [x] Make mask normalisation a parameter in Config
+- [ ] Introduce EOS separate from padding token
+- [ ] introduce soft to hard interpolation
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
