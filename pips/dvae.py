@@ -779,7 +779,7 @@ class GridDVAE(nn.Module):
             output_seq_lens=config.bottleneck_widths[1:],  # Skip the first width as it's the input size
             out_norm=True
         )
-        self.encoder_head = nn.Linear(config.n_dim, config.codebook_size)
+        self.encoder_head = nn.Linear(config.n_dim, config.codebook_size, bias=False)
         
         # Initialize codebook
         self.codebook = nn.Parameter(torch.empty(config.codebook_size, config.n_dim))
