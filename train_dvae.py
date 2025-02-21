@@ -9,6 +9,7 @@ import warnings
 import torch
 import time
 import pytorch_lightning as pl
+from pytorch_lightning.utilities import grad_norm
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
@@ -450,28 +451,35 @@ class DVAETrainingModule(pl.LightningModule):
         if updated_q_z_marg is not None:
             self.q_z_marg.copy_(updated_q_z_marg.detach())
         
-        # Log gradients after backward pass
-        if self.trainer.global_step % 100 == 0:  # Log every 100 steps to avoid overhead
-            for name, param in self.named_parameters():
-                if param.requires_grad and param.grad is not None:
-                    # Log gradient norm
-                    grad_norm = param.grad.norm().item()
-                    self.log(f'grads/{name}_norm', grad_norm, on_step=True, on_epoch=False)
+        # # Log gradients after backward pass
+        # if self.trainer.global_step % 1 == 0:  # Log every 100 steps to avoid overhead
+        #     for name, param in self.named_parameters():
+        #         if param.requires_grad and param.grad is not None:
+        #             # Log gradient norm
+        #             grad_norm = param.grad.norm().item()
+        #             self.log(f'grads/{name}_norm', grad_norm, on_step=True, on_epoch=False)
                     
-                    # Log gradient statistics
-                    if param.grad.numel() > 1:  # Only log stats for non-scalar parameters
-                        grad_mean = param.grad.mean().item()
-                        grad_std = param.grad.std().item()
-                        grad_max = param.grad.max().item()
-                        grad_min = param.grad.min().item()
+        #             # Log gradient statistics
+        #             if param.grad.numel() > 1:  # Only log stats for non-scalar parameters
+        #                 grad_mean = param.grad.mean().item()
+        #                 grad_std = param.grad.std().item()
+        #                 grad_max = param.grad.max().item()
+        #                 grad_min = param.grad.min().item()
                         
-                        self.log(f'grads/{name}_mean', grad_mean, on_step=True, on_epoch=False)
-                        self.log(f'grads/{name}_std', grad_std, on_step=True, on_epoch=False)
-                        self.log(f'grads/{name}_max', grad_max, on_step=True, on_epoch=False)
-                        self.log(f'grads/{name}_min', grad_min, on_step=True, on_epoch=False)
+        #                 self.log(f'grads/{name}_mean', grad_mean, on_step=True, on_epoch=False)
+        #                 self.log(f'grads/{name}_std', grad_std, on_step=True, on_epoch=False)
+        #                 self.log(f'grads/{name}_max', grad_max, on_step=True, on_epoch=False)
+        #                 self.log(f'grads/{name}_min', grad_min, on_step=True, on_epoch=False)
         
         return output_dict
     
+
+    def on_before_optimizer_step(self, optimizer):
+        # Compute the 2-norm for each layer
+        # If using mixed precision, the gradients are already unscaled here
+        norms = grad_norm(self.model, norm_type=2)
+        self.log_dict(norms)
+        
     def validation_step(self, batch, batch_idx):
         torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
@@ -736,7 +744,8 @@ def train(
         limit_train_batches=100 if lr_find else (50 if debug_mode else limit_train_batches),
         limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
         val_check_interval=None if lr_find or validation_disabled else (20 if debug_mode else val_check_interval),
-        enable_model_summary=not lr_find
+        enable_model_summary=not lr_find,
+        detect_anomaly=True if debug_mode else False
     )
 
     with trainer.init_module():
