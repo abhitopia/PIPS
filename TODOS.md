@@ -63,6 +63,7 @@
 - [x] Change the loss to discount pad_value
 - [x] introduce soft to hard interpolation
 - [x] Test with vanilla softmax!
+- [ ] Why are there NaNs values in the projection layers?
 - [ ] Profile the code, the number of iterations per second seems to vary a lot
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
