@@ -857,9 +857,17 @@ class GridDVAE(nn.Module):
             mask = torch.rand(B, 1, S, device=device) > mask_percentage
         return mask
 
-    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, reinMax: bool = False) -> Tensor:
-        if reinMax:
-            assert hard, "ReinMax requires hard sampling"
+    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False) -> Tensor:
+        """
+        Args:
+            x (Tensor): Input tensor
+            attn_mask (Optional[Tensor]): Attention mask
+            tau (float): Temperature for Gumbel-Softmax
+            hardness (float): Value between 0 and 1 controlling interpolation between soft (0.0) and hard (1.0) samples
+            reinMax (bool): Whether to use ReinMax sampling
+        """
+        # Check hardness is in valid range
+        assert 0 <= hardness <= 1.0, f"hardness must be between 0 and 1, got {hardness}"    
 
         B, S = x.size()
 
@@ -886,13 +894,14 @@ class GridDVAE(nn.Module):
         # Use gumbel softmax to sample from the Codebook
         soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
 
-        hard_code = soft_code  # Default to soft code
-        if hard:
-            # Straight through.
+        # Only compute hard code if hardness > 0
+        if hardness > 0:
+            # Straight through
             index = soft_code.max(dim=-1, keepdim=True)[1]
             y_hard = torch.zeros_like(
                 encoded_logits, memory_format=torch.legacy_contiguous_format
             ).scatter_(-1, index, 1.0)
+            
             if reinMax:
                 # ReinMax: Algorithm 2 in https://arxiv.org/pdf/2304.08612
                 # Notice that I use pi_0 from gumbel instead of the softmax, this is deliberate
@@ -908,7 +917,13 @@ class GridDVAE(nn.Module):
             else:
                 hard_code = y_hard - soft_code.detach() + soft_code
 
-        return hard_code, soft_code
+            # Interpolate between soft and hard codes based on hardness
+            code = hardness * hard_code + (1 - hardness) * soft_code
+        else:
+            assert reinMax == False, "ReinMax requires hardness to be non-zero"
+            code = soft_code
+
+        return code, soft_code
 
     def decode(self, code: Tensor) -> Tensor:
         B, n_codes, _ = code.size()
@@ -930,8 +945,7 @@ class GridDVAE(nn.Module):
 
         return decoded_logits
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hard: bool = True, 
-               mask_percentage: float = 0.0, reinMax: bool = False, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False, mask_percentage: float = 0.0, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
         """
         Forward pass through the DVAE.
 
@@ -939,9 +953,9 @@ class GridDVAE(nn.Module):
             x (Tensor): Input tensor
             q_z_marg (Optional[Tensor]): Current estimate of marginal q(z), shape (N, C)
             tau (float): Temperature for Gumbel-Softmax
-            hard (bool): Whether to use hard or soft Gumbel-Softmax samples
-            mask_percentage (float): Percentage of tokens to mask
+            hardness (float): Value between 0 and 1 controlling interpolation between soft (0.0) and hard (1.0) samples
             reinMax (bool): Whether to use ReinMax sampling
+            mask_percentage (float): Percentage of tokens to mask
             apply_relu (bool): Whether to apply ReLU to ensure non-negative losses
 
         Returns:
@@ -952,7 +966,7 @@ class GridDVAE(nn.Module):
         """
         # Create a random boolean mask
         attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
-        code, soft_code = self.encode(x, attn_mask, tau, hard, reinMax)
+        code, soft_code = self.encode(x, attn_mask, tau=tau, hardness=hardness, reinMax=reinMax)
 
 
         # ===== DEBUGGING CODE: Logging soft-code statistics =====

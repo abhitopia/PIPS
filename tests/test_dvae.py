@@ -433,9 +433,9 @@ def test_dvae_masking_effect(mask_percentage, same_mask_for_all):
 
         # Test final encoding
         torch.manual_seed(42)
-        code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hard=False)
+        code1, _ = dvae.encode(x1, attn_mask=mask, tau=0.9, hardness=0.0)
         torch.manual_seed(42)
-        code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hard=False)
+        code2, _ = dvae.encode(x2, attn_mask=mask, tau=0.9, hardness=0.0)
         assert torch.allclose(code1, code2, atol=1e-6), \
             "Final codes differ when only masked positions are changed"
 
@@ -563,7 +563,7 @@ def test_dvae_encode_with_reinmax():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test encode with ReinMax enabled
-    hard_code, soft_code = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code, soft_code = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     # Check that the output shapes are correct
     assert hard_code.shape == (batch_size, config.n_codes, config.codebook_size), \
@@ -596,7 +596,7 @@ def test_dvae_forward_with_reinmax():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with ReinMax enabled
-    output, losses, q_z_marg = dvae(x, tau=0.9, hard=True, reinMax=True)
+    output, losses, q_z_marg = dvae(x, tau=0.9, hardness=1.0, reinMax=True)
     reconstruction_loss = losses['ce_loss']
     kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
 
@@ -637,7 +637,7 @@ def test_reinmax_gradient_flow():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos), requires_grad=False)
 
-    hard_code, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code, _ = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
     loss = hard_code.sum()
     loss.backward()
 
@@ -672,12 +672,12 @@ def test_reinmax_edge_cases():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test with very low temperature
-    hard_code_low_temp, _ = dvae.encode(x, tau=0.01, hard=True, reinMax=True)
+    hard_code_low_temp, _ = dvae.encode(x, tau=0.01, hardness=1.0, reinMax=True)
     assert torch.allclose(hard_code_low_temp.sum(dim=-1), torch.ones_like(hard_code_low_temp.sum(dim=-1))), \
         "hard_code should be a valid one-hot encoding even with low temperature."
 
     # Test with very high temperature
-    hard_code_high_temp, _ = dvae.encode(x, tau=10.0, hard=True, reinMax=True)
+    hard_code_high_temp, _ = dvae.encode(x, tau=10.0, hardness=1.0, reinMax=True)
     assert torch.allclose(hard_code_high_temp.sum(dim=-1), torch.ones_like(hard_code_high_temp.sum(dim=-1))), \
         "hard_code should be a valid one-hot encoding even with high temperature."
 
@@ -697,10 +697,10 @@ def test_reinmax_stochasticity():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     torch.manual_seed(42)
-    hard_code1, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code1, _ = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     torch.manual_seed(43)
-    hard_code2, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code2, _ = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     assert not torch.allclose(hard_code1, hard_code2), "ReinMax outputs should differ with different seeds."
 
@@ -720,10 +720,10 @@ def test_reinmax_output_consistency():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     torch.manual_seed(42)
-    hard_code1, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code1, _ = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     torch.manual_seed(42)
-    hard_code2, _ = dvae.encode(x, tau=0.9, hard=True, reinMax=True)
+    hard_code2, _ = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     assert torch.allclose(hard_code1, hard_code2), "ReinMax outputs differ across runs with the same seed."
 
@@ -1447,3 +1447,105 @@ def test_transformer_mask_shape_validation(batch_specific_mask, mask_shape, expe
         error_msg = str(excinfo.value)
         assert "size" in error_msg.lower(), \
             f"Expected error message about tensor size mismatch, got: {error_msg}"
+
+def test_dvae_encode_with_hardness():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+
+    # Test with different hardness values
+    hardness_values = [0.0, 0.25, 0.5, 0.75, 1.0]
+    
+    for hardness in hardness_values:
+        code, soft_code = dvae.encode(x, tau=0.9, hardness=hardness)
+        
+        # Check shapes
+        assert code.shape == (batch_size, config.n_codes, config.codebook_size)
+        assert soft_code.shape == (batch_size, config.n_codes, config.codebook_size)
+        
+        # Check that probabilities sum to 1
+        assert torch.allclose(code.sum(dim=-1), torch.ones_like(code.sum(dim=-1)))
+        assert torch.allclose(soft_code.sum(dim=-1), torch.ones_like(soft_code.sum(dim=-1)))
+        
+        # For hardness=0, code should equal soft_code
+        if hardness == 0.0:
+            assert torch.allclose(code, soft_code)
+        # For hardness=1, code should be one-hot
+        elif hardness == 1.0:
+            assert (code.max(dim=-1)[0] == 1.0).all()
+
+def test_dvae_encode_with_hardness_and_reinmax():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+
+    # Test ReinMax with zero hardness (should raise assertion)
+    with pytest.raises(AssertionError):
+        dvae.encode(x, tau=0.9, hardness=0.0, reinMax=True)
+
+    # Test ReinMax with non-zero hardness
+    hardness_values = [0.25, 0.5, 0.75, 1.0]
+    
+    for hardness in hardness_values:
+        code, soft_code = dvae.encode(x, tau=0.9, hardness=hardness, reinMax=True)
+        
+        # Check shapes and probability distributions
+        assert code.shape == (batch_size, config.n_codes, config.codebook_size)
+        assert soft_code.shape == (batch_size, config.n_codes, config.codebook_size)
+        assert torch.allclose(code.sum(dim=-1), torch.ones_like(code.sum(dim=-1)))
+        assert torch.allclose(soft_code.sum(dim=-1), torch.ones_like(soft_code.sum(dim=-1)))
+        
+        # Code should differ from soft_code when using ReinMax
+        assert not torch.allclose(code, soft_code)
+
+def test_hardness_gradient_flow():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos), requires_grad=False)
+
+    # Test gradient flow with different hardness values
+    hardness_values = [0.0, 0.5, 1.0]
+    
+    for hardness in hardness_values:
+        # Clear gradients
+        dvae.zero_grad()
+        
+        code, _ = dvae.encode(x, tau=0.9, hardness=hardness)
+        loss = code.sum()
+        loss.backward()
+
+        # Check encoder gradients exist
+        encoder_modules = [dvae.encoder_bottleneck, dvae.encoder_base, dvae.encoder_head, dvae.embd]
+        for module in encoder_modules:
+            for name, param in module.named_parameters():
+                assert param.grad is not None, f"Gradient for {name} is None with hardness={hardness}"

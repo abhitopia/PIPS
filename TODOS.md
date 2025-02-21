@@ -61,8 +61,9 @@
 - [x] Change the collate function to use the new flatten function
 - [x] Introduce eos_value in the config
 - [x] Change the loss to discount pad_value
+- [x] introduce soft to hard interpolation
 - [ ] Test with vanilla softmax!
-- [ ] introduce soft to hard interpolation
+- [ ] Profile the code, the number of iterations per second seems to vary a lot
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.

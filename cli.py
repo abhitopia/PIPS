@@ -92,8 +92,9 @@ def new(
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     
-    # Sampling parameters
-    hard_from: int = typer.Option(None, "--hard-from", "--hf", help="When to start hard sampling. None: after LR warmup, 0: always hard, >0: after specific step"),
+    # Sampling parameters (updated)
+    hardness: float = typer.Option(1.0, "--hardness", "--h", help="Target hardness value (0.0 = soft, 1.0 = hard)"),
+    reinMax: bool = typer.Option(False, "--reinmax", "--rm", help="Whether to use ReinMax sampling"),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -104,6 +105,7 @@ def new(
     accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
     
     # Split warmup steps into separate parameters
+    warmup_steps_hardness: int = typer.Option(150_000, "--warmup-steps-hardness", "--wsh", help="Hardness warmup steps"),
     warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
     warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
     warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
@@ -161,12 +163,13 @@ def new(
     )
     
     config = ExperimentConfig(
-        reinMax=False,  # Disable ReinMax for now to see if thing's improve
         model_config=model_config,
         model_src=model_src,
-        hard_from=hard_from,
+        hardness=hardness,
+        reinMax=reinMax,
         tau_start=tau_start,
         tau=tau,
+        hardness_start=0.0,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
@@ -175,6 +178,7 @@ def new(
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
         beta_kl=beta_kl,
+        warmup_steps_hardness=warmup_steps_hardness,
         warmup_steps_lr=warmup_steps_lr,
         warmup_steps_tau=warmup_steps_tau,
         warmup_steps_beta=warmup_steps_beta,

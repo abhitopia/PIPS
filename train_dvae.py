@@ -101,7 +101,7 @@ class LoggingCallback(pl.Callback):
                 category = key.split('(')[-1].split(')')[0]  # Extract category
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['hard', 'tau', 'beta', 'mask_pct', 'max_mask_pct']:
+            elif key in ['hardness', 'tau', 'beta', 'mask_pct', 'max_mask_pct']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
@@ -123,8 +123,9 @@ class ExperimentConfig:
     # Add seed parameter
     seed: int | None = None  # None means random seed
     
-    # Sampling parameters
-    hard_from: int | None = None  # None: after warmup, 0: always hard, >0: after specific step
+    # Sampling parameters (updated)
+    hardness_start: float = 0.0
+    hardness: float = 1.0  # Target hardness value
     reinMax: bool = True
 
     # Initial values (renamed from initial_*)
@@ -142,10 +143,12 @@ class ExperimentConfig:
     beta_kl: float = 2.0
     
     # Schedule types
+    hardness_schedule_type: str = 'cosine_anneal'
     tau_schedule_type: str = 'cosine_decay'
     beta_schedule_type: str = 'cosine_anneal'
     
     # Replace single warmup_steps with separate warmups
+    warmup_steps_hardness: int = 150_000  # Same default as tau warmup
     warmup_steps_lr: int = 10_000
     warmup_steps_tau: int = 150_000
     warmup_steps_beta: int = 10_000
@@ -165,11 +168,6 @@ class ExperimentConfig:
     model_src: str | None = None
 
     def __post_init__(self):
-        if self.hard_from is None:
-            self.hard_from = self.warmup_steps_lr
-        elif self.hard_from < 0:
-            raise ValueError("hard_from must be None, 0, or a positive integer")
-        
         if self.accumulate_grad_batches < 1:
             raise ValueError("accumulate_grad_batches must be >= 1")
             
@@ -294,12 +292,12 @@ class DVAETrainingModule(pl.LightningModule):
         """Returns all scheduled values for the current step."""
         cfg = self.experiment_config
         
-        # Hard sampling threshold schedule (0.0 = soft, 1.0 = hard)
-        hard_schedule = Schedule.get_schedule(
-            initial_value=False,
-            target_value=True,
-            warmup_steps=cfg.hard_from,
-            schedule_type='threshold'
+        # Hardness schedule with its own warmup
+        hardness_schedule = Schedule.get_schedule(
+            initial_value=cfg.hardness_start,
+            target_value=cfg.hardness,
+            warmup_steps=cfg.warmup_steps_hardness,
+            schedule_type=cfg.hardness_schedule_type
         )
         
         # Temperature schedule with its own warmup
@@ -348,7 +346,7 @@ class DVAETrainingModule(pl.LightningModule):
         )
         
         return {
-            'hard': hard_schedule(step),
+            'hardness': hardness_schedule(step),
             'tau': tau_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
@@ -360,8 +358,8 @@ class DVAETrainingModule(pl.LightningModule):
     def forward(self, x, q_z_marg=None, train=True):
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
-        hard = scheduled_values['hard']
-        reinMax = self.experiment_config.reinMax and hard
+        hardness = scheduled_values['hardness']
+        reinMax = self.experiment_config.reinMax and hardness > 0
 
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
@@ -374,7 +372,7 @@ class DVAETrainingModule(pl.LightningModule):
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            hard=hard, 
+            hardness=hardness,
             reinMax=reinMax,
             tau=scheduled_values['tau']
         )
