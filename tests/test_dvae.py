@@ -1549,3 +1549,53 @@ def test_hardness_gradient_flow():
         for module in encoder_modules:
             for name, param in module.named_parameters():
                 assert param.grad is not None, f"Gradient for {name} is None with hardness={hardness}"
+
+def test_dvae_encode_with_negative_hardness():
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+
+    # Test with negative hardness
+    torch.manual_seed(42)
+    code1, soft_code1 = dvae.encode(x, tau=0.9, hardness=-1.0)
+
+    # Should be identical on second run with same input (no sampling)
+    torch.manual_seed(43)  # Different seed shouldn't matter
+    code2, soft_code2 = dvae.encode(x, tau=0.9, hardness=-1.0)
+
+    # Check shapes
+    assert code1.shape == (batch_size, config.n_codes, config.codebook_size)
+    assert soft_code1.shape == (batch_size, config.n_codes, config.codebook_size)
+
+    # Check that outputs are regular softmax probabilities
+    assert torch.allclose(code1.sum(dim=-1), torch.ones_like(code1.sum(dim=-1)))
+    assert torch.allclose(code1, soft_code1), "code and soft_code should be identical with negative hardness"
+    assert torch.allclose(code1, code2), "outputs should be deterministic with negative hardness"
+
+    # Test that ReinMax raises error with negative hardness
+    with pytest.raises(AssertionError):
+        dvae.encode(x, tau=0.9, hardness=-1.0, reinMax=True)
+
+    # Compare with regular softmax
+    # Create positions tensor for comparison
+    positions = dvae.pos_indices.expand(batch_size, -1, -1)
+    
+    # Get logits through the encoder pipeline
+    x_emb = dvae.embd(x)
+    encoded, _ = dvae.encoder_base(x_emb, attn_mask=None, positions=positions)
+    encoded = dvae.encoder_bottleneck(encoded)
+    logits = dvae.encoder_head(encoded)
+    
+    # Compare with regular softmax
+    regular_softmax = torch.softmax(logits, dim=-1)
+    assert torch.allclose(code1, regular_softmax, atol=1e-5), "negative hardness should give same result as regular softmax"

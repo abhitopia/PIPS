@@ -93,7 +93,7 @@ def new(
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     
     # Sampling parameters (updated)
-    hardness: float = typer.Option(1.0, "--hardness", "--h", help="Target hardness value (0.0 = soft, 1.0 = hard)"),
+    hardness: float = typer.Option(1.0, "--hardness", "--h", help="Target hardness value (negative = deterministic softmax, 0.0-1.0 = interpolated hardness)"),
     reinMax: bool = typer.Option(False, "--reinmax", "--rm", help="Whether to use ReinMax sampling"),
     
     # Training parameters

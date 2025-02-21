@@ -863,11 +863,16 @@ class GridDVAE(nn.Module):
             x (Tensor): Input tensor
             attn_mask (Optional[Tensor]): Attention mask
             tau (float): Temperature for Gumbel-Softmax
-            hardness (float): Value between 0 and 1 controlling interpolation between soft (0.0) and hard (1.0) samples
+            hardness (float): Controls sampling behavior:
+                            < 0: Regular softmax (no sampling)
+                            0 to 1: Interpolation between soft and hard Gumbel-Softmax samples
             reinMax (bool): Whether to use ReinMax sampling
         """
-        # Check hardness is in valid range
-        assert 0 <= hardness <= 1.0, f"hardness must be between 0 and 1, got {hardness}"    
+        if reinMax:
+            assert hardness > 0, "ReinMax requires hardness to be non-zero"
+
+        if hardness >= 0:
+            assert hardness <= 1.0, f"hardness must be between 0 and 1 when non-negative, got {hardness}"
 
         B, S = x.size()
 
@@ -891,7 +896,12 @@ class GridDVAE(nn.Module):
         # Map to logits
         encoded_logits = self.encoder_head(encoded)
         
-        # Use gumbel softmax to sample from the Codebook
+        # If hardness < 0, use regular softmax without sampling
+        if hardness < 0:
+            soft_code = F.softmax(encoded_logits, dim=-1)
+            return soft_code, soft_code
+
+        # Otherwise use Gumbel-Softmax with optional hardness
         soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
 
         # Only compute hard code if hardness > 0
@@ -920,7 +930,6 @@ class GridDVAE(nn.Module):
             # Interpolate between soft and hard codes based on hardness
             code = hardness * hard_code + (1 - hardness) * soft_code
         else:
-            assert reinMax == False, "ReinMax requires hardness to be non-zero"
             code = soft_code
 
         return code, soft_code

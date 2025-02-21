@@ -18,9 +18,14 @@ class Schedule:
             initial_value: Starting value
             target_value: Final value
             warmup_steps: Number of steps to reach target value
-            schedule_type: Type of schedule ('linear', 'exponential', 'cosine_decay', or 'cosine_anneal')
+            schedule_type: Type of schedule ('constant', 'linear', 'exponential', 'cosine_decay', or 'cosine_anneal')
         """
-        if schedule_type == 'linear':
+        if schedule_type == 'constant':
+            assert initial_value == target_value, "constant schedule must have initial and target values equal"
+            def schedule(step: int) -> float:
+                return initial_value  # Always return initial value
+                
+        elif schedule_type == 'linear':
             def schedule(step: int) -> float:
                 if step >= warmup_steps:
                     return target_value

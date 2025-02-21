@@ -171,6 +171,13 @@ class ExperimentConfig:
         if self.accumulate_grad_batches < 1:
             raise ValueError("accumulate_grad_batches must be >= 1")
             
+        # Handle negative hardness by making it a constant schedule
+        if self.hardness < 0:
+            print(f"Setting hardness schedule to constant {self.hardness}")
+            print(f"Operating in deterministic (softmax) mode")
+            self.hardness_start = self.hardness
+            self.hardness_schedule_type = 'constant'
+            
         # Generate random seed if none provided
         if self.seed is None:
             self.seed = np.random.randint(0, 2**32 - 1)
