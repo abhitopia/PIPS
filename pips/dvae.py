@@ -890,7 +890,7 @@ class GridDVAE(nn.Module):
             reinMax (bool): Whether to use ReinMax sampling
         """
         if reinMax:
-            assert hardness > 0, "ReinMax requires hardness to be non-zero"
+            assert hardness >= 0, "ReinMax requires hardness to be non-zero"
 
         if hardness >= 0:
             assert hardness <= 1.0, f"hardness must be between 0 and 1 when non-negative, got {hardness}"
