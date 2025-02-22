@@ -43,7 +43,7 @@ class Schedule:
                 if step >= warmup_steps:
                     return target_value
                 progress = step / warmup_steps
-                cosine_term = 0.5 * (1 + np.cos(np.pi * progress))
+                cosine_term = 0.5 * (1 - np.cos(np.pi * progress))
                 return initial_value + (target_value - initial_value) * cosine_term
                 
         elif schedule_type == 'threshold':

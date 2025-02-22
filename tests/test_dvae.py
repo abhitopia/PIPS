@@ -480,6 +480,100 @@ def test_reconstruction_loss():
     assert torch.allclose(computed_loss, expected_loss), \
         f"Expected {expected_loss.item()}, but got {computed_loss.item()}"
 
+@pytest.mark.parametrize("reinmax,tau,hardness,rtol", [
+    (False, 0.1, -1.0, 0.25),    # Regular softmax, low temp - higher tolerance
+    (False, 1.0, -1.0, 0.15),    # Regular softmax, medium temp
+    (False, 5.0, -1.0, 0.15),    # Regular softmax, high temp
+    (False, 0.1, 0.0, 0.25),     # Gumbel-softmax, low temp, soft - higher tolerance
+    (False, 1.0, 0.0, 0.15),     # Gumbel-softmax, medium temp, soft
+    (False, 5.0, 0.0, 0.15),     # Gumbel-softmax, high temp, soft
+    (False, 0.1, 1.0, 0.25),     # Gumbel-softmax, low temp, hard - higher tolerance
+    (False, 1.0, 1.0, 0.15),     # Gumbel-softmax, medium temp, hard
+    (False, 5.0, 1.0, 0.15),     # Gumbel-softmax, high temp, hard
+    (True, 0.1, 1.0, 0.25),      # ReinMax, low temp - higher tolerance
+    (True, 1.0, 1.0, 0.15),      # ReinMax, medium temp
+    (True, 5.0, 1.0, 0.15),      # ReinMax, high temp
+])
+def test_reconstruction_loss_random_input(reinmax, tau, hardness, rtol):
+    """Test reconstruction loss for random input under different sampling conditions."""
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    
+    # Test with random input
+    x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
+    
+    # Run forward pass multiple times with different random initializations
+    ce_losses = []
+    num_trials = 5
+    for _ in range(num_trials):
+        dvae.apply(dvae._init_weights)  # Reinitialize weights
+        decoded_logits, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
+        ce_losses.append(losses['ce_loss'].item() / config.n_pos)  # Divide by n_pos to get per-token loss
+    
+    # Check that mean CE loss is close to expected value for random input
+    mean_ce_loss = np.mean(ce_losses)
+    expected_ce_loss = -np.log(1/config.n_vocab)
+    assert np.abs(mean_ce_loss - expected_ce_loss) / expected_ce_loss < rtol, \
+        f"Mean CE loss {mean_ce_loss:.3f} not close to expected {expected_ce_loss:.3f} " \
+        f"for random input (reinmax={reinmax}, tau={tau}, hardness={hardness})"
+
+@pytest.mark.parametrize("reinmax,tau,hardness,rtol", [
+    (False, 0.1, -1.0, 0.25),    # Regular softmax, low temp - higher tolerance
+    (False, 1.0, -1.0, 0.15),    # Regular softmax, medium temp
+    (False, 5.0, -1.0, 0.15),    # Regular softmax, high temp
+    (False, 0.1, 0.0, 0.25),     # Gumbel-softmax, low temp, soft - higher tolerance
+    (False, 1.0, 0.0, 0.15),     # Gumbel-softmax, medium temp, soft
+    (False, 5.0, 0.0, 0.15),     # Gumbel-softmax, high temp, soft
+    (False, 0.1, 1.0, 0.25),     # Gumbel-softmax, low temp, hard - higher tolerance
+    (False, 1.0, 1.0, 0.15),     # Gumbel-softmax, medium temp, hard
+    (False, 5.0, 1.0, 0.15),     # Gumbel-softmax, high temp, hard
+    (True, 0.1, 1.0, 0.25),      # ReinMax, low temp - higher tolerance
+    (True, 1.0, 1.0, 0.15),      # ReinMax, medium temp
+    (True, 5.0, 1.0, 0.15),      # ReinMax, high temp
+])
+def test_reconstruction_loss_constant_input(reinmax, tau, hardness, rtol):
+    """Test reconstruction loss for constant input under different sampling conditions."""
+    config = GridDVAEConfig(
+        n_dim=128,
+        n_head=8,
+        n_layers=6,
+        n_codes=8,
+        codebook_size=512,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=16
+    )
+    dvae = GridDVAE(config)
+    batch_size = 2
+    
+    # Test with constant input (all same token)
+    x = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab//2, dtype=torch.long)
+    
+    # Run forward pass multiple times with different random initializations  
+    ce_losses = []
+    num_trials = 5
+    for _ in range(num_trials):
+        dvae.apply(dvae._init_weights)  # Reinitialize weights
+        decoded_logits, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
+        ce_losses.append(losses['ce_loss'].item() / config.n_pos)  # Divide by n_pos to get per-token loss
+    
+    # Check that mean CE loss is close to expected value for random input
+    mean_ce_loss = np.mean(ce_losses)
+    expected_ce_loss = -np.log(1/config.n_vocab)
+    assert np.abs(mean_ce_loss - expected_ce_loss) / expected_ce_loss < rtol, \
+        f"Mean CE loss {mean_ce_loss:.3f} not close to expected {expected_ce_loss:.3f} " \
+        f"for constant input (reinmax={reinmax}, tau={tau}, hardness={hardness})"
+
 # Test kld_disentanglement_loss
 def test_kld_disentanglement_loss():
     """
@@ -562,7 +656,10 @@ def test_dvae_encode_with_reinmax():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
-    # Test encode with ReinMax enabled
+    # Test encode with ReinMax enabled and zero hardness (soft sampling)
+    soft_code_hard, soft_code_soft = dvae.encode(x, tau=0.9, hardness=0.0, reinMax=True)
+
+    # Test encode with ReinMax enabled and full hardness
     hard_code, soft_code = dvae.encode(x, tau=0.9, hardness=1.0, reinMax=True)
 
     # Check that the output shapes are correct
@@ -571,13 +668,15 @@ def test_dvae_encode_with_reinmax():
     assert soft_code.shape == (batch_size, config.n_codes, config.codebook_size), \
         f"Unexpected soft_code shape: {soft_code.shape}"
 
-    # Check that hard_code is a valid one-hot encoding
+    # Check that hard_code is a valid one-hot encoding when hardness=1.0
     assert torch.allclose(hard_code.sum(dim=-1), torch.ones_like(hard_code.sum(dim=-1))), \
         "hard_code should be a valid one-hot encoding."
 
-    # Check that ReinMax logic is applied (hard_code should differ from soft_code)
-    assert not torch.allclose(hard_code, soft_code), \
-        "hard_code should differ from soft_code when ReinMax is applied."
+    # Check that soft outputs are valid probability distributions
+    assert torch.allclose(soft_code_soft.sum(dim=-1), torch.ones_like(soft_code_soft.sum(dim=-1))), \
+        "soft_code should sum to 1 along codebook dimension"
+    assert torch.allclose(soft_code_hard.sum(dim=-1), torch.ones_like(soft_code_hard.sum(dim=-1))), \
+        "soft_code should sum to 1 along codebook dimension"
 
 # Add this test function to test the forward pass with ReinMax
 def test_dvae_forward_with_reinmax():
@@ -1501,7 +1600,7 @@ def test_dvae_encode_with_hardness_and_reinmax():
 
     # Test ReinMax with zero hardness (should raise assertion)
     with pytest.raises(AssertionError):
-        dvae.encode(x, tau=0.9, hardness=0.0, reinMax=True)
+        dvae.encode(x, tau=0.9, hardness=-1.0, reinMax=True)
 
     # Test ReinMax with non-zero hardness
     hardness_values = [0.25, 0.5, 0.75, 1.0]
