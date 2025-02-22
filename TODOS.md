@@ -63,6 +63,8 @@
 - [x] Change the loss to discount pad_value
 - [x] introduce soft to hard interpolation
 - [x] Test with vanilla softmax!
+- [x] Add Karpathy's GPU initialisation for the network
+- [ ] Introduce disable permute flag in the CLI
 - [ ] Why are there NaNs values in the projection layers?
 - [ ] Profile the code, the number of iterations per second seems to vary a lot
 - [ ] Check whether token normalisation is needed

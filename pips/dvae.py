@@ -221,6 +221,7 @@ class SwiGLUFFN(nn.Module):
         super().__init__()
         self.w1 = nn.Linear(dim, hidden_dim, bias=False)
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
+        self.w2.RESCALE_INIT = True
 
         # Note that it adds extra params, but I don't care about it.
         self.w3 = nn.Linear(dim, hidden_dim, bias=False)
@@ -276,6 +277,7 @@ class SelfAttention(nn.Module):
         self.c_attn = nn.Linear(config.n_dim, 3 * config.n_dim, bias=False)
         # output projection
         self.c_proj = nn.Linear(config.n_dim, config.n_dim, bias=False)
+        self.c_proj.RESCALE_INIT = True
 
         # regularization
         self.n_head = config.n_head
@@ -646,6 +648,7 @@ class GridDVAEConfig(Config):
         self.compression_factor = self.n_pos // self.n_codes
         # Calculate intermediate sequence lengths for the bottleneck
         self.bottleneck_widths = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
+        self.total_layers = 2*(len(self.bottleneck_widths) - 1 + self.n_layers)
 
         # Set default padding_idx and eos_idx if not provided
         if self.padding_idx is None:
@@ -658,7 +661,10 @@ class GridDVAEConfig(Config):
         computed_attrs = [
             f"n_pos={self.n_pos}",
             f"compression_factor={self.compression_factor}",
-            f"bottleneck_widths={self.bottleneck_widths}"
+            f"bottleneck_widths={self.bottleneck_widths}",
+            f"total_layers={self.total_layers}",
+            f"padding_idx={self.padding_idx}",
+            f"eos_idx={self.eos_idx}"
         ]
         all_attrs = attrs + computed_attrs
         return f"DVAEConfig({', '.join(all_attrs)})"
@@ -803,6 +809,21 @@ class GridDVAE(nn.Module):
         # Register buffer with persistent=False
         self.register_buffer('pos_indices', pos_indices, persistent=False)
         self.q_z_marg = None
+        self.apply(self._init_weights)
+
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            if hasattr(module, 'RESCALE_INIT'):
+                # 2 * (total_layer/2) because each encoder and decoder has a transformer block layers
+                # and each transformer block has 2 residual connections.
+                std *= self.config.total_layers ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
 
     @staticmethod
     def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
@@ -938,7 +959,7 @@ class GridDVAE(nn.Module):
         B, n_codes, _ = code.size()
 
         # Lookup Codebook - Matrix multiplication between one-hot codes and codebook
-        code_words = torch.einsum('bnc,cd->bnd', code, self.codebook)  # (B, n_codes, n_dim)
+        code_words = torch.matmul(code, self.codebook)
 
         # Decompress from Codebook Space
         z_prime = self.decoder_bottleneck(code_words)
