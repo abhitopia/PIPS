@@ -450,35 +450,15 @@ class DVAETrainingModule(pl.LightningModule):
         # Update the global q_z_marg estimate using copy_ instead of assignment
         if updated_q_z_marg is not None:
             self.q_z_marg.copy_(updated_q_z_marg.detach())
-        
-        # # Log gradients after backward pass
-        # if self.trainer.global_step % 1 == 0:  # Log every 100 steps to avoid overhead
-        #     for name, param in self.named_parameters():
-        #         if param.requires_grad and param.grad is not None:
-        #             # Log gradient norm
-        #             grad_norm = param.grad.norm().item()
-        #             self.log(f'grads/{name}_norm', grad_norm, on_step=True, on_epoch=False)
-                    
-        #             # Log gradient statistics
-        #             if param.grad.numel() > 1:  # Only log stats for non-scalar parameters
-        #                 grad_mean = param.grad.mean().item()
-        #                 grad_std = param.grad.std().item()
-        #                 grad_max = param.grad.max().item()
-        #                 grad_min = param.grad.min().item()
-                        
-        #                 self.log(f'grads/{name}_mean', grad_mean, on_step=True, on_epoch=False)
-        #                 self.log(f'grads/{name}_std', grad_std, on_step=True, on_epoch=False)
-        #                 self.log(f'grads/{name}_max', grad_max, on_step=True, on_epoch=False)
-        #                 self.log(f'grads/{name}_min', grad_min, on_step=True, on_epoch=False)
-        
         return output_dict
-    
 
     def on_before_optimizer_step(self, optimizer):
         # Compute the 2-norm for each layer
         # If using mixed precision, the gradients are already unscaled here
-        norms = grad_norm(self.model, norm_type=2)
-        self.log_dict(norms)
+        grad_log_interval = 100 # Log every 100 steps
+        if self.global_rank == 0 and self.trainer.global_step % grad_log_interval == 0:
+            norms = grad_norm(self.model, norm_type=2)
+            self.log_dict(norms)
         
     def validation_step(self, batch, batch_idx):
         torch.compiler.cudagraph_mark_step_begin()
@@ -540,12 +520,12 @@ class DVAETrainingModule(pl.LightningModule):
             }
         }
 
-def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = False):
+def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool = True):
     """Create train and validation dataloaders based on experiment configuration.
     
     Args:
         experiment_config: Configuration containing batch_size and padding_idx
-        debug_mode: If True, uses reduced workers for debugging
+        permute_train: If True, permute the training data
     """
     max_size = experiment_config.model_config.max_grid_height * experiment_config.model_config.max_grid_width
     padding_idx = experiment_config.model_config.padding_idx
@@ -556,7 +536,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, debug_mode: bool = F
     collate_fn_train = partial(GridDataset.collate_fn, 
                              pad_value=padding_idx, 
                              eos_value=eos_idx,  # Add eos_value parameter
-                             permute=True,
+                             permute=permute_train,  # Use the permute_train parameter
                              max_size=max_size
                              )
     train_dataset = GridDataset(train=True)
@@ -673,14 +653,16 @@ def train(
     
     # Apply acceleration settings
     acceleration.apply_settings()
-   
-    # Create dataloaders
-    train_loader, val_loader = create_dataloaders(experiment_config, debug_mode=debug_mode)
-    
+
     # Disable validation if val_check_interval is negative
     validation_disabled = val_check_interval is not None and val_check_interval < 0
+   
+    # Create dataloaders
+    train_loader, val_loader = create_dataloaders(experiment_config, permute_train=not validation_disabled)
+
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")
+        print("Training batches won't be permuted either.")
         val_loader = None
         val_check_interval = None
 
