@@ -47,7 +47,7 @@ def test_cosine_decay_schedule():
         initial_value=1.0,
         target_value=0.0,
         warmup_steps=10,
-        schedule_type='cosine_decay'
+        schedule_type='cosine'
     )
     
     # Test initial value
@@ -67,7 +67,7 @@ def test_cosine_anneal_schedule():
         initial_value=0.0,
         target_value=1.0,
         warmup_steps=10,
-        schedule_type='cosine_anneal'
+        schedule_type='cosine'
     )
     
     # Test initial value
