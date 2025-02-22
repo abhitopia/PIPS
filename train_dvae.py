@@ -144,9 +144,9 @@ class ExperimentConfig:
     beta_kl: float = 2.0
     
     # Schedule types
-    hardness_schedule_type: str = 'cosine_anneal'
-    tau_schedule_type: str = 'cosine_decay'
-    beta_schedule_type: str = 'cosine_anneal'
+    hardness_schedule_type: str = 'cosine'
+    tau_schedule_type: str = 'cosine'
+    beta_schedule_type: str = 'cosine'
     
     # Replace single warmup_steps with separate warmups
     warmup_steps_hardness: int = 150_000  # Same default as tau warmup

@@ -38,21 +38,14 @@ class Schedule:
                     return target_value
                 return initial_value * np.exp(-decay_rate * step)
                 
-        elif schedule_type == 'cosine_decay':
+        elif schedule_type == 'cosine':
             def schedule(step: int) -> float:
                 if step >= warmup_steps:
                     return target_value
                 progress = step / warmup_steps
-                cosine_decay = 0.5 * (1 + np.cos(np.pi * progress))
-                return target_value + (initial_value - target_value) * cosine_decay
+                cosine_term = 0.5 * (1 + np.cos(np.pi * progress))
+                return initial_value + (target_value - initial_value) * cosine_term
                 
-        elif schedule_type == 'cosine_anneal':
-            def schedule(step: int) -> float:
-                if step >= warmup_steps:
-                    return target_value
-                progress = step / warmup_steps
-                cosine_anneal = 0.5 * (1 - np.cos(np.pi * progress))
-                return initial_value + (target_value - initial_value) * cosine_anneal
         elif schedule_type == 'threshold':
             def schedule(step: int) -> float:
                 return target_value if step >= warmup_steps else initial_value

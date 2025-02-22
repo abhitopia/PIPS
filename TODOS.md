@@ -66,7 +66,7 @@
 - [x] Add Karpathy's GPU initialisation for the network
 - [x] Change starting tau initialisation to 3.5
 - [x] Introduce disable permute flag in the CLI
-- [ ] Fix cosine anneal and cosine decay to be just one function
+- [x] Fix cosine anneal and cosine decay to be just one function
 - [ ] Ensure that the encoder and decoder outputs have correct uninitialised CE loss
 - [ ] Determine the cause for code collapse
 - [ ] Why are there NaNs values in the projection layers?
