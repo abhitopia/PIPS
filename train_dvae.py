@@ -130,7 +130,7 @@ class ExperimentConfig:
     reinMax: bool = True
 
     # Initial values (renamed from initial_*)
-    tau_start: float = 1.0
+    tau_start: float = 3.5  # this is difference from Dalle-E paper which starts with 1.0. This is to match vanilla softmax.
     tau: float = 0.0625 # 1/16 as per Dalle-E paper
     beta_mi_start: float = 0.0
     beta_tc_start: float = 0.0

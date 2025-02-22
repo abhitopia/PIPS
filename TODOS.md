@@ -64,6 +64,7 @@
 - [x] introduce soft to hard interpolation
 - [x] Test with vanilla softmax!
 - [x] Add Karpathy's GPU initialisation for the network
+- [x] Change starting tau initialisation to 3.5
 - [ ] Introduce disable permute flag in the CLI
 - [ ] Why are there NaNs values in the projection layers?
 - [ ] Profile the code, the number of iterations per second seems to vary a lot

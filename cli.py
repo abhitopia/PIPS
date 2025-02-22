@@ -111,7 +111,7 @@ def new(
     warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
     
     # Regularization parameters
-    tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax"),
+    tau_start: float = typer.Option(3.5, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax"),
     tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax"),
     max_mask_pct: float = typer.Option(0.5, "--max-mask-pct", "--msk", help="Maximum masking percentage during training. Warms up with beta schedule"),
     
