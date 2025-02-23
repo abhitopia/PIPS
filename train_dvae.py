@@ -730,7 +730,7 @@ def train(
         accumulate_grad_batches=experiment_config.accumulate_grad_batches,
         callbacks=callbacks,
         max_epochs=-1,
-        max_steps=experiment_config.max_steps if not debug_mode else 1000,
+        max_steps=experiment_config.max_steps,
         limit_train_batches=100 if lr_find else limit_train_batches,
         limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
         val_check_interval=None if lr_find or validation_disabled else val_check_interval,
