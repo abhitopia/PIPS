@@ -37,7 +37,7 @@ class LoggingCallback(pl.Callback):
         self.val_batch_start_time = None
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
-        return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l])
+        return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
     
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
         # Record the start time of the training batch
@@ -439,8 +439,6 @@ class DVAETrainingModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
-
-        print("x:", x)
         # Clone q_z_marg before passing it to forward to avoid CUDA graph issues
         q_z_marg_clone = self.q_z_marg.clone() if self.q_z_marg is not None else None
             
