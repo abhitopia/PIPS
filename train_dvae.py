@@ -709,7 +709,11 @@ def train(
             )
         ])
 
+
+    # profiler = pl.profilers.PyTorchProfiler()
+
     trainer = pl.Trainer(
+        # profiler=profiler,
         default_root_dir=tempfile.gettempdir() if lr_find else None,
         log_every_n_steps=1,
         num_sanity_val_steps=0,
@@ -727,7 +731,7 @@ def train(
         limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
         val_check_interval=None if lr_find or validation_disabled else (20 if debug_mode else val_check_interval),
         enable_model_summary=not lr_find,
-        detect_anomaly=True if debug_mode else False
+        # detect_anomaly=True if debug_mode else False
     )
 
     with trainer.init_module():
