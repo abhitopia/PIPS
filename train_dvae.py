@@ -439,6 +439,8 @@ class DVAETrainingModule(pl.LightningModule):
     def training_step(self, batch, batch_idx):
         torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
+
+        print("x:", x)
         # Clone q_z_marg before passing it to forward to avoid CUDA graph issues
         q_z_marg_clone = self.q_z_marg.clone() if self.q_z_marg is not None else None
             
@@ -532,6 +534,8 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
     eos_idx = experiment_config.model_config.eos_idx  # Get eos_idx from config
     batch_size = experiment_config.batch_size
 
+    print("permute_train:", permute_train)
+
     # Create training dataloader
     collate_fn_train = partial(GridDataset.collate_fn, 
                              pad_value=padding_idx, 
@@ -547,7 +551,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
         train_dataset, 
         batch_size=batch_size, 
         collate_fn=collate_fn_train,
-        shuffle=True, 
+        shuffle=permute_train,  ## True if training only if permute_train is True
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
@@ -727,9 +731,9 @@ def train(
         callbacks=callbacks,
         max_epochs=-1,
         max_steps=experiment_config.max_steps if not debug_mode else 1000,
-        limit_train_batches=100 if lr_find else (50 if debug_mode else limit_train_batches),
+        limit_train_batches=100 if lr_find else limit_train_batches,
         limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
-        val_check_interval=None if lr_find or validation_disabled else (20 if debug_mode else val_check_interval),
+        val_check_interval=None if lr_find or validation_disabled else val_check_interval,
         enable_model_summary=not lr_find,
         # detect_anomaly=True if debug_mode else False
     )
