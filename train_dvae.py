@@ -164,7 +164,7 @@ class ExperimentConfig:
 
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5
-    mask_schedule_type: str = 'cosine_anneal'
+    mask_schedule_type: str = 'cosine'
 
     model_src: str | None = None
 
@@ -367,7 +367,7 @@ class DVAETrainingModule(pl.LightningModule):
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hardness = scheduled_values['hardness']
-        reinMax = self.experiment_config.reinMax and hardness > 0
+        reinMax = self.experiment_config.reinMax and hardness >= 0
 
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
