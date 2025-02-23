@@ -787,9 +787,8 @@ class GridDVAE(nn.Module):
         )
         self.encoder_head = nn.Linear(config.n_dim, config.codebook_size, bias=False)
         
-        # Initialize codebook
-        self.codebook = nn.Parameter(torch.empty(config.codebook_size, config.n_dim))
-        nn.init.normal_(self.codebook, mean=0.0, std=0.02)
+        # Setting up the codebook using nn.Linear (without bias) instead of a direct parameter.
+        self.codebook = nn.Linear(config.codebook_size, config.n_dim, bias=False)
         
         # Replace decoder bottleneck with StackedTransformerProjection
         self.decoder_bottleneck = StackedTransformerProjection(
@@ -919,7 +918,7 @@ class GridDVAE(nn.Module):
         
         # If hardness < 0, use regular softmax without sampling
         if hardness < 0:
-            soft_code = F.softmax(encoded_logits, dim=-1)
+            soft_code = F.softmax(encoded_logits/tau, dim=-1)
             return soft_code, soft_code
 
         # Otherwise use Gumbel-Softmax with optional hardness
@@ -958,8 +957,8 @@ class GridDVAE(nn.Module):
     def decode(self, code: Tensor) -> Tensor:
         B, n_codes, _ = code.size()
 
-        # Lookup Codebook - Matrix multiplication between one-hot codes and codebook
-        code_words = torch.matmul(code, self.codebook)
+        # Lookup Codebook - Use the linear layer to project the one-hot codes to codebook vectors.
+        code_words = self.codebook(code)
 
         # Decompress from Codebook Space
         z_prime = self.decoder_bottleneck(code_words)
