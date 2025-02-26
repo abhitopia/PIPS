@@ -7,13 +7,10 @@ import torch.nn.functional as F
 from torch.optim.lr_scheduler import LambdaLR
 import numpy as np
 from torch import Tensor
+from pips.dvae import GridDVAE, GridDVAEConfig
 from pips.grid_dataset import GridDataset
 from torch.amp import autocast
 
-
-# -----------------------------
-# 1) A Simple Multihead Cross-Attn + Feedforward Block
-# -----------------------------
 
 class RMSNorm(nn.Module):
     """
@@ -276,26 +273,89 @@ class RotaryPositionalEmbeddings(nn.Module):
         return x_out.type_as(x)
 
 
-class CrossAttnBlock(nn.Module):
+# Define the RoPE2D class
+class RoPE2D(nn.Module):
     """
-    A single Transformer-style block that:
-      - Performs multi-head cross-attention (Q from 'queries', K/V from 'context').
-      - Applies a feedforward MLP.
-      - Uses residual connections + LayerNorm.
-    We assume batch_first=True shape conventions: (B, T, D).
+    Implements 2D Rotary Positional Embeddings by applying separate RoPE modules to each positional dimension
+    and concatenating the results.
+
+    Args:
+        dim (int): Total embedding dimension (must be even).
+        max_height (int): Maximum expected value for the first positional dimension.
+        max_width (int): Maximum expected value for the second positional dimension.
+        base (int): Base for geometric progression in angle computation.
     """
-    def __init__(self, d_model, n_head, dim_feedforward=512, dropout=0.0, rope=None):
+
+    def __init__(
+        self,
+        dim: int,
+        max_height: int = 1024,
+        max_width: int = 1024,
+        base: int = 10_000,
+    ) -> None:
         super().__init__()
-        # self.cross_attn = nn.MultiheadAttention(d_model, n_head, dropout=dropout, batch_first=True)
+        assert dim % 2 == 0, "Embedding dimension 'dim' must be even to split for 2D RoPE."
+
+        self.dim = dim
+        self.half_dim = dim // 2
+
+        # Initialize two RotaryPositionalEmbeddings for each positional dimension
+        self.rope_height = RotaryPositionalEmbeddings(
+            dim=self.half_dim,
+            max_seq_len=max_height,
+            base=base
+        )
+        self.rope_width = RotaryPositionalEmbeddings(
+            dim=self.half_dim,
+            max_seq_len=max_width,
+            base=base
+        )
+
+    @autocast('cuda', enabled=False)
+    def forward(self, x: Tensor, positions: Tensor) -> Tensor:
+        """
+        Applies 2D RoPE to the input tensor.
+
+        Args:
+            x (Tensor): Input tensor of shape [B, H, S, D].
+            positions (Tensor): Position indices of shape [B, 1, S, 2] or [B, H, S, 2].
+
+        Returns:
+            Tensor: Tensor with 2D RoPE applied, shape [B, H, S, D].
+        """
+        B, H, S, D = x.shape
+        assert D == self.dim, f"Expected embedding dimension {self.dim}, got {D}."
+
+        # Check if positions has shape [B, 1, S, 2] and broadcast to [B, H, S, 2]
+        if positions.shape == (B, 1, S, 2):
+            positions = positions.expand(B, H, S, 2)  # Broadcast to [B, H, S, 2]
+
+        assert positions.shape == (B, H, S, 2), f"Expected positions shape [B, H, S, 2], got {positions.shape}."
+
+        # Split the embeddings into two halves
+        x_height = x[..., :self.half_dim]  # [B, H, S, D/2]
+        x_width = x[..., self.half_dim:]   # [B, H, S, D/2]
+
+        # Split the positions into two separate tensors
+        pos_height = positions[..., 0]  # [B, H, S]
+        pos_width = positions[..., 1]   # [B, H, S]
+
+        # Apply RoPE to each half
+        x_height_rope = self.rope_height(x_height, pos_height)  # [B, H, S, D/2]
+        x_width_rope = self.rope_width(x_width, pos_width)     # [B, H, S, D/2]
+
+        # Concatenate the two halves back together
+        x_rope2d = torch.cat([x_height_rope, x_width_rope], dim=-1)  # [B, H, S, D]
+
+        return x_rope2d
+
+class CrossAttnBlock(nn.Module):
+    def __init__(self, d_model, n_head, dim_feedforward=None, dropout=0.0, rope=None):
+        super().__init__()
         self.cross_attn = MultiHeadAttention(d_model, n_head, dropout, rope=rope)
         self.norm_context = RMSNorm(d_model)
         self.norm_queries = RMSNorm(d_model)
-        # self.ff = nn.Sequential(
-        #     nn.Linear(d_model, dim_feedforward),
-        #     nn.ReLU(),
-        #     nn.Linear(dim_feedforward, d_model)
-        # )
-        self.ff = SwiGLUFFN(d_model, dim_feedforward)
+        self.ff = SwiGLUFFN(d_model, dim_feedforward if dim_feedforward is not None else 4*d_model)
         self.norm2 = RMSNorm(d_model)
 
     def forward(self, queries, context, positions: Optional[Tensor] = None, attn_mask: Optional[Tensor] = None):
@@ -304,28 +364,26 @@ class CrossAttnBlock(nn.Module):
         context: (B, Tc, D)
         Returns: (B, Tq, D)
         """
-        # Cross-attention: Q = queries, K=V = context
-        normed_context = self.norm_context(context)
         normed_queries = self.norm_queries(queries)
+        normed_context = self.norm_context(context)
+
+        # Cross-attention
         attn_out, _ = self.cross_attn(normed_queries, normed_context, normed_context, positions=positions, attn_mask=attn_mask)  # shape (B, Tq, D)
-        x = queries + attn_out
+        queries = queries + attn_out
 
         # Feed-forward
-        ff_out = self.ff(self.norm2(x))  # shape (B, Tq, D)
-        # out = self.norm2(x + ff_out)
-        return ff_out
+        queries = queries + self.ff(self.norm2(queries))  # shape (B, Tq, D)
+        return queries
 
-# -----------------------------
-# 2) Latent Encoder
-#    - 32 learnable tokens cross-attend over the full 1024-token input.
-# -----------------------------
-class LatentEncoder(nn.Module):
+
+class LatentTransformer(nn.Module):
     def __init__(self,
                  d_model=64,
                  n_latent=32,
                  n_head=4,
                  num_layers=2,
-                 dim_feedforward=256):
+                 dim_feedforward=256, 
+                 out_norm=True):
         super().__init__()
         # Learnable latent tokens: shape (1, n_latent, d_model)
         self.latent_tokens = nn.Parameter(torch.randn(1, n_latent, d_model))
@@ -346,7 +404,7 @@ class LatentEncoder(nn.Module):
             for _ in range(num_layers)
         ])
 
-        self.rms_norm = RMSNorm(d_model)
+        self.rms_norm = RMSNorm(d_model) if out_norm else nn.Identity()
 
     def forward(self, x):
         """
@@ -365,9 +423,44 @@ class LatentEncoder(nn.Module):
         latents = self.rms_norm(latents)
         return latents
 
-# -----------------------------
-# 4) Full Autoencoder: Embedding -> LatentEncoder -> LatentDecoder -> Output
-# -----------------------------
+
+class Transformer(nn.Module):
+    def __init__(self,
+                 d_model=64,
+                 n_head=4,
+                 num_layers=2,
+                 dim_feedforward=256,
+                 out_norm=True):
+        super().__init__()
+
+        rope = RoPE2D(
+            dim=d_model // n_head,
+            max_height=32,
+            max_width=32,
+            base=10_000
+        )
+
+        # Stack of cross-attn blocks
+        self.blocks = nn.ModuleList([
+            CrossAttnBlock(d_model, n_head, dim_feedforward, rope=rope)
+            for _ in range(num_layers)
+        ])
+
+        self.rms_norm = RMSNorm(d_model) if out_norm else nn.Identity()
+
+    def forward(self, x, positions=None, attn_mask=None):
+        """
+        x: (B, S, d_model) = input embeddings for S=1024 tokens
+        Return: (B, n_latent, d_model)
+        """
+        for block in self.blocks:
+            x = block(x, x, positions=positions, attn_mask=attn_mask)  # cross-attn with input x
+
+        x = self.rms_norm(x)
+        return x
+    
+
+
 class BottleneckAutoencoder(nn.Module):
     def __init__(self,
                  vocab_size=16,
@@ -384,36 +477,105 @@ class BottleneckAutoencoder(nn.Module):
         # Input embedding for tokens
         self.embed = nn.Embedding(vocab_size, d_model)
 
+        self.use_base = True
+
+        self.encoder_base = Transformer(d_model=d_model,
+                                     n_head=n_head,
+                                     num_layers=num_enc_layers,
+                                     dim_feedforward=4*d_model,
+                                     out_norm=False)
+
         # Encoder
-        self.encoder = LatentEncoder(d_model=d_model,
+        self.encoder = LatentTransformer(d_model=d_model,
                                      n_latent=n_latent,
                                      n_head=n_head,
                                      num_layers=num_enc_layers,
-                                     dim_feedforward=4*d_model)  # e.g. 256 if d_model=64
+                                     dim_feedforward=4*d_model,
+                                     out_norm=False)  # e.g. 256 if d_model=64
 
         # Decoder
-        self.decoder = LatentEncoder(d_model=d_model,
+        self.decoder = LatentTransformer(d_model=d_model,
                                      n_latent=1024,
                                      n_head=n_head,
                                      num_layers=num_dec_layers,
-                                     dim_feedforward=4*d_model)
+                                     dim_feedforward=4*d_model,
+                                     out_norm=False if self.use_base else True)
+        
+        self.decoder_base = Transformer(d_model=d_model,
+                                     n_head=n_head,
+                                     num_layers=num_dec_layers,
+                                     dim_feedforward=4*d_model,
+                                     out_norm=True)
 
         # Final projection back to vocab size
         self.output_proj = nn.Linear(d_model, vocab_size)
 
-    def forward(self, x):
+
+        rows = torch.arange(32, dtype=torch.long)
+        cols = torch.arange(32, dtype=torch.long)
+        grid_y, grid_x = torch.meshgrid(rows, cols, indexing='ij')
+        self.register_buffer("positions", torch.stack([grid_y.flatten(), grid_x.flatten()], dim=1).unsqueeze(0), persistent=False)
+    
+    def forward_project(self, x):
         """
         x: (B, 1024) of token indices
         Returns: (B, 1024, vocab_size)
         """
+      
+
+        B = x.shape[0]
+
+        positions = self.positions.expand(B, -1, -1)
+
         # 1. Embed input tokens
         emb = self.embed(x)  # (B, 1024, d_model)
+
+        if self.use_base:
+            emb = self.encoder_base(emb, positions)
 
         # 2. Latent encoding
         latents = self.encoder(emb)  # (B, 32, d_model)
 
         # 3. Latent decoding
         decoded_emb = self.decoder(latents)  # (B, 1024, d_model)
+
+        if self.use_base:
+            decoded_emb = self.decoder_base(decoded_emb, positions)
+
+        # 4. Project to vocab logits
+        logits = self.output_proj(decoded_emb)  # (B, 1024, vocab_size)
+
+        return logits
+
+    def forward_flatten(self, x, positions):
+        """
+        x: (B, 1024) of token indices
+        Returns: (B, 1024, vocab_size)
+        """
+         # Create validity mask: True for valid positions, False for (-1, -1)
+        valid_pos = (positions[..., 0] != -1) & (positions[..., 1] != -1)  # shape: (B, 1024)
+    
+        # Create attention mask of shape (B, S, S)
+        # A position can attend to another position only if both are valid
+        attn_mask = valid_pos.unsqueeze(1) & valid_pos.unsqueeze(2)  # shape: (B, 1024, 1024)
+
+
+        base = True
+
+        # 1. Embed input tokens
+        emb = self.embed(x)  # (B, 1024, d_model)
+
+        if base:
+            emb = self.encoder_base(emb, positions, attn_mask)
+
+        # 2. Latent encoding
+        latents = self.encoder(emb)  # (B, 32, d_model)
+
+        # 3. Latent decoding
+        decoded_emb = self.decoder(latents)  # (B, 1024, d_model)
+
+        if base:
+            decoded_emb = self.decoder_base(decoded_emb, positions, attn_mask)
 
         # 4. Project to vocab logits
         logits = self.output_proj(decoded_emb)  # (B, 1024, vocab_size)
@@ -443,11 +605,11 @@ def main():
 
 
     # Create training dataloader
-    collate_fn_train = partial(GridDataset.collate_fn, 
+    collate_fn_train = partial(GridDataset.collate_fn_project, 
                              pad_value=padding_idx, 
-                             eos_value=eos_idx,  # Add eos_value parameter
                              permute=permute_train,  # Use the permute_train parameter
-                             max_size=max_size
+                             max_height=32,
+                             max_width=32
                              )
     train_dataset = GridDataset(train=True)
 
@@ -465,24 +627,47 @@ def main():
     )
 
     for idx, batch in enumerate(train_loader):
-        x, _ = batch
-        if idx == 3:
+        x, _, _ = batch
+        if idx == 0:
             break
 
-    print("batch:", x)
+    print("batch:", x.shape)
+    print("batch:", x[0])
     # Create random data: shape (B, SEQ_LEN) of token indices
     # Each entry is in [0..VOCAB_SIZE-1]
     # x = torch.randint(0, VOCAB_SIZE, (BATCH_SIZE, SEQ_LEN))
 
+    # import ipdb; ipdb.set_trace()
+    # import sys; sys.exit()
+
     # Model
-    model = BottleneckAutoencoder(
-        vocab_size=VOCAB_SIZE,
-        d_model=D_MODEL,
-        n_latent=N_LATENT,
+    # model = BottleneckAutoencoder(
+    #     vocab_size=VOCAB_SIZE,
+    #     d_model=D_MODEL,
+    #     n_latent=N_LATENT,
+    #     n_head=4,
+    #     num_enc_layers=1,
+    #     num_dec_layers=1
+    # )
+
+    model_config = GridDVAEConfig(
+        n_dim=D_MODEL,
         n_head=4,
-        num_enc_layers=2,
-        num_dec_layers=2
+        n_base_layers=2,
+        n_latent_layers=2,
+        n_codes=N_LATENT,
+        codebook_size=VOCAB_SIZE,
+        rope_base=10_000,
+        dropout=0.0,
+        max_grid_height=32,
+        max_grid_width=32,
+        n_vocab=VOCAB_SIZE,
+        padding_idx=padding_idx,
+        eos_idx=eos_idx,
+        reinmax=False
     )
+
+    model = GridDVAE(config=model_config)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=BASE_LR)
     
@@ -505,7 +690,8 @@ def main():
         optimizer.zero_grad()
 
         # Forward
-        logits = model(x)  # (B, 1024, vocab_size)
+        # logits = model.forward_project(x)  # (B, 1024, vocab_size)
+        logits, losses, _ = model(x)
 
         # Reshape for cross-entropy:
         # CrossEntropyLoss expects: (B*T, vocab_size) vs (B*T) for targets

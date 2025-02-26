@@ -111,16 +111,21 @@ class Grid:
             eos_value (Optional[int]): Value to use for end-of-sequence markers. If None, no EOS markers are added.
 
         Returns:
-            np.ndarray: 1D array with the flattened grid, and optionally EOS markers and padding.
-
-        Raises:
-            ValueError: If max_size is smaller than the required size for the flattened array.
+            tuple: (flattened_array, position_indices)
+                - flattened_array: 1D array with the flattened grid, and optionally EOS markers and padding
+                - position_indices: Array of shape (N, 2) containing [row, col] indices for each position,
+                  with [-1, -1] for padding and EOS positions
         """
+        height, width = self.array.shape
+        
+        # Create position indices for the original grid
+        row_indices, col_indices = np.indices((height, width))
+        positions = np.stack([row_indices, col_indices], axis=-1)
+        
         # Case 1: Simple flatten (original behavior)
         if max_size is None and eos_value is None:
-            return self.array.flatten()
+            return self.array.flatten(), positions.reshape(-1, 2)
 
-        height, width = self.array.shape
         # Calculate total size needed (with EOS markers if specified)
         total_size = height * (width + 1) if eos_value is not None else height * width
         
@@ -128,19 +133,27 @@ class Grid:
         if max_size is not None and total_size > max_size:
             raise ValueError(f"Required size ({total_size}) exceeds max_size ({max_size})")
         
-        # Create result array (with padding if max_size specified)
+        # Create result arrays (with padding if max_size specified)
         result_size = max_size if max_size is not None else total_size
         result = np.full(result_size, pad_value, dtype=self.array.dtype)
+        pos_result = np.full((result_size, 2), -1, dtype=np.int32)
         
         # Handle data placement
         if eos_value is not None:
             indices = np.arange(total_size).reshape(height, width + 1)
+            # Place values and their positions
             result[indices[:, :-1].ravel()] = self.array.ravel()
             result[indices[:, -1]] = eos_value
+            # Place position indices
+            pos_result[indices[:, :-1].ravel()] = positions.reshape(-1, 2)
+            # Add EOS positions: [row, width] for each row
+            eos_positions = np.stack([np.arange(height), np.full(height, width)], axis=-1)
+            pos_result[indices[:, -1]] = eos_positions
         else:
             result[:total_size] = self.array.ravel()
+            pos_result[:total_size] = positions.reshape(-1, 2)
             
-        return result
+        return result, pos_result
     
     def tolist(self):
         return self.array.tolist()

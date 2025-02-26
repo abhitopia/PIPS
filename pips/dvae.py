@@ -22,7 +22,7 @@ def is_perfect_square(n):
 class Config:
     pass
 
-# Define the RotaryPositionalEmbeddings class
+
 class RotaryPositionalEmbeddings(nn.Module):
     """
     Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864.
@@ -115,7 +115,6 @@ class RotaryPositionalEmbeddings(nn.Module):
         return x_out.type_as(x)
 
 
-# Define the RoPE2D class
 class RoPE2D(nn.Module):
     """
     Implements 2D Rotary Positional Embeddings by applying separate RoPE modules to each positional dimension
@@ -192,12 +191,6 @@ class RoPE2D(nn.Module):
         return x_rope2d
 
 
-class SwiGLU(nn.Module):
-    def forward(self, x):
-        x, gate = x.chunk(2, dim=-1)
-        return F.silu(gate) * x
-
-
 class SwiGLUFFN(nn.Module):
     """SwiGLUFFN
 
@@ -267,27 +260,29 @@ class RMSNorm(nn.Module):
         return x_normed * self.scale
 
 
-class SelfAttention(nn.Module):
-    def __init__(self, config: Config, rope: Optional[RoPE2D]=None):
+class MultiHeadAttention(nn.Module):
+    def __init__(self, n_dim, n_head, dropout, rope=None):
         super().__init__()
-        self.config = config
+        # self.config = config
         self.rope = rope
-        assert config.n_dim % config.n_head == 0
+        self.n_dim = n_dim
+        self.n_head = n_head
+        self.dropout = dropout
+        assert n_dim % n_head == 0
         # key, query, value projections for all heads, but in a batch
-        self.c_attn = nn.Linear(config.n_dim, 3 * config.n_dim, bias=False)
+        self.q_proj = nn.Linear(n_dim, n_dim, bias=False)
+        self.k_proj = nn.Linear(n_dim, n_dim, bias=False)
+        self.v_proj = nn.Linear(n_dim, n_dim, bias=False)
         # output projection
-        self.c_proj = nn.Linear(config.n_dim, config.n_dim, bias=False)
+        self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
         self.c_proj.RESCALE_INIT = True
 
-        # regularization
-        self.n_head = config.n_head
-        self.n_dim = config.n_dim
-        self.dropout = config.dropout
-
     def forward(self,
-            x: Tensor, 
-            attn_mask: Optional[Tensor],
+            q: Tensor, 
+            k: Tensor,
+            v: Tensor,
             positions: Optional[Tensor] = None,
+            attn_mask: Optional[Tensor] = None,
             kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
             return_kv_cache: bool = False) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
         """
@@ -303,19 +298,30 @@ class SelfAttention(nn.Module):
         Returns:
             Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]: The output tensor after self-attention and optionally the updated key and value cache.
         """
-        B, T, C = x.size()
-        qkv = self.c_attn(x)        # qkv: (B, T, 3 * C)
-        q, k, v = qkv.split(self.n_dim, dim=2)
+        qB, qT, qD = q.size()
+        kB, kT, kD = k.size()
+        vB, vT, vD = v.size()
+
+        assert qB == kB == vB, "Batch size mismatch"
+        assert kT == vT, "Sequence length mismatch"
+        assert qD == kD == vD, "Dimension mismatch"
+
+        B = qB
+        D = qD
+
+        q = self.q_proj(q)
+        k = self.k_proj(k)
+        v = self.v_proj(v)
 
         # Reshape for multi-head attention, but do not transpose yet!
-        q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) # (B, n_head, T, head_dim)
-        k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2) 
-        v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)  
+        q = q.view(B, qT, self.n_head, D // self.n_head).transpose(1, 2) # (B, n_head, T, head_dim)
+        k = k.view(B, kT, self.n_head, D // self.n_head).transpose(1, 2) 
+        v = v.view(B, vT, self.n_head, D // self.n_head).transpose(1, 2)  
 
         # Apply Rope2D to q and k
         if self.rope is not None and positions is not None:
-            k = self.rope(k, positions.unsqueeze(1))
-            q = self.rope(q, positions.unsqueeze(1))
+            k = self.rope(k, positions[:, :kT].unsqueeze(1))
+            q = self.rope(q, positions[:, :qT].unsqueeze(1))
 
         # If kv_cache is present, concatenate past keys and values
         if kv_cache is not None and torch.jit.isinstance(kv_cache, Tuple[Tensor, Tensor]):
@@ -331,14 +337,17 @@ class SelfAttention(nn.Module):
 
         # Ensure attn_mask is broadcastable to [B, n_head, T, T]
         if attn_mask is not None:
-            if attn_mask.dim() == 3:
-                attn_mask = attn_mask.unsqueeze(1)  # Expand to [B, 1, S, S]
+            assert attn_mask.dim() == 3, "Attention Mask must be 3D"
+            assert attn_mask.size(0) == B, "Attention Mask Batch size mismatch"
+            assert attn_mask.size(-1) == kT, "Attention Mask Sequence length mismatch"
+            assert attn_mask.size(-2) == qT, "Attention Mask Sequence length mismatch"
+            attn_mask = attn_mask.unsqueeze(1)  # Expand to [B, 1, S, S]
 
         # attn_output: (B, n_head, T, head_dim)
         attn_output = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask, dropout_p=dropout_p)
 
         # Reshape back to (B, T, C)
-        attn_output = attn_output.transpose(1, 2).contiguous().view(B, T, C)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, qT, D)
 
         # Output projection
         y = self.c_proj(attn_output)
@@ -351,707 +360,172 @@ class SelfAttention(nn.Module):
     
 
 class TransformerBlock(nn.Module):
-    def __init__(self, config: Config, rope: Optional[RoPE2D]):
+    def __init__(self, d_model, n_head, rope=None, dim_feedforward=None, dropout=0.0):
         super().__init__()
-        self.config = config
-        self.dropout = nn.Dropout(config.dropout)
-        self.rmsnorm = RMSNorm(config.n_dim)
-        self.attn = SelfAttention(config, rope)
-        self.normed_mlp = nn.Sequential(
-                            RMSNorm(config.n_dim),
-                            SwiGLUFFN(config.n_dim, 4 * config.n_dim))
+        self.mha = MultiHeadAttention(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
+        self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x: Tensor, 
-            attn_mask: Optional[Tensor], 
-            positions: Optional[Tensor] = None,
-            kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
-            return_kv_cache: bool = False) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
+        self.norm_context = RMSNorm(dim=d_model)
+        self.norm_queries = RMSNorm(dim=d_model)
+        self.ff = SwiGLUFFN(dim=d_model, hidden_dim=dim_feedforward if dim_feedforward is not None else 4*d_model)
+        self.norm_ff = RMSNorm(dim=d_model)
 
-        attn_output, new_kv_cache = self.attn(self.rmsnorm(x), attn_mask=attn_mask, positions=positions, kv_cache=kv_cache, return_kv_cache=return_kv_cache)
-        x = x + self.dropout(attn_output)
-        x = x + self.dropout(self.normed_mlp(x))
-        return x, new_kv_cache
+    def forward(self, queries, context, positions: Optional[Tensor] = None, attn_mask: Optional[Tensor] = None, kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
+            return_kv_cache: bool = False):
+        """
+        queries: (B, Tq, D)
+        context: (B, Tc, D)
+        Returns: (B, Tq, D)
+        """
+        normed_context = self.norm_context(context)
+        normed_queries = self.norm_queries(queries)
+
+        # Multi-head attention
+        attn_out, new_kv_cache = self.mha(normed_queries, normed_context, normed_context, positions=positions, attn_mask=attn_mask, kv_cache=kv_cache, return_kv_cache=return_kv_cache)  # shape (B, Tq, D)
+        queries = queries + self.dropout(attn_out)
+
+        # Feed-forward
+        queries = queries + self.dropout(self.ff(self.norm_ff(queries)))  # shape (B, Tq, D)
+        return queries, new_kv_cache
+
     
-
 class Transformer(nn.Module):
-    def __init__(self, config: Config, out_norm: bool = True) -> None:
+    def __init__(self, d_model, n_head, n_layer, dim_feedforward=None, rope=None, out_norm=True):
         super().__init__()
-        self.config = config
-        self.out_norm = out_norm
+        self.blocks = nn.ModuleList([
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope)
+            for _ in range(n_layer)
+        ])
 
-        rope_2d = RoPE2D(config.n_dim // config.n_head,
-                        max_height=config.max_grid_height,
-                        max_width=config.max_grid_width,
-                        base=config.rope_base)
-        self.blocks = nn.ModuleList([TransformerBlock(config, rope=rope_2d) for _ in range(config.n_layers)])
-        # Only create RMSNorm if out_norm is True
-        self.rms_out = RMSNorm(config.n_dim) if out_norm else nn.Identity()
+        self.rms_out = RMSNorm(d_model) if out_norm else nn.Identity()
 
-    def forward(self,
-            x: Tensor, 
-            attn_mask: Tensor, 
-            positions: Tensor, 
-            kv_cache: Optional[List[Tuple[Tensor, Tensor]]] = None,
-            return_kv_caches: bool = False
-        ) -> Tuple[Tensor, List[Tuple[Tensor, Tensor]]]:
+    def forward(self, x, positions=None, attn_mask=None, 
+                kv_cache: Optional[List[Tuple[Tensor, Tensor]]] = None,
+                return_kv_caches: bool = False):
+        """
+        x: (B, S, d_model) = input embeddings for S=1024 tokens
+        Return: (B, n_latent, d_model)
+        """
 
         loop_kv_caches: List[Tuple[Tensor, Tensor]] = []
 
         for i, block in enumerate(self.blocks):
-            x, new_kv_cache = block( x, 
-                attn_mask=attn_mask,
-                positions=positions, 
-                kv_cache=kv_cache[i] if kv_cache is not None else None,
-                return_kv_cache=return_kv_caches
-            )
-
+            x, new_kv_cache = block(queries=x,
+                        context=x, 
+                        positions=positions, 
+                        attn_mask=attn_mask,
+                        kv_cache=kv_cache[i] if kv_cache is not None else None,
+                        return_kv_cache=return_kv_caches)
+            
             # Ensure new_kv_cache is not None before appending
             if return_kv_caches and new_kv_cache is not None:
                 loop_kv_caches.append(new_kv_cache)
 
         x = self.rms_out(x)
         return x, loop_kv_caches
-    
 
-class ResidualProjection(nn.Module):
-    def __init__(self, S, K, d, use_mask_norm=False, eps=1e-6):
-        """
-        Projects from sequence length S to K for each feature channel (dimension d).
-        Optionally compensates for missing tokens by computing a normalization factor
-        via the learned projection weights.
-        
-        Args:
-            S (int): Input sequence length.
-            K (int): Target sequence length.
-            d (int): Feature dimension.
-            use_mask_norm (bool): If True, use the mask to compute a normalization factor.
-            eps (float): A small constant to prevent division by zero.
-        """
+
+class LatentTransformer(nn.Module):
+    def __init__(self,
+                 n_latent,
+                 d_model,
+                 n_head,
+                 n_layer,
+                 dim_feedforward=None,
+                 rope=None,
+                 out_norm=True):
         super().__init__()
-        self.S = S
-        self.K = K
-        self.use_mask_norm = use_mask_norm
-        self.eps = eps
+        # Learnable latent tokens: shape (1, n_latent, d_model)
+        self.latent_tokens = nn.Parameter(torch.randn(1, n_latent, d_model))
         
-        # This linear layer projects from S -> K along the sequence dimension.
-        # It will be applied on tensors of shape (B, d, S) so that it operates on the last dimension.
-        self.proj = nn.Linear(S, K, bias=False)
-        
-    def forward(self, x, mask=None):
-        """
-        Args:
-            x (Tensor): Input tensor of shape (B, S, d).
-            mask (Tensor, optional): Boolean tensor of shape (B, S) or (1, S)
-                                     where True indicates a valid token.
-        Returns:
-            Tensor: Output tensor of shape (B, K, d).
-        """
-        B, S, d = x.shape
-        assert S == self.S, f"Expected S={self.S}, but got {S}"
-        
-        norm_factor = None
+        # Stack of cross-attn blocks
+        self.blocks = nn.ModuleList([
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope)
+            for _ in range(n_layer)
+        ])
 
-        # --- Apply mask and compute normalization factor on the original (B, S, d) ---
-        if mask is not None:
-            # Ensure mask is (B, S)
-            if mask.dim() == 1:
-                mask = mask.unsqueeze(0)
-            if mask.size(0) == 1 and B > 1:
-                mask = mask.expand(B, -1)
-            # Apply the mask to x: broadcast mask from (B, S) to (B, S, d)
-            x = x.masked_fill(~mask.unsqueeze(-1), 0.0)
+        self.rms_norm = RMSNorm(d_model) if out_norm else nn.Identity()
+
+    def forward(self, x, positions=None, attn_mask=None, 
+                kv_cache: Optional[List[Tuple[Tensor, Tensor]]] = None,
+                return_kv_caches: bool = False):
+        """
+        x: (B, S, d_model) = input embeddings for S=1024 tokens
+        Return: (B, n_latent, d_model)
+        """
+        B = x.size(0)
+
+        # Broadcast the learnable latents to match batch size
+        latents = self.latent_tokens.expand(B, -1, -1)  # (B, n_latent, d_model)
+
+        loop_kv_caches: List[Tuple[Tensor, Tensor]] = []
+
+        # positions = self.positions.expand(B, -1)
+        for i, block in enumerate(self.blocks):
+            latents, new_kv_cache = block(queries=latents,
+                                    context=x, 
+                                    positions=positions, 
+                                    attn_mask=attn_mask, 
+                                    kv_cache=kv_cache[i] if kv_cache is not None else None, 
+                                    return_kv_cache=return_kv_caches)
             
-            if self.use_mask_norm:
-                # Compute a per-sample, per-output normalization factor.
-                # Convert mask to float (shape: [B, S]) and apply the same projection weights.
-                mask_float = mask.float()  # shape: (B, S)
-                # F.linear applies: output = mask_float * weight^T, weight shape is (K, S)
-                norm_factor = F.linear(mask_float, self.proj.weight, bias=None)  # (B, K)
-                norm_factor = norm_factor.unsqueeze(-1)  # (B, K, 1)
+            if return_kv_caches and new_kv_cache is not None:
+                loop_kv_caches.append(new_kv_cache)
 
-        # --- Transpose for projection ---
-        # We need to apply the linear projection along the S dimension.
-        # x is of shape (B, S, d), so we transpose to (B, d, S).
-        x = x.transpose(1, 2)  # Now (B, d, S)
-        # Apply the learned projection along the last dimension.
-        x = self.proj(x)       # Now (B, d, K)
-        # Transpose back to (B, K, d)
-        x = x.transpose(1, 2)  # Now (B, K, d)
-        
-        # --- Apply the computed normalization factor (if available) ---
-        if norm_factor is not None:
-            x = x / (norm_factor + self.eps)
-        
-        return x
+        latents = self.rms_norm(latents)
+        return latents, loop_kv_caches
 
 
-class TransformerProjection(nn.Module):
-    """
-    A transformer block that projects sequence length from S to K tokens using 
-    learned projections followed by transformer processing.
-
-    Args:
-        config (Config): Configuration object containing n_dim and other parameters
-        input_seq_len (int): Input sequence length S
-        output_seq_len (int): Target sequence length K
-    """
-    def __init__(self, config: Config, input_seq_len: int, output_seq_len: int):
+class Codebook(nn.Module):
+    def __init__(self, d_model, codebook_size, reinmax: bool = False):
         super().__init__()
-        self.config = config
-        self.input_seq_len = input_seq_len    # S: input sequence length
-        self.output_seq_len = output_seq_len  # K: output sequence length
+
+        self.head = nn.Linear(d_model, codebook_size, bias=False)
+        self.codebook = nn.Linear(codebook_size, d_model, bias=False)
+        self.reinmax = reinmax
+
+    def sample(self, soft_code, logits):
+          # Straight through
+        index = soft_code.max(dim=-1, keepdim=True)[1]
+        y_hard = torch.zeros_like(
+            soft_code, memory_format=torch.legacy_contiguous_format
+        ).scatter_(-1, index, 1.0)
         
-        # Project from S to K tokens, passing use_mask_norm from config
-        self.residual_proj = ResidualProjection(
-            S=input_seq_len, 
-            K=output_seq_len, 
-            d=config.n_dim,
-            use_mask_norm=config.use_mask_norm
-        )
-        
-        # Initialize 1D RoPE for the output sequence length
-        rope = RotaryPositionalEmbeddings(
-            dim=config.n_dim // config.n_head,  # RoPE dim is per head
-            max_seq_len=config.max_grid_height * config.max_grid_width,
-            base=config.rope_base
-        )
-        
-        # Process with transformer block with RoPE
-        self.transformer = TransformerBlock(config, rope=rope)
-
-        # Register position indices buffer
-        pos_indices = torch.arange(output_seq_len, dtype=torch.long)
-        self.register_buffer('pos_indices', pos_indices.unsqueeze_(0), persistent=False)
-        
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-        """
-        Args:
-            x (Tensor): Input tensor [B, S, D]
-            mask (Optional[Tensor]): Boolean mask of shape [B, S] or [1, S]
-                                   where True indicates a valid token. It applied to ResidualProjection only.
-        Returns:
-            Tensor: Output tensor [B, K, D]
-        """
-        B, S, D = x.shape
-        assert S == self.input_seq_len, f"Expected input sequence length {self.input_seq_len}, got {S}"
-        
-        # Project from S to K tokens using 2D mask
-        x = self.residual_proj(x, mask=mask)
-        
-        # Process with transformer block, passing the positions
-        x, _ = self.transformer(x, attn_mask=None, positions=self.pos_indices.expand(B, -1))
-        
-        return x
-
-
-class StackedTransformerProjection(nn.Module):
-    """
-    Applies multiple TransformerProjection blocks in succession, reducing or increasing sequence length
-    from S -> S1 -> S2 -> ... -> SK step by step using transformer-based projections.
-    """
-    def __init__(self, config: Config, input_seq_len: int, output_seq_lens: List[int], out_norm: bool = True):
-        """
-        Args:
-            config (Config): Configuration object containing transformer parameters.
-            input_seq_len (int): Initial sequence length S.
-            output_seq_lens (List[int]): Target sequence lengths for each projection stage.
-                                        Example: [256, 64, 8] means:
-                                        Stage1: S -> 256, Stage2: 256 -> 64, Stage3: 64 -> 8.
-            out_norm (bool): Whether to apply RMSNorm to the final output. If False, uses identity.
-        """
-        super().__init__()
-        self.config = config
-        self.input_seq_len = input_seq_len
-        self.output_seq_lens = output_seq_lens
-        
-        # Create TransformerProjection layers for sequential projection
-        self.projection_layers = nn.ModuleList()
-        current_seq_len = input_seq_len
-        
-        for target_seq_len in output_seq_lens:
-            self.projection_layers.append(
-                TransformerProjection(
-                    config=config,
-                    input_seq_len=current_seq_len,
-                    output_seq_len=target_seq_len
-                )
-            )
-            current_seq_len = target_seq_len
-        
-        # Add either RMSNorm or Identity for the final output
-        self.out_norm = RMSNorm(config.n_dim) if out_norm else nn.Identity()
-    
-    def forward(self, x: Tensor, mask: Optional[Tensor] = None) -> Tensor:
-        """
-        Args:
-            x (Tensor): shape [B, S, D] input to the first stage
-            mask (Optional[Tensor]): Boolean mask of shape [B, S] or [1, S] where True indicates valid tokens.
-                                   Applied only to the first projection layer.
-        Returns:
-            Tensor: shape [B, final_size, D] after all projection stages, normalized by RMSNorm.
-        """
-        B, S, D = x.shape
-        assert S == self.input_seq_len, f"Expected input sequence length {self.input_seq_len}, got {S}"
-
-        if mask is not None:
-            assert mask.dim() == 2 and mask.size(-1) == S, (
-                f"Expected mask shape [(1, S), (B, S)], got {mask.shape}"
-            )
-
-        for i, proj in enumerate(self.projection_layers):
-            if i == 0:
-                # Apply mask only to the first projection layer
-                x = proj(x, mask=mask)
-            else:
-                x = proj(x)
-        
-        # Apply RMSNorm to the final output
-        return self.out_norm(x)
-
-
-
-@dataclass
-class GridDVAEConfig(Config):
-    n_dim: int
-    n_head: int
-    n_layers: int
-    n_codes: int  # Directly specify the number of codes
-    codebook_size: int = 512
-    rope_base: int = 10_000
-    dropout: float = 0.0
-    max_grid_height: int = 32  # New default value
-    max_grid_width: int = 32   # New default value
-    n_vocab: int = 16
-    use_mask_norm: bool = False
-    padding_idx: int | None = None
-    eos_idx: int | None = None
-
-    def __post_init__(self):
-        if self.n_dim % self.n_head != 0:
-            raise ValueError("n_dim must be divisible by n_head")
-        
-        C = self.n_dim // self.n_head
-        assert C % 2 == 0, "n_dim // n_head must be divisible by 2"
-
-        head_dim = C // 2  # Actual Head Dimension. 
-
-        # This is to ensure Rope2D can be applied
-        assert head_dim % 2 == 0, "Head dimension must be even"
-
-        # Calculate n_pos from grid dimensions
-        self.n_pos = self.max_grid_height * self.max_grid_width
-        
-        assert is_power_of_two(self.n_pos), "Product of max_grid_height and max_grid_width must be a power of 2"
-        assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"
-        assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
-
-        self.compression_factor = self.n_pos // self.n_codes
-        # Calculate intermediate sequence lengths for the bottleneck
-        self.bottleneck_widths = [int(self.n_pos / (2**i)) for i in range(int(math.log2(self.compression_factor)) + 1)]
-        self.total_layers = 2*(len(self.bottleneck_widths) - 1 + self.n_layers)
-
-        # Set default padding_idx and eos_idx if not provided
-        if self.padding_idx is None:
-            self.padding_idx = self.n_vocab - 1
-        if self.eos_idx is None:
-            self.eos_idx = self.n_vocab - 2
-
-    def __repr__(self) -> str:
-        attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
-        computed_attrs = [
-            f"n_pos={self.n_pos}",
-            f"compression_factor={self.compression_factor}",
-            f"bottleneck_widths={self.bottleneck_widths}",
-            f"total_layers={self.total_layers}",
-            f"padding_idx={self.padding_idx}",
-            f"eos_idx={self.eos_idx}"
-        ]
-        all_attrs = attrs + computed_attrs
-        return f"DVAEConfig({', '.join(all_attrs)})"
-
-    def to_dict(self) -> dict:
-        """Convert config to a dictionary.
-        
-        Returns:
-            dict: Dictionary containing all config values, including computed attributes
-        """
-        # Get all explicitly defined fields
-        base_dict = {
-            'n_dim': self.n_dim,
-            'n_head': self.n_head,
-            'n_layers': self.n_layers,
-            'n_codes': self.n_codes,
-            'codebook_size': self.codebook_size,
-            'rope_base': self.rope_base,
-            'dropout': self.dropout,
-            'max_grid_height': self.max_grid_height,
-            'max_grid_width': self.max_grid_width,
-            'n_vocab': self.n_vocab,
-            'padding_idx': self.padding_idx,
-            'eos_idx': self.eos_idx,
-        }
-        
-        # Add computed attributes if they exist
-        computed_attrs = ['n_pos', 'compression_factor', 'bottleneck_widths']
-        for attr in computed_attrs:
-            if hasattr(self, attr):
-                base_dict[attr] = getattr(self, attr)
-                
-        return base_dict
-
-    @classmethod
-    def from_dict(cls, config_dict: dict) -> 'GridDVAEConfig':
-        """Create config from a dictionary.
-        
-        Args:
-            config_dict: Dictionary containing configuration values
-            
-        Returns:
-            GridDVAEConfig: New config instance
-            
-        Raises:
-            ValueError: If required fields are missing
-        """
-        # Extract only the fields that are part of the dataclass
-        required_fields = cls.__annotations__.keys()
-        config_kwargs = {
-            key: config_dict[key] 
-            for key in required_fields 
-            if key in config_dict
-        }
-        
-        # Create new instance
-        return cls(**config_kwargs)
-
-
-
-def gumbel_softmax(logits: Tensor, tau: float=1, hard: bool=False, dim: int=-1) -> Tensor:
-    r"""
-    Samples from the Gumbel-Softmax distribution (`Link 1`_  `Link 2`_) and optionally discretizes.
-
-    Args:
-      logits: `[..., num_features]` unnormalized log probabilities
-      tau: non-negative scalar temperature
-      hard: if ``True``, the returned samples will be discretized as one-hot vectors,
-            but will be differentiated as if it is the soft sample in autograd
-      dim (int): A dimension along which softmax will be computed. Default: -1.
-
-	"""
-
-    if tau <= 0:
-        raise ValueError("Temperature must be positive")
-    
-
-    gumbels = -torch.empty_like(logits).exponential_().log()  # # Generates Gumbel(0,1) noise
-    gumbels = (logits + gumbels) / tau  # ~Gumbel(logits,tau) Applies temperature scaling
-    y_soft = gumbels.softmax(dim)
-
-    if hard:
-        # Straight through.
-        index = y_soft.max(dim, keepdim=True)[1]
-        y_hard = torch.zeros_like(logits).scatter_(dim, index, 1.0)
-        ret = y_hard - y_soft.detach() + y_soft
-    else:
-        # Reparametrization trick.
-        ret = y_soft
-    return ret
-
-
-class GridDVAE(nn.Module):
-    def __init__(self, config: GridDVAEConfig):
-        super().__init__()
-        self.config = config
-        self.n_pos = config.n_pos
-        self.embd = nn.Embedding(config.n_vocab, config.n_dim)
-        self.pad_value = config.padding_idx  # Store padding value here
-        nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
-        
-
-        ## The choice of out_norm is inspired by Llama. We can think of both Encoder and Decoder as Llama models.
-        ## With the difference that some of the layers are replaced by TransformerProjection blocks.
-        ## Like in Llama, the token embeddings flow through unnormalized until the head is applied.
-        ## In my case, we normalise the final output of the encoder as well as that of decoder before applyin their
-        ## respective heads. Nothing gets normalised from base to bottleneck and vice versa.
-
-        
-        # Keep the base transformer blocks
-        self.encoder_base = Transformer(config, out_norm=False)
-        self.decoder_base = Transformer(config, out_norm=True)
-        
-        # Replace bottleneck components with StackedTransformerProjection
-        self.encoder_bottleneck = StackedTransformerProjection(
-            config=config,
-            input_seq_len=config.n_pos,
-            output_seq_lens=config.bottleneck_widths[1:],  # Skip the first width as it's the input size
-            out_norm=True
-        )
-        self.encoder_head = nn.Linear(config.n_dim, config.codebook_size, bias=False)
-        
-        # Setting up the codebook using nn.Linear (without bias) instead of a direct parameter.
-        self.codebook = nn.Linear(config.codebook_size, config.n_dim, bias=False)
-        
-        # Replace decoder bottleneck with StackedTransformerProjection
-        self.decoder_bottleneck = StackedTransformerProjection(
-            config=config,
-            input_seq_len=config.n_codes,
-            output_seq_lens=config.bottleneck_widths[::-1][1:],  # Reverse and skip the last width
-            out_norm=False
-        )
-        self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
-        
-        # Initialize position indices
-        pos_indices = self.create_grid_position_tensor(
-            config.max_grid_height,
-            config.max_grid_width, 
-            requires_grad=False).unsqueeze_(0)
-
-        # Register buffer with persistent=False
-        self.register_buffer('pos_indices', pos_indices, persistent=False)
-        self.q_z_marg = None
-        self.apply(self._init_weights)
-
-
-    def _init_weights(self, module):
-        if isinstance(module, nn.Linear):
-            std = 0.02
-            if hasattr(module, 'RESCALE_INIT'):
-                # 2 * (total_layer/2) because each encoder and decoder has a transformer block layers
-                # and each transformer block has 2 residual connections.
-                std *= self.config.total_layers ** -0.5
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-
-    @staticmethod
-    def create_grid_position_tensor(height: int, width: int, requires_grad=True) -> torch.Tensor:
-        """
-        Creates a position tensor for a grid of size height x width.
-        Returns tensor of shape (height*width, 2) in row-major order.
-        
-        Args:
-            height (int): Number of rows
-            width (int): Number of columns
-            requires_grad (bool): Whether the tensor requires gradients
-            
-        Returns:
-            Tensor: Position tensor of shape (height*width, 2) containing (row, col) indices,
-                with dtype=torch.long
-        """
-        rows = torch.arange(height, dtype=torch.long)
-        cols = torch.arange(width, dtype=torch.long)
-        grid_y, grid_x = torch.meshgrid(rows, cols, indexing='ij')
-        positions = torch.stack([grid_y.flatten(), grid_x.flatten()], dim=1)
-        
-        # Convert to float only if requires_grad is True
-        if requires_grad:
-            positions = positions.float().requires_grad_(True)
-        
-        return positions
-
-    def create_random_mask(self, B: int, S: int, mask_percentage: float, same_mask_for_all: bool = False) -> Optional[Tensor]:
-        """
-        Creates a random boolean mask for the input sequence.
-
-        Args:
-            B (int): Batch size.
-            S (int): Sequence length.
-            mask_percentage (float): Fraction of tokens to mask (set to False).
-            same_mask_for_all (bool): If True, apply the same mask to all samples in the batch.
-
-        Returns:
-            Optional[Tensor]: A boolean mask of shape [B, 1, S] or [1, 1, S] with True for unmasked and False for masked tokens,
-                              or None if no masking is applied.
-        """
-        # if mask_percentage == 0:
-        #     return None  # No masking
-        assert mask_percentage < 1, "mask_percentage of 1 would mask all tokens, which is not allowed."
-
-
-        device = self.pos_indices.device if hasattr(self, "pos_indices") else torch.device("cpu")
-
-        if same_mask_for_all:
-            mask = torch.rand(1, 1, S, device=device) > mask_percentage
+        if self.reinMax:
+            # ReinMax: Algorithm 2 in https://arxiv.org/pdf/2304.08612
+            # Notice that I use pi_0 from gumbel instead of the softmax, this is deliberate
+            # The noise in gumbel softmax better captures the stochasticity of sampling
+            # For example, even in STE (Algorithm 1), the authors don't use gumbel softmax as pi_0
+            # However, even the official gumbel softmax implementation in PyTorch uses the softmax with gumbel noise
+            pi_0 = soft_code # Step 1
+            D = y_hard # Step 2
+            pi_1 = (D + pi_0) / 2
+            pi_1 = F.softmax((pi_1.log() - logits).detach() - logits, dim=-1)
+            pi_2 = 2 * pi_1 - 0.5 * pi_0
+            hard_code = pi_2 - pi_2.detach() + D
         else:
-            mask = torch.rand(B, 1, S, device=device) > mask_percentage
-        return mask
+            hard_code = y_hard - soft_code.detach() + soft_code
 
-    def encode(self, x: Tensor, attn_mask: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False) -> Tensor:
-        """
-        Args:
-            x (Tensor): Input tensor
-            attn_mask (Optional[Tensor]): Attention mask
-            tau (float): Temperature for Gumbel-Softmax
-            hardness (float): Controls sampling behavior:
-                            < 0: Regular softmax (no sampling)
-                            0 to 1: Interpolation between soft and hard Gumbel-Softmax samples
-            reinMax (bool): Whether to use ReinMax sampling
-        """
-        if reinMax:
-            assert hardness >= 0, "ReinMax requires hardness to be non-zero"
+        return hard_code
 
-        if hardness >= 0:
+    def forward(self, logits, tau: float = 0.9, hardness: float = 0.0):
+        if hardness < 0: # Use softmax
+            soft_code = F.softmax(logits/tau, dim=-1)
+        else: # Use gumbel
             assert hardness <= 1.0, f"hardness must be between 0 and 1 when non-negative, got {hardness}"
+            soft_code = F.gumbel_softmax(logits, tau=tau, hard=False)
 
-        B, S = x.size()
-
-        # Convert into x: (B, S, D) using self.embd
-        x = self.embd(x)
-
-        # Ensure the position indices tensor is on the same device as x
-        positions = self.pos_indices.to(x.device).expand(B, -1, -1)
-
-        assert S == self.n_pos, f"Input Sequence must be of length {self.n_pos}"
-
-        # First pass through base transformer
-        x, _ = self.encoder_base(x, attn_mask=attn_mask, positions=positions)
-        
-        # Convert attn_mask from [B, 1, S] or [1, 1, S] to [B, S] or [1, S] for encoder_bottleneck
-        bottleneck_mask = attn_mask.squeeze(1) if attn_mask is not None else None
-        
-        # Then through bottleneck
-        encoded = self.encoder_bottleneck(x, mask=bottleneck_mask)
-        
-        # Map to logits
-        encoded_logits = self.encoder_head(encoded)
-        
-        # If hardness < 0, use regular softmax without sampling
-        if hardness < 0:
-            soft_code = F.softmax(encoded_logits/tau, dim=-1)
-            return soft_code, soft_code
-
-        # Otherwise use Gumbel-Softmax with optional hardness
-        soft_code = F.gumbel_softmax(encoded_logits, tau=tau, hard=False)
-
-        # Only compute hard code if hardness > 0
         if hardness > 0:
-            # Straight through
-            index = soft_code.max(dim=-1, keepdim=True)[1]
-            y_hard = torch.zeros_like(
-                encoded_logits, memory_format=torch.legacy_contiguous_format
-            ).scatter_(-1, index, 1.0)
-            
-            if reinMax:
-                # ReinMax: Algorithm 2 in https://arxiv.org/pdf/2304.08612
-                # Notice that I use pi_0 from gumbel instead of the softmax, this is deliberate
-                # The noise in gumbel softmax better captures the stochasticity of sampling
-                # For example, even in STE (Algorithm 1), the authors don't use gumbel softmax as pi_0
-                # However, even the official gumbel softmax implementation in PyTorch uses the softmax with gumbel noise
-                pi_0 = soft_code # Step 1
-                D = y_hard # Step 2
-                pi_1 = (D + pi_0) / 2
-                pi_1 = F.softmax((pi_1.log() - encoded_logits).detach() - encoded_logits, dim=-1)
-                pi_2 = 2 * pi_1 - 0.5 * pi_0
-                hard_code = pi_2 - pi_2.detach() + D
-            else:
-                hard_code = y_hard - soft_code.detach() + soft_code
-
+            hard_code = self.sample(soft_code, logits)
             # Interpolate between soft and hard codes based on hardness
             code = hardness * hard_code + (1 - hardness) * soft_code
         else:
             code = soft_code
 
-        return code, soft_code
+        return self.codebook(code), code, soft_code
 
-    def decode(self, code: Tensor) -> Tensor:
-        B, n_codes, _ = code.size()
-
-        # Lookup Codebook - Use the linear layer to project the one-hot codes to codebook vectors.
-        code_words = self.codebook(code)
-
-        # Decompress from Codebook Space
-        z_prime = self.decoder_bottleneck(code_words)
-
-        # Ensure that pos_indices is on the same device as the code tensor.
-        positions = self.pos_indices.to(code.device).expand(B, -1, -1)
-
-        # Pass through decoder network
-        decoded, _ = self.decoder_base(z_prime, None, positions)
-
-        # Convert to logits
-        decoded_logits = self.decoder_head(decoded)
-
-        return decoded_logits
-
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False, mask_percentage: float = 0.0, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
-        """
-        Forward pass through the DVAE.
-
-        Args:
-            x (Tensor): Input tensor
-            q_z_marg (Optional[Tensor]): Current estimate of marginal q(z), shape (N, C)
-            tau (float): Temperature for Gumbel-Softmax
-            hardness (float): Value between 0 and 1 controlling interpolation between soft (0.0) and hard (1.0) samples
-            reinMax (bool): Whether to use ReinMax sampling
-            mask_percentage (float): Percentage of tokens to mask
-            apply_relu (bool): Whether to apply ReLU to ensure non-negative losses
-
-        Returns:
-            Tuple containing:
-            - decoded_logits: Output logits
-            - losses: Dictionary containing all losses (reconstruction and KL-related)
-            - updated_q_z_marg: Updated estimate of marginal q(z)
-        """
-        # Create a random boolean mask
-        attn_mask = self.create_random_mask(x.size(0), x.size(1), mask_percentage, same_mask_for_all=True)
-        code, soft_code = self.encode(x, attn_mask, tau=tau, hardness=hardness, reinMax=reinMax)
-
-
-        # ===== DEBUGGING CODE: Logging soft-code statistics =====
-        # Compute entropy per latent:
-        # For each latent distribution (over the codebook), we have
-        # entropy = -sum(p * log(p)). If the distribution is uniform, entropy is high;
-        # if one code is dominant, entropy will be near 0.
-        epsilon = 1e-8
-        entropy_vals = -(soft_code * torch.log(soft_code + epsilon)).sum(dim=-1)    # Shape: [Batch, n_codes]
-        avg_entropy = entropy_vals.mean()
-        # Perplexity is computed as the exp of entropy --
-        # it can be interpreted as the effective number of codes being used.
-        avg_perplexity = torch.exp(entropy_vals).mean()
-
-        # Compute the KL disentanglement loss with the provided q_z_marg
-        kld_losses, updated_q_z_marg = self.kld_disentanglement_loss(soft_code, q_z_marg, apply_relu=apply_relu)
-
-        # Compute the reconstruction loss
-        decoded_logits = self.decode(code)
-        ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
-
-        # Combine all losses into a single dictionary
-        losses = {
-            "ce_loss": ce_loss,
-            **kld_losses,  # Unpack KL-related losses
-            'avg_entropy': avg_entropy,
-            'avg_perplexity': avg_perplexity
-        }
-
-        # Return the logits, combined losses dictionary, and updated q_z_marg
-        # All returned lossed are averaged over the batch to return per sample losses
-        return decoded_logits, losses, updated_q_z_marg
-    
-
-    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1) -> Tensor:
-        """
-        Compute the reconstruction loss using cross-entropy per sample (and not per token),
-        ignoring tokens that match pad_value.
-
-        Args:
-            decoded_logits (Tensor): Predicted logits of shape [B, S, V]
-            x (Tensor): Target tokens of shape [B, S]
-            pad_value (int): Token value to ignore in loss computation (default: -1)
-
-        Returns:
-            Tensor: Average reconstruction loss per sample, ignoring padded tokens
-        """
-        return F.cross_entropy(
-            decoded_logits.view(-1, decoded_logits.size(-1)),
-            x.view(-1),
-            ignore_index=pad_value,
-            reduction='sum'
-        ) / x.size(0)
-    
-
-    def kld_disentanglement_loss(self, q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
+    @staticmethod
+    def kld_disentanglement_loss(q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
         """
         The Beta-TCVAE paper(https://arxiv.org/pdf/1802.04942) splits the KLD term as
 
@@ -1271,6 +745,270 @@ class GridDVAE(nn.Module):
             "tc_loss": maybe_relu(tc_batch.mean()), 
             "kl_loss": maybe_relu(full_kl_batch.mean())
         }, q_z_marginal_detached
+
+
+@dataclass
+class GridDVAEConfig(Config):
+    """Configuration class for GridDVAE model.
+    
+    Attributes:
+        n_dim (int): Model dimension
+        n_head (int): Number of attention heads
+        n_base_layers (int): Number of base transformer layers
+        n_latent_layers (int): Number of latent transformer layers
+        n_codes (int): Number of discrete codes (must be power of 2)
+        codebook_size (int): Size of codebook (default: 512)
+        rope_base (int): Base for rotary position encoding (default: 10_000)
+        dropout (float): Dropout probability (default: 0.0)
+        max_grid_height (int): Maximum grid height (default: 32)
+        max_grid_width (int): Maximum grid width (default: 32)
+        n_vocab (int): Vocabulary size (default: 16)
+        padding_idx (int | None): Index for padding token (default: n_vocab - 1)
+        eos_idx (int | None): Index for end-of-sequence token (default: n_vocab - 2)
+        reinmax (bool): Whether to use ReinMax (default: False)
+    """
+    n_dim: int
+    n_head: int
+    n_base_layers: int
+    n_latent_layers: int
+    n_codes: int
+    codebook_size: int = 512
+    rope_base: int = 10_000
+    dropout: float = 0.0
+    max_grid_height: int = 32
+    max_grid_width: int = 32
+    n_vocab: int = 16
+    padding_idx: int | None = None
+    eos_idx: int | None = None
+    reinmax: bool = False
+
+    def __post_init__(self):
+        if self.n_dim % self.n_head != 0:
+            raise ValueError("n_dim must be divisible by n_head")
+        
+        C = self.n_dim // self.n_head
+        assert C % 2 == 0, "n_dim // n_head must be divisible by 2"
+
+        head_dim = C // 2  # Actual Head Dimension
+        assert head_dim % 2 == 0, "Head dimension must be even"
+
+        # Calculate n_pos from grid dimensions
+        self.n_pos = self.max_grid_height * self.max_grid_width
+        
+        assert is_power_of_two(self.n_pos), "Product of max_grid_height and max_grid_width must be a power of 2"
+        assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"
+        assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
+
+        # Set default padding_idx and eos_idx if not provided
+        if self.padding_idx is None:
+            self.padding_idx = self.n_vocab - 1
+        if self.eos_idx is None:
+            self.eos_idx = self.n_vocab - 2
+
+    def __repr__(self) -> str:
+        attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
+        computed_attrs = [
+            f"n_pos={self.n_pos}",
+            f"padding_idx={self.padding_idx}",
+            f"eos_idx={self.eos_idx}"
+        ]
+        all_attrs = attrs + computed_attrs
+        return f"DVAEConfig({', '.join(all_attrs)})"
+
+    def to_dict(self) -> dict:
+        """Convert config to a dictionary.
+        
+        Returns:
+            dict: Dictionary containing all config values, including computed attributes
+        """
+        # Get all explicitly defined fields
+        base_dict = {
+            'n_dim': self.n_dim,
+            'n_head': self.n_head,
+            'n_base_layers': self.n_base_layers,
+            'n_latent_layers': self.n_latent_layers,
+            'n_codes': self.n_codes,
+            'codebook_size': self.codebook_size,
+            'rope_base': self.rope_base,
+            'dropout': self.dropout,
+            'max_grid_height': self.max_grid_height,
+            'max_grid_width': self.max_grid_width,
+            'n_vocab': self.n_vocab,
+            'padding_idx': self.padding_idx,
+            'eos_idx': self.eos_idx,
+        }
+        
+        # Add computed attributes if they exist
+        computed_attrs = ['n_pos']
+        for attr in computed_attrs:
+            if hasattr(self, attr):
+                base_dict[attr] = getattr(self, attr)
+                
+        return base_dict
+
+    @classmethod
+    def from_dict(cls, config_dict: dict) -> 'GridDVAEConfig':
+        """Create config from a dictionary.
+        
+        Args:
+            config_dict: Dictionary containing configuration values
+            
+        Returns:
+            GridDVAEConfig: New config instance
+            
+        Raises:
+            ValueError: If required fields are missing
+        """
+        # Extract only the fields that are part of the dataclass
+        required_fields = cls.__annotations__.keys()
+        config_kwargs = {
+            key: config_dict[key] 
+            for key in required_fields 
+            if key in config_dict
+        }
+        
+        # Create new instance
+        return cls(**config_kwargs)
+
+
+class GridDVAE(nn.Module):
+    def __init__(self, config: GridDVAEConfig):
+        super().__init__()
+        self.config = config
+        self.n_pos = config.n_pos
+        self.embd = nn.Embedding(config.n_vocab, config.n_dim)
+        self.pad_value = config.padding_idx  # Store padding value here
+        nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
+        
+
+        ## The choice of out_norm is inspired by Llama. We can think of both Encoder and Decoder as Llama models.
+        ## With the difference that some of the layers are replaced by TransformerProjection blocks.
+        ## Like in Llama, the token embeddings flow through unnormalized until the head is applied.
+        ## In my case, we normalise the final output of the encoder as well as that of decoder before applyin their
+        ## respective heads. Nothing gets normalised from base to bottleneck and vice versa.
+
+        
+        # Keep the base transformer blocks
+        # self.encoder_base = Transformer(config, out_norm=False)
+        self.grid_encoder = Transformer(
+            d_model=config.n_dim,
+            n_head=config.n_head,
+            n_layer=config.n_base_layers,
+            out_norm=False
+        )
+
+        self.latent_encoder = LatentTransformer(
+            n_latent=config.n_pos,
+            d_model=config.n_dim,
+            n_head=config.n_head,
+            n_layer=config.n_latent_layers,
+            out_norm=False
+        )
+
+        self.codebook = Codebook(config.n_dim, config.codebook_size, reinmax=config.reinmax)
+
+        self.latent_decoder = LatentTransformer(
+            n_latent=config.n_pos,
+            d_model=config.n_dim,
+            n_head=config.n_head,
+            n_layer=config.n_latent_layers,
+            out_norm=False
+        )
+
+        self.grid_decoder = Transformer(
+            d_model=config.n_dim,
+            n_head=config.n_head,
+            n_layer=config.n_base_layers,
+            out_norm=True
+        )
+
+        self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
+
+
+
+        rows = torch.arange(config.max_grid_height, dtype=torch.long)
+        cols = torch.arange(config.max_grid_width, dtype=torch.long)
+        grid_y, grid_x = torch.meshgrid(rows, cols, indexing='ij')
+        grid_pos_indices = torch.stack([grid_y.flatten(), grid_x.flatten()], dim=1).unsqueeze(0)
+        latent_pos_indices = torch.arange(config.n_pos).unsqueeze(0)
+
+        self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
+        self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
+        # self.apply(self._init_weights) # This initialisation seems to be terrible for overfitting.
+
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            std = 0.02
+            # if hasattr(module, 'RESCALE_INIT'):
+            #     # 2 * (total_layer/2) because each encoder and decoder has a transformer block layers
+            #     # and each transformer block has 2 residual connections.
+            #     std *= self.config.total_layers ** -0.5
+            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    
+
+    def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
+        x_embd = self.embd(x)
+        grid_encoded, _ = self.grid_encoder(x_embd, positions=grid_pos_indices)
+        latent_encoded, _ = self.latent_encoder(grid_encoded, positions=latent_pos_indices)
+        return latent_encoded
+
+
+    def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
+        latent_decoded, _ = self.latent_decoder(x, positions=latent_pos_indices)
+        grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)
+        grid_decoded_logits = self.decoder_head(grid_decoded)
+        return grid_decoded_logits
+
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False, mask_percentage: float = 0.0, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
+    
+        B, S = x.size()
+        grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
+        latent_pos_indices = self.latent_pos_indices.expand(B, -1)
+
+        encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
+
+        decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
+        
+        ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
+
+        losses = {
+            "ce_loss": ce_loss,
+            "kl_loss": torch.tensor(0.0),
+            "mi_loss": torch.tensor(0.0), 
+            "dwkl_loss": torch.tensor(0.0), 
+            "tc_loss": torch.tensor(0.0), 
+            'avg_entropy': torch.tensor(0.0),
+            'avg_perplexity': torch.tensor(0.0)
+        }
+        return decoded_logits, losses, None
+
+    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1) -> Tensor:
+        """
+        Compute the reconstruction loss using cross-entropy per sample (and not per token),
+        ignoring tokens that match pad_value.
+
+        Args:
+            decoded_logits (Tensor): Predicted logits of shape [B, S, V]
+            x (Tensor): Target tokens of shape [B, S]
+            pad_value (int): Token value to ignore in loss computation (default: -1)
+
+        Returns:
+            Tensor: Average reconstruction loss per sample, ignoring padded tokens
+        """
+        return F.cross_entropy(
+            decoded_logits.view(-1, decoded_logits.size(-1)),
+            x.view(-1),
+            ignore_index=pad_value,
+            reduction='sum'
+        ) / x.size(0)
+    
+
+
 
 
 

@@ -162,6 +162,7 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 # Define the NamedTuple for the collate function output
 class GRID_INPUT(NamedTuple):
     grids: torch.Tensor  # (B, S) where S is the flattened size of the projected grid
+    positions: torch.Tensor  # (B, S, 2) where S is the flattened size of the projected grid
     attributes: List[Dict[str, any]]
 
 class GridDataset(Dataset):
@@ -216,9 +217,10 @@ class GridDataset(Dataset):
         )
         
         return grid
+    
 
     @staticmethod
-    def collate_fn(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_size=1024, eos_value=None) -> GRID_INPUT:
+    def collate_fn_project(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_height=32, max_width=32) -> GRID_INPUT:
         """Collate function to process a batch of Grids.
 
         Args:
@@ -226,11 +228,12 @@ class GridDataset(Dataset):
             pad_value (int): The value to use for padding. Default is -1.
             device (str or torch.device): The device to move the tensors to. Default is 'cpu'.
             permute (bool): Whether to permute the grid before projection. Default is False.
-            max_size (int): Maximum length for the flattened arrays. Default is 1024.
+            max_height (int): Maximum height for the projected grid. Default is 32.
+            max_width (int): Maximum width for the projected grid. Default is 32.
             eos_value (Optional[int]): Value to use for end-of-sequence markers. If None, no EOS markers are added.
 
         Returns:
-            GRID_INPUT: A named tuple containing the flattened grids and their attributes.
+            GRID_INPUT: A named tuple containing the flattened grids, position indices, and attributes.
         """
         flattened_grids = []
         attributes = []
@@ -241,8 +244,8 @@ class GridDataset(Dataset):
                 grid = grid.permute()
 
             # Flatten each grid with optional EOS markers and padding
-            flattened_array = grid.flatten(max_size=max_size, pad_value=pad_value, eos_value=eos_value)
-            flattened_grids.append(flattened_array)
+            projected_array = grid.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+            flattened_grids.append(projected_array.flatten())
 
             # Collect attributes and convert numpy types to native Python types
             attributes.append({
@@ -256,11 +259,65 @@ class GridDataset(Dataset):
                 'is_input': bool(grid.is_input)
             })
 
-        # Convert the list of numpy arrays to a single tensor
+        # Convert the lists of numpy arrays to tensors
         flattened_grids = np.array(flattened_grids)
+
+        # Convert to torch tensors and move to device
         flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
-        return GRID_INPUT(grids=flattened_grids, attributes=attributes)
+        return GRID_INPUT(grids=flattened_grids, positions=None, attributes=attributes)
+
+
+    @staticmethod
+    def collate_fn_flatten(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_size=1024, eos_value=None) -> GRID_INPUT:
+        """Collate function to process a batch of Grids.
+
+        Args:
+            batch (list of Grid): The batch of Grid objects.
+            pad_value (int): The value to use for padding. Default is -1.
+            device (str or torch.device): The device to move the tensors to. Default is 'cpu'.
+            permute (bool): Whether to permute the grid before projection. Default is False.
+            max_size (int): Maximum length for the flattened arrays. Default is 1024.
+            eos_value (Optional[int]): Value to use for end-of-sequence markers. If None, no EOS markers are added.
+
+        Returns:
+            GRID_INPUT: A named tuple containing the flattened grids, position indices, and attributes.
+        """
+        flattened_grids = []
+        flattened_positions = []
+        attributes = []
+
+        for grid in batch:
+            # Optionally permute the grid using the grid.permute method
+            if permute:
+                grid = grid.permute()
+
+            # Flatten each grid with optional EOS markers and padding
+            flattened_array, positions = grid.flatten(max_size=max_size, pad_value=pad_value, eos_value=eos_value)
+            flattened_grids.append(flattened_array)
+            flattened_positions.append(positions)
+
+            # Collect attributes and convert numpy types to native Python types
+            attributes.append({
+                'idx': int(grid.idx),
+                'program_id': str(grid.program_id),
+                'task_id': str(grid.task_id),
+                'dataset': str(grid.dataset),
+                'color_perm': str(grid.color_perm),
+                'transform': str(grid.transform),
+                'is_test': bool(grid.is_test),
+                'is_input': bool(grid.is_input)
+            })
+
+        # Convert the lists of numpy arrays to tensors
+        flattened_grids = np.array(flattened_grids)
+        flattened_positions = np.array(flattened_positions)
+        
+        # Convert to torch tensors and move to device
+        flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+        flattened_positions = torch.tensor(flattened_positions, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+
+        return GRID_INPUT(grids=flattened_grids, positions=flattened_positions, attributes=attributes)
 
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):

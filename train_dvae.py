@@ -527,7 +527,6 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
         experiment_config: Configuration containing batch_size and padding_idx
         permute_train: If True, permute the training data
     """
-    max_size = experiment_config.model_config.max_grid_height * experiment_config.model_config.max_grid_width
     padding_idx = experiment_config.model_config.padding_idx
     eos_idx = experiment_config.model_config.eos_idx  # Get eos_idx from config
     batch_size = experiment_config.batch_size
@@ -535,11 +534,11 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
     print("permute_train:", permute_train)
 
     # Create training dataloader
-    collate_fn_train = partial(GridDataset.collate_fn, 
+    collate_fn_train = partial(GridDataset.collate_fn_project, 
                              pad_value=padding_idx, 
-                             eos_value=eos_idx,  # Add eos_value parameter
                              permute=permute_train,  # Use the permute_train parameter
-                             max_size=max_size
+                             max_height=experiment_config.model_config.max_grid_height,
+                             max_width=experiment_config.model_config.max_grid_width
                              )
     train_dataset = GridDataset(train=True)
 
@@ -557,11 +556,11 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
     )
 
     # Create validation dataloader
-    collate_fn_val = partial(GridDataset.collate_fn, 
+    collate_fn_val = partial(GridDataset.collate_fn_project, 
                              pad_value=padding_idx, 
-                             eos_value=eos_idx,  # Add eos_value parameter
                              permute=False,
-                             max_size=max_size)
+                             max_height=experiment_config.model_config.max_grid_height,
+                             max_width=experiment_config.model_config.max_grid_width)
     val_dataset = GridDataset(train=False)
     val_loader = DataLoader(
         val_dataset, 
