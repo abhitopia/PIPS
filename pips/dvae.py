@@ -479,7 +479,6 @@ class LatentTransformer(nn.Module):
 class Codebook(nn.Module):
     def __init__(self, d_model, codebook_size, reinmax: bool = False):
         super().__init__()
-
         self.head = nn.Linear(d_model, codebook_size, bias=False)
         self.codebook = nn.Linear(codebook_size, d_model, bias=False)
         self.reinmax = reinmax
@@ -507,8 +506,20 @@ class Codebook(nn.Module):
             hard_code = y_hard - soft_code.detach() + soft_code
 
         return hard_code
+    
 
-    def forward(self, logits, tau: float = 0.9, hardness: float = 0.0):
+    def compute_entropy(self, soft_code: Tensor, eps: float = 1e-8) -> Tuple[Tensor, Tensor]:
+        entropy_vals = -(soft_code * torch.log(soft_code + eps)).sum(dim=-1)    # Shape: [Batch, n_codes]
+        avg_entropy = entropy_vals.mean()
+        # Perplexity is computed as the exp of entropy --
+        # it can be interpreted as the effective number of codes being used.
+        avg_perplexity = torch.exp(entropy_vals).mean()
+        return avg_entropy, avg_perplexity
+
+    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0):
+
+        logits = self.head(logits)
+
         if hardness < 0: # Use softmax
             soft_code = F.softmax(logits/tau, dim=-1)
         else: # Use gumbel
@@ -522,7 +533,13 @@ class Codebook(nn.Module):
         else:
             code = soft_code
 
-        return self.codebook(code), code, soft_code
+        avg_entropy, avg_perplexity = self.compute_entropy(soft_code)
+
+        metrics = {
+            'code_entropy': avg_entropy.detach().item(),
+            'code_perplexity': avg_perplexity.detach().item()
+        }
+        return self.codebook(code), code, soft_code, metrics
 
     @staticmethod
     def kld_disentanglement_loss(q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
@@ -769,7 +786,7 @@ class GridDVAEConfig(Config):
     """
     n_dim: int
     n_head: int
-    n_base_layers: int
+    n_grid_layers: int
     n_latent_layers: int
     n_codes: int
     codebook_size: int = 512
@@ -825,7 +842,7 @@ class GridDVAEConfig(Config):
         base_dict = {
             'n_dim': self.n_dim,
             'n_head': self.n_head,
-            'n_base_layers': self.n_base_layers,
+            'n_base_layers': self.n_grid_layers,
             'n_latent_layers': self.n_latent_layers,
             'n_codes': self.n_codes,
             'codebook_size': self.codebook_size,
@@ -893,12 +910,12 @@ class GridDVAE(nn.Module):
         self.grid_encoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_base_layers,
+            n_layer=config.n_grid_layers,
             out_norm=False
         )
 
         self.latent_encoder = LatentTransformer(
-            n_latent=config.n_pos,
+            n_latent=config.n_codes,
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layers,
@@ -918,13 +935,11 @@ class GridDVAE(nn.Module):
         self.grid_decoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_base_layers,
+            n_layer=config.n_grid_layers,
             out_norm=True
         )
 
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
-
-
 
         rows = torch.arange(config.max_grid_height, dtype=torch.long)
         cols = torch.arange(config.max_grid_width, dtype=torch.long)
@@ -964,13 +979,16 @@ class GridDVAE(nn.Module):
         grid_decoded_logits = self.decoder_head(grid_decoded)
         return grid_decoded_logits
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 0.9, hardness: float = 1.0, reinMax: bool = False, mask_percentage: float = 0.0, apply_relu: bool = False) -> Tuple[Tensor, dict, Tensor]:
-    
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: float = 0.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
 
         encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
+
+        encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness)
+
+        kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, apply_relu=False, momentum=0.99, eps=1e-8)
 
         decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
         
@@ -978,14 +996,10 @@ class GridDVAE(nn.Module):
 
         losses = {
             "ce_loss": ce_loss,
-            "kl_loss": torch.tensor(0.0),
-            "mi_loss": torch.tensor(0.0), 
-            "dwkl_loss": torch.tensor(0.0), 
-            "tc_loss": torch.tensor(0.0), 
-            'avg_entropy': torch.tensor(0.0),
-            'avg_perplexity': torch.tensor(0.0)
+            **kld_losses,
+            **code_metrics
         }
-        return decoded_logits, losses, None
+        return decoded_logits, losses, q_z_marg
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1) -> Tensor:
         """

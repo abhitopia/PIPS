@@ -67,7 +67,7 @@
 - [x] Change starting tau initialisation to 3.5
 - [x] Introduce disable permute flag in the CLI
 - [x] Fix cosine anneal and cosine decay to be just one function
-- [ ] 2D positions incorrect after the changed dataset
+- [x] 2D positions incorrect after the changed dataset
 - [ ] Ensure that the encoder and decoder outputs have correct uninitialised CE loss
 - [ ] Determine the cause for code collapse
 - [ ] Why are there NaNs values in the projection layers?
@@ -75,6 +75,13 @@
 - [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
+
+
+## Version 2
+- [ ] Add padding token CE loss weighting
+- [ ] Add masking mechanism 
+- [ ] Add dummy codebook
+- [ ] Perplexity per code
 
 
 ## Improvements

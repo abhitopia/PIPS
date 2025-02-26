@@ -653,7 +653,7 @@ def main():
     model_config = GridDVAEConfig(
         n_dim=D_MODEL,
         n_head=4,
-        n_base_layers=2,
+        n_grid_layers=2,
         n_latent_layers=2,
         n_codes=N_LATENT,
         codebook_size=VOCAB_SIZE,
@@ -686,16 +686,24 @@ def main():
 
     model.train()
 
+    q_z_marg = None
+
+    beta = 0.0
+
     for step in range(MAX_STEPS):
         optimizer.zero_grad()
 
         # Forward
         # logits = model.forward_project(x)  # (B, 1024, vocab_size)
-        logits, losses, _ = model(x)
+        logits, losses, q_z_marg = model(x, q_z_marg=q_z_marg, hardness=-1)
 
         # Reshape for cross-entropy:
         # CrossEntropyLoss expects: (B*T, vocab_size) vs (B*T) for targets
-        loss = criterion(logits.view(-1, VOCAB_SIZE), x.view(-1))
+        # loss = criterion(logits.view(-1, VOCAB_SIZE), x.view(-1))
+        ce_loss = losses['ce_loss'] / 1024
+        kl_loss = losses['kl_loss'] / N_LATENT
+
+        loss = ce_loss + beta * kl_loss
 
         # Calculate accuracy (excluding padding tokens)
         predictions = logits.argmax(dim=-1)  # (B, 1024)
@@ -708,10 +716,15 @@ def main():
         optimizer.step()
         scheduler.step()
 
-        if step % 20 == 0:
+        if step % 20 == 0 or step == 0:
             current_lr = optimizer.param_groups[0]['lr']
             print(f"Step {step}/{MAX_STEPS}, Loss: {loss.item():.4f}, "
-                  f"Accuracy: {accuracy:.2f}%, LR: {current_lr:.6f}")
+                  f"Accuracy: {accuracy:.2f}%, LR: {current_lr:.6f}, "
+                  f"CE Loss: {ce_loss.item():.4f}, "
+                  f"KL Loss: {kl_loss.item():.4f}, "
+                  f"Code entropy: {losses['code_entropy']:.4f}, "
+                  f"Code perplexity: {losses['code_perplexity']:.4f}"
+                  )
 
 if __name__ == "__main__":
     main()
