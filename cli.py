@@ -87,7 +87,8 @@ def new(
     # Model architecture
     n_dim: int = typer.Option(256, "--n-dim", "-d", help="Dimension of model embeddings"),
     n_head: int = typer.Option(8, "--n-head", "-h", help="Number of attention heads"),
-    n_layers: int = typer.Option(4, "--n-layers", "-l", help="Number of transformer layers"),
+    n_grid_layer: int = typer.Option(4, "--n-grid-layer", "-gl", help="Number of grid transformer layers"),
+    n_latent_layer: int = typer.Option(4, "--n-latent-layer", "-ll", help="Number of latent transformer layers"),
     n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
@@ -123,7 +124,6 @@ def new(
     
     seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
     limit_train_batches: int = typer.Option(None, "--limit-train-batches", "--ltb", help="Limit the number of training batches per epoch. None means use all batches."),
-    use_mask_norm: bool = typer.Option(False, "--use-mask-norm", "--umn", help="Whether to use mask normalization in residual projections"),
 
     # Common options
     val_check_interval: int = get_common_options()["val_check_interval"],
@@ -151,7 +151,8 @@ def new(
     model_config = GridDVAEConfig(
         n_dim=n_dim,
         n_head=n_head,
-        n_layers=n_layers,
+        n_grid_layer=n_grid_layer,
+        n_latent_layer=n_latent_layer,
         n_codes=n_codes,
         codebook_size=codebook_size,
         rope_base=10000,
@@ -159,7 +160,6 @@ def new(
         n_vocab=16,  # Fixed for grid world
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
-        use_mask_norm=use_mask_norm,
     )
     
     config = ExperimentConfig(

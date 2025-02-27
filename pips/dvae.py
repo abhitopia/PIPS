@@ -477,20 +477,19 @@ class LatentTransformer(nn.Module):
 
 
 class Codebook(nn.Module):
-    def __init__(self, d_model, codebook_size, reinmax: bool = False):
+    def __init__(self, d_model, codebook_size):
         super().__init__()
         self.head = nn.Linear(d_model, codebook_size, bias=False)
         self.codebook = nn.Linear(codebook_size, d_model, bias=False)
-        self.reinmax = reinmax
 
-    def sample(self, soft_code, logits):
+    def sample(self, soft_code, logits, reinMax: bool = False):
           # Straight through
         index = soft_code.max(dim=-1, keepdim=True)[1]
         y_hard = torch.zeros_like(
             soft_code, memory_format=torch.legacy_contiguous_format
         ).scatter_(-1, index, 1.0)
         
-        if self.reinMax:
+        if reinMax:
             # ReinMax: Algorithm 2 in https://arxiv.org/pdf/2304.08612
             # Notice that I use pi_0 from gumbel instead of the softmax, this is deliberate
             # The noise in gumbel softmax better captures the stochasticity of sampling
@@ -516,7 +515,7 @@ class Codebook(nn.Module):
         avg_perplexity = torch.exp(entropy_vals).mean()
         return avg_entropy, avg_perplexity
 
-    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0):
+    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
 
         logits = self.head(logits)
 
@@ -527,7 +526,7 @@ class Codebook(nn.Module):
             soft_code = F.gumbel_softmax(logits, tau=tau, hard=False)
 
         if hardness > 0:
-            hard_code = self.sample(soft_code, logits)
+            hard_code = self.sample(soft_code, logits=logits, reinMax=reinMax)
             # Interpolate between soft and hard codes based on hardness
             code = hardness * hard_code + (1 - hardness) * soft_code
         else:
@@ -536,8 +535,8 @@ class Codebook(nn.Module):
         avg_entropy, avg_perplexity = self.compute_entropy(soft_code)
 
         metrics = {
-            'code_entropy': avg_entropy.detach().item(),
-            'code_perplexity': avg_perplexity.detach().item()
+            'code_entropy': avg_entropy,
+            'code_perplexity': avg_perplexity
         }
         return self.codebook(code), code, soft_code, metrics
 
@@ -782,12 +781,11 @@ class GridDVAEConfig(Config):
         n_vocab (int): Vocabulary size (default: 16)
         padding_idx (int | None): Index for padding token (default: n_vocab - 1)
         eos_idx (int | None): Index for end-of-sequence token (default: n_vocab - 2)
-        reinmax (bool): Whether to use ReinMax (default: False)
     """
     n_dim: int
     n_head: int
-    n_grid_layers: int
-    n_latent_layers: int
+    n_grid_layer: int
+    n_latent_layer: int
     n_codes: int
     codebook_size: int = 512
     rope_base: int = 10_000
@@ -797,7 +795,6 @@ class GridDVAEConfig(Config):
     n_vocab: int = 16
     padding_idx: int | None = None
     eos_idx: int | None = None
-    reinmax: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -842,8 +839,8 @@ class GridDVAEConfig(Config):
         base_dict = {
             'n_dim': self.n_dim,
             'n_head': self.n_head,
-            'n_base_layers': self.n_grid_layers,
-            'n_latent_layers': self.n_latent_layers,
+            'n_grid_layer': self.n_grid_layer,
+            'n_latent_layer': self.n_latent_layer,
             'n_codes': self.n_codes,
             'codebook_size': self.codebook_size,
             'rope_base': self.rope_base,
@@ -910,7 +907,7 @@ class GridDVAE(nn.Module):
         self.grid_encoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_grid_layers,
+            n_layer=config.n_grid_layer,
             out_norm=False
         )
 
@@ -918,24 +915,24 @@ class GridDVAE(nn.Module):
             n_latent=config.n_codes,
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_latent_layers,
+            n_layer=config.n_latent_layer,
             out_norm=False
         )
 
-        self.codebook = Codebook(config.n_dim, config.codebook_size, reinmax=config.reinmax)
+        self.codebook = Codebook(config.n_dim, config.codebook_size)
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_latent_layers,
+            n_layer=config.n_latent_layer,
             out_norm=False
         )
 
         self.grid_decoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
-            n_layer=config.n_grid_layers,
+            n_layer=config.n_grid_layer,
             out_norm=True
         )
 
@@ -979,14 +976,14 @@ class GridDVAE(nn.Module):
         grid_decoded_logits = self.decoder_head(grid_decoded)
         return grid_decoded_logits
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: float = 0.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: float = 0.0, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
 
         encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
 
-        encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness)
+        encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
 
         kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, apply_relu=False, momentum=0.99, eps=1e-8)
 
@@ -995,8 +992,8 @@ class GridDVAE(nn.Module):
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
 
         losses = {
-            "ce_loss": ce_loss,
-            **kld_losses,
+            "ce_loss": ce_loss/self.config.n_pos,  # Per sample per token
+            **{k: v/self.config.n_codes for k, v in kld_losses.items()}, # Per sample per latent
             **code_metrics
         }
         return decoded_logits, losses, q_z_marg

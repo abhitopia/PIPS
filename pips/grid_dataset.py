@@ -162,8 +162,8 @@ def load_grid_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
 # Define the NamedTuple for the collate function output
 class GRID_INPUT(NamedTuple):
     grids: torch.Tensor  # (B, S) where S is the flattened size of the projected grid
-    positions: torch.Tensor  # (B, S, 2) where S is the flattened size of the projected grid
     attributes: List[Dict[str, any]]
+    # positions: torch.Tensor = None # (B, S, 2) where S is the flattened size of the projected grid
 
 class GridDataset(Dataset):
     def __init__(self, train: bool = True, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
@@ -265,7 +265,7 @@ class GridDataset(Dataset):
         # Convert to torch tensors and move to device
         flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
-        return GRID_INPUT(grids=flattened_grids, positions=None, attributes=attributes)
+        return GRID_INPUT(grids=flattened_grids, attributes=attributes)
 
 
     @staticmethod
@@ -317,7 +317,7 @@ class GridDataset(Dataset):
         flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
         flattened_positions = torch.tensor(flattened_positions, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
-        return GRID_INPUT(grids=flattened_grids, positions=flattened_positions, attributes=attributes)
+        return GRID_INPUT(grids=flattened_grids, attributes=attributes, positions=flattened_positions)
 
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):

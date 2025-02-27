@@ -653,7 +653,7 @@ def main():
     model_config = GridDVAEConfig(
         n_dim=D_MODEL,
         n_head=4,
-        n_grid_layers=2,
+        n_grid_layer=2,
         n_latent_layers=2,
         n_codes=N_LATENT,
         codebook_size=VOCAB_SIZE,

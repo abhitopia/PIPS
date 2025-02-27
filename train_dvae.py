@@ -106,7 +106,7 @@ class LoggingCallback(pl.Callback):
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
-            elif key in ['avg_entropy', 'avg_perplexity']:
+            elif key in ['code_entropy', 'code_perplexity']:
                 metric_name = f'Codebook/{key}_{phase}'
             # Handle any remaining metrics
             elif key.strip():
@@ -408,10 +408,10 @@ class DVAETrainingModule(pl.LightningModule):
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper)
         raw_losses = {
             'loss(CE)': ce_loss,
-            'loss(MI)': losses['mi_loss']/self.model_config.n_codes,
-            'loss(DWKL)': losses['dwkl_loss']/self.model_config.n_codes,
-            'loss(TC)': losses['tc_loss']/self.model_config.n_codes,
-            'loss(KL)': losses['kl_loss']/self.model_config.n_codes
+            'loss(MI)': losses['mi_loss'],
+            'loss(DWKL)': losses['dwkl_loss'],
+            'loss(TC)': losses['tc_loss'],
+            'loss(KL)': losses['kl_loss']
         }
         
         # Compute weighted losses for total loss
@@ -432,8 +432,8 @@ class DVAETrainingModule(pl.LightningModule):
             'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
-            'avg_entropy': losses['avg_entropy'].detach(),
-            'avg_perplexity': losses['avg_perplexity'].detach()
+            'code_entropy': losses['code_entropy'].detach(),
+            'code_perplexity': losses['code_perplexity'].detach()
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
