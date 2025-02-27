@@ -627,7 +627,7 @@ def main():
     )
 
     for idx, batch in enumerate(train_loader):
-        x, _, _ = batch
+        x, _ = batch
         if idx == 0:
             break
 
@@ -654,7 +654,7 @@ def main():
         n_dim=D_MODEL,
         n_head=4,
         n_grid_layer=2,
-        n_latent_layers=2,
+        n_latent_layer=2,
         n_codes=N_LATENT,
         codebook_size=VOCAB_SIZE,
         rope_base=10_000,
@@ -664,7 +664,6 @@ def main():
         n_vocab=VOCAB_SIZE,
         padding_idx=padding_idx,
         eos_idx=eos_idx,
-        reinmax=False
     )
 
     model = GridDVAE(config=model_config)
