@@ -15,6 +15,7 @@ from pytorch_lightning.tuner.tuning import Tuner
 from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
+from torch.nn import functional as F
 from pips.grid_dataset import GridDataset, worker_init_fn
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.misc.artifact import Artifact
@@ -166,8 +167,8 @@ class ExperimentConfig:
     # Add max_mask_pct parameter
     max_mask_pct: float = 0.5
     mask_schedule_type: str = 'cosine'
-
     model_src: str | None = None
+    tc_relu: bool = False
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -364,7 +365,7 @@ class DVAETrainingModule(pl.LightningModule):
             'max_pct(MASK)': max_mask_pct_schedule(step),
         }
 
-    def forward(self, x, q_z_marg=None, train=True):
+    def forward(self, x, q_z_marg=None, train=True, tc_relu=False):
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
         hardness = scheduled_values['hardness']
@@ -405,13 +406,18 @@ class DVAETrainingModule(pl.LightningModule):
         # (Ref: https://github.com/lucidrains/DALLE-pytorch/blob/58c1e1a4fef10725a79bd45cdb5581c03e3e59e7/dalle_pytorch/dalle_pytorch.py#L261)
         ce_loss = losses['ce_loss'] / x.size(1) # Normalize by number of tokens
 
+
+        # Helper function to conditionally apply ReLU
+        def maybe_relu(x):
+            return F.relu(x) if tc_relu else x
+        
         # Compute total loss in a way that maintains the computational graph.
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper)
         raw_losses = {
             'loss(CE)': ce_loss,
             'loss(MI)': losses['mi_loss'],
             'loss(DWKL)': losses['dwkl_loss'],
-            'loss(TC)': losses['tc_loss'],
+            'loss(TC)': maybe_relu(losses['tc_loss']),
             'loss(KL)': losses['kl_loss']
         }
         
@@ -446,7 +452,7 @@ class DVAETrainingModule(pl.LightningModule):
         # Check if q_z_marg should be treated as None
         effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
 
-        output_dict, updated_q_z_marg = self(x, q_z_marg=effective_q_z_marg, train=True)
+        output_dict, updated_q_z_marg = self(x, q_z_marg=effective_q_z_marg, train=True, tc_relu=self.experiment_config.tc_relu)
 
         # Update the global q_z_marg estimate using copy_ instead of assignment
         if updated_q_z_marg is not None:
@@ -470,7 +476,7 @@ class DVAETrainingModule(pl.LightningModule):
         effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
 
         # No update of q_z_marg in validation
-        output_dict, _ = self(x, q_z_marg=effective_q_z_marg, train=False)
+        output_dict, _ = self(x, q_z_marg=effective_q_z_marg, train=False, tc_relu=self.experiment_config.tc_relu)
     
         return output_dict
 

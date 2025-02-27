@@ -541,7 +541,7 @@ class Codebook(nn.Module):
         return self.codebook(code), code, soft_code, metrics
 
     @staticmethod
-    def kld_disentanglement_loss(q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8, apply_relu=True):
+    def kld_disentanglement_loss(q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8):
         """
         The Beta-TCVAE paper(https://arxiv.org/pdf/1802.04942) splits the KLD term as
 
@@ -751,15 +751,13 @@ class Codebook(nn.Module):
         # -----------------------------------------------
         # Return the computed losses (averaged per sample over batch) and the updated running aggregated posterior.
         # -----------------------------------------------
-        # Helper function to conditionally apply ReLU
-        def maybe_relu(x):
-            return F.relu(x) if apply_relu else x
+
 
         return {
-            "mi_loss": maybe_relu(mi_batch.mean()), 
-            "dwkl_loss": maybe_relu(dwkl_batch.mean()), 
-            "tc_loss": maybe_relu(tc_batch.mean()), 
-            "kl_loss": maybe_relu(full_kl_batch.mean())
+            "mi_loss": mi_batch.mean(), 
+            "dwkl_loss": dwkl_batch.mean(), 
+            "tc_loss": tc_batch.mean(), 
+            "kl_loss": full_kl_batch.mean()
         }, q_z_marginal_detached
 
 
@@ -985,7 +983,7 @@ class GridDVAE(nn.Module):
 
         encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
 
-        kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, apply_relu=False, momentum=0.99, eps=1e-8)
+        kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, momentum=0.99, eps=1e-8)
 
         decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
         
