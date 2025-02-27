@@ -157,6 +157,7 @@ class ExperimentConfig:
     # Training parameters
     batch_size: int = 64
     learning_rate: float = 1e-4 # Consistent with Dalle-E paper
+    lr_min: float = 1e-6 # Minimum learning rate to be reached after decay
     weight_decay: float = 1e-4 # Consistent with Dalle-E paper
     max_steps: int = 1_000_000
     gradient_clip_val: float = 1.0
@@ -499,7 +500,7 @@ class DVAETrainingModule(pl.LightningModule):
         # Noam scheduler with linear warmup and cosine decay using lr-specific warmup
         def lr_lambda(step):
             warmup_steps = self.experiment_config.warmup_steps_lr
-            min_lr_factor = 0.01 # 1/100 of the max LR (Consistent with Dalle-E paper)
+            min_lr_factor = self.experiment_config.lr_min / self.experiment_config.learning_rate  # Use config value
             
             if step < warmup_steps:
                 # Linear warmup

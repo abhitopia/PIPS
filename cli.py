@@ -100,6 +100,7 @@ def new(
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
     learning_rate: float = typer.Option(1e-4, "--learning-rate", "--lr", help="Initial learning rate"),
+    lr_min: float = typer.Option(None, "--lr-min", help="Minimum learning rate (defaults to 1% of learning rate if not specified)"),
     weight_decay: float = typer.Option(1e-4, "--weight-decay", "--wd", help="AdamW weight decay"),
     max_steps: int = typer.Option(1_000_000, "--max-steps", "--ms", help="Maximum training steps"),
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
@@ -184,6 +185,7 @@ def new(
         warmup_steps_beta=warmup_steps_beta,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         weight_decay=weight_decay,
         max_steps=max_steps,
         max_mask_pct=max_mask_pct,
