@@ -78,10 +78,11 @@
 - [x] Move TC RELU application to the TrainDVAE class
 - [x] Add padding token CE loss weighting
 - [x] Add masking mechanism 
-- [ ] Fix all the tests
-- [ ] Clean up the code
-- [ ] Perplexity per code
-- [ ] Histogram of code usage per code
+- [x] Fix all the tests
+- [x] Clean up the code
+- [x] Move entropy calculation to the TrainDVAE class
+- [x] Perplexity per code
+- [x] Histogram of code usage per code
 
 ## Training Tests
 - [ ] Overfit on 100 batches (without betas and masking)

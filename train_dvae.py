@@ -8,6 +8,7 @@ import tempfile
 import warnings
 import torch
 import time
+from torch import Tensor
 import pytorch_lightning as pl
 from pytorch_lightning.utilities import grad_norm
 from pytorch_lightning.loggers import WandbLogger
@@ -44,6 +45,48 @@ class LoggingCallback(pl.Callback):
         # Record the start time of the training batch
         self.train_batch_start_time = time.monotonic()
 
+
+    def compute_entropy(self, soft_code: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
+        output_dict = {}
+        # Calculate per-code perplexity
+        per_code_entropy = -(soft_code * torch.log(soft_code + eps)).sum(dim=-1)  # [B, N]
+        per_code_perplexity = torch.exp(per_code_entropy)  # [B, N]
+
+        avg_perplexity = per_code_perplexity.mean()
+        output_dict['CodebookUsage/perplexity'] = avg_perplexity.detach()
+
+         # Average across batch dimension
+        avg_per_code_perplexity = per_code_perplexity.mean(dim=0)  # [N]
+
+         # Add per-code perplexity metrics
+        for i, perp in enumerate(avg_per_code_perplexity):
+            output_dict[f'Codebook/perplexity_code_{i}'] = perp.detach()
+        
+        if add_codebook_usage:
+            # Calculate distribution for each code position
+            code_distribution = soft_code.mean(dim=0)  # [N, C]
+
+            # Create heatmap data
+            code_dist_data = code_distribution.detach().cpu().numpy()
+            
+            # Create the figure
+            fig, ax = plt.subplots(figsize=(20, 15))
+            im = ax.imshow(code_dist_data, aspect='auto', cmap='viridis')
+            plt.colorbar(im)
+            
+            # Add labels
+            ax.set_xlabel('Codebook Index')
+            ax.set_ylabel('Position')
+            ax.set_title('Code Usage Distribution')
+            
+            # Instead of adding to output_dict, return the figure
+            output_dict['Codebook/figure'] = fig
+
+       
+
+        return output_dict
+
+
     def _calculate_tokens_per_sec(self, start_time, batch):
         if start_time is not None:
             elapsed_time = time.monotonic() - start_time
@@ -58,6 +101,11 @@ class LoggingCallback(pl.Callback):
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for GPU operations to finish
 
+
+        code = outputs.pop('code')
+        entropy_dict = self.compute_entropy(code, add_codebook_usage=pl_module.global_step % 20 == 0)
+        outputs.update(entropy_dict)
+        
         # Calculate tokens per second for the training batch
         if self.train_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
@@ -72,6 +120,10 @@ class LoggingCallback(pl.Callback):
         # Log loss metrics using the helper method
         self._log_metrics(pl_module, 'train', outputs, batch[0].size(0), on_step=True, on_epoch=False)
 
+
+    def on_validation_epoch_start(self, trainer, pl_module):
+        self.codebook_usage_figure_logged = False
+
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
         # Record the start time of the validation batch
         self.val_batch_start_time = time.monotonic()
@@ -79,6 +131,15 @@ class LoggingCallback(pl.Callback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for GPU operations to finish
+
+        code = outputs.pop('code')
+
+        # Only log the codebook usage figure once per epoch
+        entropy_dict = self.compute_entropy(code, add_codebook_usage=not self.codebook_usage_figure_logged)
+        self.codebook_usage_figure_logged = True
+
+        outputs.update(entropy_dict)
+
         # Calculate tokens per second for the validation batch
         if self.val_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
@@ -92,6 +153,16 @@ class LoggingCallback(pl.Callback):
     def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
+            # Handle the figure separately
+            if key == 'Codebook/figure':
+                if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
+                    # Only log every 20 global steps and only from rank 0
+                    pl_module.logger.experiment.log({
+                        f'CodebookUsage/Usage_{phase}': wandb.Image(value)
+                    })
+                plt.close(value)  # Close the figure to free memory
+                continue
+
             # Handle the main loss separately
             if key == 'loss':
                 metric_name = f'{phase}/{key}'  # Default format
@@ -107,14 +178,14 @@ class LoggingCallback(pl.Callback):
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
-            elif key in ['code_entropy', 'code_perplexity']:
-                metric_name = f'Codebook/{key}_{phase}'
+            elif 'Codebook' in key:
+                metric_name = f'{key}_{phase}'
             # Handle any remaining metrics
             elif key.strip():
                 metric_name = f'{key.capitalize()}/{key}_{phase}'
             
             sync_dist = False if phase == 'train' else True
-            pl_module.log(metric_name, float(value), on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True, sync_dist=sync_dist)
+            pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True, sync_dist=sync_dist)
 
 @dataclass
 class ExperimentConfig:
@@ -393,7 +464,7 @@ class DVAETrainingModule(pl.LightningModule):
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
         # Forward pass with current scheduled values and provided q_z_marg
-        logits, losses, updated_q_z_marg = self.model.forward(
+        logits, soft_code, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
@@ -414,13 +485,6 @@ class DVAETrainingModule(pl.LightningModule):
         sample_correct = (masked_correct_tokens.sum(dim=1) == non_padding_mask.sum(dim=1)).float()
         sample_accuracy = sample_correct.mean()
 
-        # The problem is that reconstruction loss (output tokens) is computed in a different space than the KLD losses (latent codes)
-        # Per sample, CE is summed over number of output tokens (1024)
-        # Per sample, KLD is computed over number of latent codes (say 16)
-        # In practice, we typically compute the ce_loss per token, while keeping the KLD losss using batchmean 
-        # (Ref: https://github.com/lucidrains/DALLE-pytorch/blob/58c1e1a4fef10725a79bd45cdb5581c03e3e59e7/dalle_pytorch/dalle_pytorch.py#L261)
-        ce_loss = losses['ce_loss'] / x.size(1) # Normalize by number of tokens
-
 
         # Helper function to conditionally apply ReLU
         def maybe_relu(x):
@@ -429,7 +493,7 @@ class DVAETrainingModule(pl.LightningModule):
         # Compute total loss in a way that maintains the computational graph.
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper)
         raw_losses = {
-            'loss(CE)': ce_loss,
+            'loss(CE)': losses['ce_loss'],
             'loss(MI)': losses['mi_loss'],
             'loss(DWKL)': losses['dwkl_loss'],
             'loss(TC)': maybe_relu(losses['tc_loss']),
@@ -454,8 +518,7 @@ class DVAETrainingModule(pl.LightningModule):
             'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
-            'code_entropy': losses['code_entropy'].detach(),
-            'code_perplexity': losses['code_perplexity'].detach()
+            'code': soft_code.detach(),
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):

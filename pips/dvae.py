@@ -506,15 +506,6 @@ class Codebook(nn.Module):
 
         return hard_code
     
-
-    def compute_entropy(self, soft_code: Tensor, eps: float = 1e-8) -> Tuple[Tensor, Tensor]:
-        entropy_vals = -(soft_code * torch.log(soft_code + eps)).sum(dim=-1)    # Shape: [Batch, n_codes]
-        avg_entropy = entropy_vals.mean()
-        # Perplexity is computed as the exp of entropy --
-        # it can be interpreted as the effective number of codes being used.
-        avg_perplexity = torch.exp(entropy_vals).mean()
-        return avg_entropy, avg_perplexity
-
     def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
 
         logits = self.head(logits)
@@ -532,13 +523,7 @@ class Codebook(nn.Module):
         else:
             code = soft_code
 
-        avg_entropy, avg_perplexity = self.compute_entropy(soft_code)
-
-        metrics = {
-            'code_entropy': avg_entropy,
-            'code_perplexity': avg_perplexity
-        }
-        return self.codebook(code), code, soft_code, metrics
+        return self.codebook(code), soft_code, code
 
     @staticmethod
     def kld_disentanglement_loss(q_z_x, q_z_marg=None, momentum=0.99, eps=1e-8):
@@ -991,10 +976,7 @@ class GridDVAE(nn.Module):
 
         encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
 
-        encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
-
-        # # Print(code argmax)
-        # print(code.argmax(dim=-1))
+        encoded_logits, soft_code, code = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
 
         kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, momentum=0.99, eps=1e-8)
 
@@ -1005,9 +987,8 @@ class GridDVAE(nn.Module):
         losses = {
             "ce_loss": ce_loss/self.config.n_pos,  # Per sample per token
             **{k: v/self.config.n_codes for k, v in kld_losses.items()}, # Per sample per latent
-            **code_metrics
         }
-        return decoded_logits, losses, q_z_marg
+        return decoded_logits, soft_code, losses, q_z_marg
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 0.01) -> Tensor:
         """

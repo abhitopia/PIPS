@@ -145,7 +145,7 @@ def test_dvae():
     batch_size = 2
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
-    output, losses, q_z_marg = dvae(x)
+    output, code, losses, q_z_marg = dvae(x)
     
     # Check losses
     assert 'ce_loss' in losses, "losses should contain 'ce_loss'"
@@ -188,12 +188,12 @@ def test_dvae_forward_with_mask():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
 
     # Test forward pass with no mask
-    output_no_mask, losses, q_z_marg = dvae(x, mask_percentage=0.0)
+    output_no_mask, _, losses, q_z_marg = dvae(x, mask_percentage=0.0)
     assert output_no_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_no_mask.shape}"
 
     # Test forward pass with partial mask
-    output_partial_mask, losses, _ = dvae(x, mask_percentage=0.5)
+    output_partial_mask, _, losses, _ = dvae(x, mask_percentage=0.5)
     assert output_partial_mask.shape == (batch_size, config.n_pos, config.n_vocab), \
         f"Unexpected output shape: {output_partial_mask.shape}" 
 
@@ -278,7 +278,7 @@ def test_reconstruction_loss_random_input(reinmax, tau, hardness, rtol):
     for _ in range(num_trials):
         dvae = GridDVAE(config)
         # dvae.apply(dvae._init_weights)  # Reinitialize weights
-        decoded_logits, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
+        decoded_logits, _, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
         ce_losses.append(losses['ce_loss'].item())  # Divide by n_pos to get per-token loss
     
     # Check that mean CE loss is close to expected value for random input
@@ -326,7 +326,7 @@ def test_reconstruction_loss_constant_input(reinmax, tau, hardness, rtol):
     num_trials = 5
     for _ in range(num_trials):
         dvae.apply(dvae._init_weights)  # Reinitialize weights
-        decoded_logits, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
+        decoded_logits, code, losses, _ = dvae(x, tau=tau, hardness=hardness, reinMax=reinmax)
         ce_losses.append(losses['ce_loss'].item())  # Divide by n_pos to get per-token loss
     
     # Check that mean CE loss is close to expected value for random input
@@ -449,7 +449,7 @@ def test_dvae_forward_with_reinmax():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
     # Test forward pass with ReinMax enabled
-    output, losses, q_z_marg = dvae(x, tau=0.9, hardness=1.0, reinMax=True)
+    output, code, losses, q_z_marg = dvae(x, tau=0.9, hardness=1.0, reinMax=True)
     
     # Test output shape and contents
     assert output.shape == (batch_size, config.n_pos, config.n_vocab)
@@ -482,11 +482,11 @@ def test_reinmax_gradient_flow():
 
     encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
 
-    encoded_logits, hard_code, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
+    encoded_logits, soft_code, hard_code = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
 
 
     # hard_code, _ = dvae.(x, tau=0.9, hardness=1.0, reinMax=True)
-    loss = hard_code.sum()
+    loss = soft_code.sum()
     loss.backward()
 
     encoder_modules = [dvae.grid_encoder, dvae.latent_encoder]
@@ -527,14 +527,14 @@ def test_reinmax_edge_cases():
 
 
     # Test with very low temperature
-    encoded_logits, hard_code_low_temp, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.01, hardness=1.0, reinMax=True)
-    assert torch.allclose(hard_code_low_temp.sum(dim=-1), torch.ones_like(hard_code_low_temp.sum(dim=-1))), \
-        "hard_code should be a valid one-hot encoding even with low temperature."
+    encoded_logits, soft_code_low_temp, hard_code_low_temp = dvae.codebook(encoded_logits, tau=0.01, hardness=1.0, reinMax=True)
+    assert torch.allclose(soft_code_low_temp.sum(dim=-1), torch.ones_like(soft_code_low_temp.sum(dim=-1))), \
+        "soft_code should be a valid one-hot encoding even with low temperature."
 
     # Test with very high temperature
-    encoded_logits, hard_code_high_temp, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=10.0, hardness=1.0, reinMax=True)
-    assert torch.allclose(hard_code_high_temp.sum(dim=-1), torch.ones_like(hard_code_high_temp.sum(dim=-1))), \
-        "hard_code should be a valid one-hot encoding even with high temperature."
+    encoded_logits, soft_code_high_temp, hard_code_high_temp = dvae.codebook(encoded_logits, tau=10.0, hardness=1.0, reinMax=True)
+    assert torch.allclose(soft_code_high_temp.sum(dim=-1), torch.ones_like(soft_code_high_temp.sum(dim=-1))), \
+        "soft_code should be a valid one-hot encoding even with high temperature."
 
 def test_reinmax_stochasticity():
     config = GridDVAEConfig(
@@ -558,13 +558,13 @@ def test_reinmax_stochasticity():
 
     torch.manual_seed(42)
     encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
-    encoded_logits, hard_code1, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
+    encoded_logits, soft_code1, hard_code1 = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
 
     torch.manual_seed(43)
     encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
-    encoded_logits, hard_code2, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
+    encoded_logits, soft_code2, hard_code2 = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
 
-    assert not torch.allclose(hard_code1, hard_code2), "ReinMax outputs should differ with different seeds."
+    assert not torch.allclose(soft_code1, soft_code2), "ReinMax outputs should differ with different seeds."
 
 def test_reinmax_output_consistency():
     config = GridDVAEConfig(
@@ -588,13 +588,13 @@ def test_reinmax_output_consistency():
 
     torch.manual_seed(42)
     encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
-    encoded_logits, hard_code1, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
+    encoded_logits, soft_code1, hard_code1 = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
 
     torch.manual_seed(42)
     encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
-    encoded_logits, hard_code2, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
+    encoded_logits, soft_code2, hard_code2 = dvae.codebook(encoded_logits, tau=0.9, hardness=1.0, reinMax=True)
 
-    assert torch.allclose(hard_code1, hard_code2), "ReinMax outputs differ across runs with the same seed."
+    assert torch.allclose(soft_code1, soft_code2), "ReinMax outputs differ across runs with the same seed."
 
 def test_kld_losses_non_negative():
     config = GridDVAEConfig(
@@ -615,7 +615,7 @@ def test_kld_losses_non_negative():
     # Run forward pass multiple times with different random inputs
     for _ in range(5):
         x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
-        _, losses, _ = dvae(x)
+        _, _, losses, _ = dvae(x)
         kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
         
         # Check that all losses are non-negative
@@ -649,8 +649,8 @@ def test_kld_losses_extreme_inputs():
     x_same = torch.full((batch_size, config.n_pos), fill_value=config.n_vocab-1, dtype=torch.long)
 
     # Test with apply_relu=False to allow negative values
-    _, losses_zeros_no_relu, _ = dvae(x_zeros)
-    _, losses_same_no_relu, _ = dvae(x_same)
+    _, _, losses_zeros_no_relu, _ = dvae(x_zeros)
+    _, _, losses_same_no_relu, _ = dvae(x_same)
     
     kld_losses_zeros_no_relu = {k: v for k, v in losses_zeros_no_relu.items() if k != 'ce_loss' and 'loss' in k}
     kld_losses_same_no_relu = {k: v for k, v in losses_same_no_relu.items() if k != 'ce_loss' and 'loss' in k}
@@ -685,7 +685,7 @@ def test_kld_losses_numerical_stability():
     
     # Test without ReLU - allow small negative values
     for temp in temperatures:
-        _, losses, _ = dvae(x, tau=temp)
+        _, _, losses, _ = dvae(x, tau=temp)
         kld_losses = {k: v for k, v in losses.items() if k != 'ce_loss' and 'loss' in k}
         
         # Check that all losses are finite
@@ -857,19 +857,17 @@ def test_dvae_encode_with_hardness():
 
         encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
 
-        encoded_logits, hard_code, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=True)
+        encoded_logits, soft_code, hard_code = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=False)
 
         # Check shapes
-        assert hard_code.shape == (batch_size, config.n_codes, config.codebook_size)
         assert soft_code.shape == (batch_size, config.n_codes, config.codebook_size)
         
         # Check that probabilities sum to 1
-        assert torch.allclose(hard_code.sum(dim=-1), torch.ones_like(hard_code.sum(dim=-1)))
         assert torch.allclose(soft_code.sum(dim=-1), torch.ones_like(soft_code.sum(dim=-1)))
         
         # For hardness=0, code should equal soft_code
         if hardness == 0.0:
-            assert torch.allclose(hard_code, soft_code)
+            assert torch.allclose(soft_code, hard_code), f"soft_code and hard_code differ for hardness={hardness}"
         # For hardness=1, code should be one-hot
         elif hardness == 1.0:
             assert (hard_code.max(dim=-1)[0] == 1.0).all()
@@ -899,7 +897,7 @@ def test_dvae_encode_with_hardness_and_reinmax():
 
         encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
 
-        encoded_logits, hard_code, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=True)
+        encoded_logits, soft_code, hard_code = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=True)
         
         # Check shapes and probability distributions
         assert hard_code.shape == (batch_size, config.n_codes, config.codebook_size)
@@ -935,7 +933,8 @@ def test_hardness_gradient_flow():
 
         encoded_logits = dvae.encode(x, grid_pos_indices, latent_pos_indices)
 
-        encoded_logits, hard_code, soft_code, code_metrics = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=True)
+        encoded_logits, soft_code, hard_code = dvae.codebook(encoded_logits, tau=0.9, hardness=hardness, reinMax=True)
+
         # Clear gradients
         dvae.zero_grad()
         
@@ -997,7 +996,7 @@ def test_grid_dvae_forward():
     x = torch.randint(0, config.n_vocab, (batch_size, config.n_pos))
     
     # Test forward pass
-    decoded_logits, losses, q_z_marg = model(x, tau=1.0, hardness=0.0, mask_percentage=0.1)
+    decoded_logits, _, losses, q_z_marg = model(x, tau=1.0, hardness=0.0, mask_percentage=0.1)
     
     assert decoded_logits.shape == (batch_size, config.n_pos, config.n_vocab)
     assert 'ce_loss' in losses
