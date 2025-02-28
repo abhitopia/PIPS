@@ -127,7 +127,7 @@ class ExperimentConfig:
     
     # Sampling parameters (updated)
     hardness_start: float = 0.0
-    hardness: float = 1.0  # Target hardness value
+    hardness: float = 0.0  # Target hardness value (During training keep it zero)
     reinMax: bool = True
 
     # Initial values (renamed from initial_*)
@@ -137,24 +137,30 @@ class ExperimentConfig:
     beta_tc_start: float = 0.0
     beta_dwkl_start: float = 0.0
     beta_kl_start: float = 0.0
+    mask_pct_start: float = 0.0
     
-    # Final values (renamed from target_*)
+    # Final values
     beta_mi: float = 0.0
     beta_tc: float = 6.0
     beta_dwkl: float = 0.0
     beta_kl: float = 2.0
+    max_mask_pct: float = 0.5
+
     
     # Schedule types
     hardness_schedule_type: str = 'cosine'
     tau_schedule_type: str = 'cosine'
     beta_schedule_type: str = 'cosine'
+    mask_schedule_type: str = 'cosine'
     
     # Replace single warmup_steps with separate warmups
     warmup_steps_hardness: int = 150_000  # Same default as tau warmup
     warmup_steps_lr: int = 10_000
+    decay_steps_lr: int | None = None
     warmup_steps_tau: int = 150_000
     warmup_steps_beta: int = 10_000
-    
+    warmup_steps_mask_pct: int = 50_000
+
     # Training parameters
     batch_size: int = 64
     learning_rate: float = 1e-4 # Consistent with Dalle-E paper
@@ -165,8 +171,6 @@ class ExperimentConfig:
     accumulate_grad_batches: int = 1
 
     # Add max_mask_pct parameter
-    max_mask_pct: float = 0.5
-    mask_schedule_type: str = 'cosine'
     model_src: str | None = None
     tc_relu: bool = False
 
@@ -184,6 +188,17 @@ class ExperimentConfig:
         # Generate random seed if none provided
         if self.seed is None:
             self.seed = np.random.randint(0, 2**32 - 1)
+
+        ## Make all warmup steps <= max_steps
+        self.warmup_steps_hardness = min(self.warmup_steps_hardness, self.max_steps)
+        self.warmup_steps_tau = min(self.warmup_steps_tau, self.max_steps)
+        self.warmup_steps_beta = min(self.warmup_steps_beta, self.max_steps)
+        self.warmup_steps_mask_pct = min(self.warmup_steps_mask_pct, self.max_steps)
+        self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
+
+        if self.decay_steps_lr is None:
+            self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
+  
 
     def to_dict(self) -> dict:
         """Convert config to a dictionary."""
@@ -349,9 +364,9 @@ class DVAETrainingModule(pl.LightningModule):
         
         # Add max mask percentage schedule (using beta warmup)
         max_mask_pct_schedule = Schedule.get_schedule(
-            initial_value=0.0,
+            initial_value=cfg.mask_pct_start,
             target_value=cfg.max_mask_pct,
-            warmup_steps=cfg.warmup_steps_beta,
+            warmup_steps=cfg.warmup_steps_mask_pct,
             schedule_type=cfg.mask_schedule_type
         )
         
@@ -511,10 +526,12 @@ class DVAETrainingModule(pl.LightningModule):
             if step < warmup_steps:
                 # Linear warmup
                 return float(step) / float(max(1, warmup_steps))
-            else:
+            elif step < self.experiment_config.decay_steps_lr + warmup_steps:
                 # Cosine decay from 1.0 to min_lr_factor
                 progress = float(step - warmup_steps) / float(max(1, self.experiment_config.max_steps - warmup_steps))
                 return min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
+            else:
+                return min_lr_factor
         
         scheduler = LambdaLR(optimizer, lr_lambda)
         
@@ -535,7 +552,6 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
         permute_train: If True, permute the training data
     """
     padding_idx = experiment_config.model_config.padding_idx
-    eos_idx = experiment_config.model_config.eos_idx  # Get eos_idx from config
     batch_size = experiment_config.batch_size
 
     print("permute_train:", permute_train)

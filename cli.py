@@ -9,6 +9,7 @@ import wandb
 from pips.misc.artifact import Artifact
 from pips.misc.acceleration_config import AccelerationConfig
 import click
+from rich import print
 
 
 # Initialize logger
@@ -95,7 +96,7 @@ def new(
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     
     # Sampling parameters (updated)
-    hardness: float = typer.Option(1.0, "--hardness", "--h", help="Target hardness value (negative = deterministic softmax, 0.0-1.0 = interpolated hardness)"),
+    hardness: float = typer.Option(0.0, "--hardness", "--h", help="Target hardness value (negative = deterministic softmax, 0.0-1.0 = interpolated hardness)"),
     reinMax: bool = typer.Option(False, "--reinmax", "--rm", help="Whether to use ReinMax sampling"),
     
     # Training parameters
@@ -110,13 +111,15 @@ def new(
     # Split warmup steps into separate parameters
     warmup_steps_hardness: int = typer.Option(150_000, "--warmup-steps-hardness", "--wsh", help="Hardness warmup steps"),
     warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
+    decay_steps_lr: int = typer.Option(None, "--decay-steps-lr", "--dsl", help="Learning rate decay steps, if not specified, will be set to max_steps - warmup_steps_lr"),
     warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
     warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
-    
+    warmup_steps_mask_pct: int = typer.Option(50_000, "--warmup-steps-mask-pct", "--wsm", help="Mask percentage warmup steps"),
+
     # Regularization parameters
     tau_start: float = typer.Option(3.5, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax"),
     tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax"),
-    max_mask_pct: float = typer.Option(0.5, "--max-mask-pct", "--msk", help="Maximum masking percentage during training. Warms up with beta schedule"),
+    max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
     
     # Beta values for loss components
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
@@ -177,14 +180,17 @@ def new(
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
         beta_kl_start=0.0,
+        mask_pct_start=0.0,
         beta_mi=beta_mi,
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
         beta_kl=beta_kl,
         warmup_steps_hardness=warmup_steps_hardness,
         warmup_steps_lr=warmup_steps_lr,
+        decay_steps_lr=decay_steps_lr,
         warmup_steps_tau=warmup_steps_tau,
         warmup_steps_beta=warmup_steps_beta,
+        warmup_steps_mask_pct=warmup_steps_mask_pct,
         batch_size=batch_size,
         learning_rate=learning_rate,
         lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
@@ -198,6 +204,7 @@ def new(
 
     run_name = generate_friendly_name() if run_name is None else run_name
 
+    print(config.to_dict())
     # Start training with the resolved settings
     train(
         experiment_config=config,

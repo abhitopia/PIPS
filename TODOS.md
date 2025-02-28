@@ -32,7 +32,6 @@
 - [x] Regularise only 2D parameters with weight decay (skip biases and BatchNorm or LayerNorm). Change default weight decay to 1e-4
 - [x] Add the ability to override batch size and learning rate
 - [x] Add the val_check_interval to the CLI
-- [ ] Codebook initialisation to 0.02 std and mean 0.0
 
 
 ## Debug/Issues
@@ -68,11 +67,8 @@
 - [x] Introduce disable permute flag in the CLI
 - [x] Fix cosine anneal and cosine decay to be just one function
 - [x] 2D positions incorrect after the changed dataset
-- [ ] Ensure that the encoder and decoder outputs have correct uninitialised CE loss
 - [ ] Determine the cause for code collapse
-- [ ] Why are there NaNs values in the projection layers?
 - [ ] Profile the code, the number of iterations per second seems to vary a lot
-- [ ] Check whether token normalisation is needed
 - [ ] Why is TC loss negative?
     - Come back to it when training. Probably due to approximation, large batch size may fix it.
 
@@ -81,21 +77,16 @@
 - [x] Add Learning rate final
 - [x] Move TC RELU application to the TrainDVAE class
 - [x] Add padding token CE loss weighting
-- [ ] Add masking mechanism 
+- [x] Add masking mechanism 
+- [ ] Fix all the tests
+- [ ] Clean up the code
 - [ ] Perplexity per code
 - [ ] Histogram of code usage per code
-
-
-## Improvements
-- [ ] Remove masking from the architecture, instead have it in the data itself
-- [ ] Should I mask out padding from the input?
-- [ ] Specify end_lr in the CLI
 
 ## Training Tests
 - [ ] Overfit on 100 batches (without betas and masking)
 - [ ] Overfit on 100 batches (with masking and without betas)
 - [ ] Overfit on 100 batches (with masking and betas)
-- [ ] Check whether use_mask_norm is needed
 
 ## Checkpointing
 - [x] Implement Checkpointing

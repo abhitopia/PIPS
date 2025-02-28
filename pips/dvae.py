@@ -792,9 +792,9 @@ class GridDVAEConfig(Config):
     max_grid_width: int = 32
     n_vocab: int = 16
     padding_idx: int | None = None
-    eos_idx: int | None = None
+    mask_idx: int | None = None
     pad_weight: float = 0.01
-    
+
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
             raise ValueError("n_dim must be divisible by n_head")
@@ -815,15 +815,13 @@ class GridDVAEConfig(Config):
         # Set default padding_idx and eos_idx if not provided
         if self.padding_idx is None:
             self.padding_idx = self.n_vocab - 1
-        if self.eos_idx is None:
-            self.eos_idx = self.n_vocab - 2
+        if self.mask_idx is None:
+            self.mask_idx = self.n_vocab - 2
 
     def __repr__(self) -> str:
         attrs = [f"{key}={getattr(self, key)}" for key in self.__annotations__.keys()]
         computed_attrs = [
             f"n_pos={self.n_pos}",
-            f"padding_idx={self.padding_idx}",
-            f"eos_idx={self.eos_idx}"
         ]
         all_attrs = attrs + computed_attrs
         return f"DVAEConfig({', '.join(all_attrs)})"
@@ -848,7 +846,8 @@ class GridDVAEConfig(Config):
             'max_grid_width': self.max_grid_width,
             'n_vocab': self.n_vocab,
             'padding_idx': self.padding_idx,
-            'eos_idx': self.eos_idx,
+            'mask_idx': self.mask_idx,
+            'pad_weight': self.pad_weight
         }
         
         # Add computed attributes if they exist
@@ -891,6 +890,7 @@ class GridDVAE(nn.Module):
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.pad_value = config.padding_idx  # Store padding value here
+        self.mask_value = config.mask_idx
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         
 
@@ -974,15 +974,27 @@ class GridDVAE(nn.Module):
         grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)
         grid_decoded_logits = self.decoder_head(grid_decoded)
         return grid_decoded_logits
+    
+
+    def apply_mask(self, x: Tensor, mask_percentage: float = 0.0) -> Tensor:
+        mask = (torch.rand_like(x.float()) < mask_percentage) & (x != self.pad_value)
+        x.masked_fill_(mask, self.mask_value)
+        return x
+
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: float = 0.0, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
+        x = self.apply_mask(x, mask_percentage)
+
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
 
         encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
 
         encoded_logits, code, soft_code, code_metrics = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
+
+        # # Print(code argmax)
+        # print(code.argmax(dim=-1))
 
         kld_losses, q_z_marg = self.codebook.kld_disentanglement_loss(soft_code, q_z_marg=q_z_marg, momentum=0.99, eps=1e-8)
 
