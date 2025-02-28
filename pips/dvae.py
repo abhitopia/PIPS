@@ -793,7 +793,8 @@ class GridDVAEConfig(Config):
     n_vocab: int = 16
     padding_idx: int | None = None
     eos_idx: int | None = None
-
+    pad_weight: float = 0.01
+    
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
             raise ValueError("n_dim must be divisible by n_head")
@@ -996,25 +997,35 @@ class GridDVAE(nn.Module):
         }
         return decoded_logits, losses, q_z_marg
 
-    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1) -> Tensor:
+    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 0.01) -> Tensor:
         """
-        Compute the reconstruction loss using cross-entropy per sample (and not per token),
-        ignoring tokens that match pad_value.
+        Compute the reconstruction loss using cross-entropy per sample, with pad tokens weighted differently.
 
         Args:
             decoded_logits (Tensor): Predicted logits of shape [B, S, V]
             x (Tensor): Target tokens of shape [B, S]
-            pad_value (int): Token value to ignore in loss computation (default: -1)
+            pad_value (int): Token value for padding tokens
+            pad_weight (float): Weight for pad token loss (default: 0.01 = 1% of normal weight)
 
         Returns:
-            Tensor: Average reconstruction loss per sample, ignoring padded tokens
+            Tensor: Average reconstruction loss per sample, with weighted pad tokens
         """
-        return F.cross_entropy(
+        # Create a weight tensor where pad tokens have pad_weight and others have 1.0
+        weights = torch.where(x == pad_value, 
+                            torch.full_like(x, pad_weight, dtype=decoded_logits.dtype),
+                            torch.ones_like(x, dtype=decoded_logits.dtype))
+        
+        # Compute per-token cross entropy loss
+        per_token_loss = F.cross_entropy(
             decoded_logits.view(-1, decoded_logits.size(-1)),
             x.view(-1),
-            ignore_index=pad_value,
-            reduction='sum'
-        ) / x.size(0)
+            reduction='none'
+        )
+        
+        # Apply weights and average per sample
+        weighted_loss = (per_token_loss * weights.view(-1)).sum() / x.size(0)
+        
+        return weighted_loss
     
 
 

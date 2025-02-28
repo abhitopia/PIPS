@@ -92,6 +92,7 @@ def new(
     n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
+    pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     
     # Sampling parameters (updated)
     hardness: float = typer.Option(1.0, "--hardness", "--h", help="Target hardness value (negative = deterministic softmax, 0.0-1.0 = interpolated hardness)"),
@@ -161,6 +162,7 @@ def new(
         n_vocab=16,  # Fixed for grid world
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
+        pad_weight=pad_weight,
     )
     
     config = ExperimentConfig(

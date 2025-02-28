@@ -80,10 +80,10 @@
 ## Version 2
 - [x] Add Learning rate final
 - [x] Move TC RELU application to the TrainDVAE class
-- [ ] Add padding token CE loss weighting
+- [x] Add padding token CE loss weighting
 - [ ] Add masking mechanism 
-- [ ] Add dummy codebook
 - [ ] Perplexity per code
+- [ ] Histogram of code usage per code
 
 
 ## Improvements
