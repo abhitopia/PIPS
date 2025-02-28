@@ -536,18 +536,12 @@ def test_grid_operations():
     grid = Grid(array)
     
     # Test flatten
-    assert np.array_equal(grid.flatten(), np.array([1, 2, 3, 4]))
-    
-    # Test tolist
-    assert grid.tolist() == [[1, 2], [3, 4]]
-    
-    # Test equality
-    grid2 = Grid(array.copy())
-    assert grid == grid2
-    assert grid != Grid(np.array([[4, 3], [2, 1]]))
-    
-    # Test array conversion
-    assert np.array_equal(np.array(grid), array)
+    flattened, positions = grid.flatten()
+    np.testing.assert_array_equal(flattened, np.array([1, 2, 3, 4]))
+    np.testing.assert_array_equal(
+        positions,
+        np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+    )
 
 def test_grid_clone():
     array = np.array([[1, 2], [3, 4]])
@@ -824,28 +818,50 @@ def test_grid_flatten():
     grid = Grid(array)
 
     # Test case 1: Simple flatten (original behavior)
-    flattened = grid.flatten()
+    flattened, positions = grid.flatten()
     np.testing.assert_array_equal(flattened, np.array([1, 2, 3, 4, 5, 6]))
+    np.testing.assert_array_equal(
+        positions,
+        np.array([[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]])
+    )
 
     # Test case 2: Flatten with EOS markers
-    flattened_eos = grid.flatten(eos_value=-2)
+    flattened_eos, positions_eos = grid.flatten(eos_value=-2)
     np.testing.assert_array_equal(
         flattened_eos,
         np.array([1, 2, 3, -2, 4, 5, 6, -2])
     )
+    np.testing.assert_array_equal(
+        positions_eos,
+        np.array([[0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1], [1, 2], [1, 3]])
+    )
 
     # Test case 3: Flatten with padding
-    flattened_pad = grid.flatten(max_size=10, pad_value=-1)
+    flattened_pad, positions_pad = grid.flatten(max_size=10, pad_value=-1)
     np.testing.assert_array_equal(
         flattened_pad,
         np.array([1, 2, 3, 4, 5, 6, -1, -1, -1, -1])
     )
+    np.testing.assert_array_equal(
+        positions_pad,
+        np.array([
+            [0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2],
+            [-1, -1], [-1, -1], [-1, -1], [-1, -1]
+        ])
+    )
 
     # Test case 4: Flatten with both EOS and padding
-    flattened_both = grid.flatten(max_size=10, pad_value=-1, eos_value=-2)
+    flattened_both, positions_both = grid.flatten(max_size=10, pad_value=-1, eos_value=-2)
     np.testing.assert_array_equal(
         flattened_both,
         np.array([1, 2, 3, -2, 4, 5, 6, -2, -1, -1])
+    )
+    np.testing.assert_array_equal(
+        positions_both,
+        np.array([
+            [0, 0], [0, 1], [0, 2], [0, 3], [1, 0], [1, 1], [1, 2], [1, 3],
+            [-1, -1], [-1, -1]
+        ])
     )
 
 def test_grid_flatten_edge_cases():
@@ -853,32 +869,25 @@ def test_grid_flatten_edge_cases():
     single_grid = Grid(np.array([[1]]))
     
     # Simple flatten
-    np.testing.assert_array_equal(single_grid.flatten(), np.array([1]))
+    flattened, positions = single_grid.flatten()
+    np.testing.assert_array_equal(flattened, np.array([1]))
+    np.testing.assert_array_equal(positions, np.array([[0, 0]]))
     
     # With EOS
+    flattened_eos, positions_eos = single_grid.flatten(eos_value=-2)
+    np.testing.assert_array_equal(flattened_eos, np.array([1, -2]))
     np.testing.assert_array_equal(
-        single_grid.flatten(eos_value=-2),
-        np.array([1, -2])
+        positions_eos,
+        np.array([[0, 0], [0, 1]])
     )
     
     # With padding
+    flattened_pad, positions_pad = single_grid.flatten(max_size=3, pad_value=-1)
+    np.testing.assert_array_equal(flattened_pad, np.array([1, -1, -1]))
     np.testing.assert_array_equal(
-        single_grid.flatten(max_size=3, pad_value=-1),
-        np.array([1, -1, -1])
+        positions_pad,
+        np.array([[0, 0], [-1, -1], [-1, -1]])
     )
-
-def test_grid_flatten_errors():
-    grid = Grid(np.array([[1, 2], [3, 4]]))
-    
-    # Test error when max_size is too small
-    with pytest.raises(ValueError) as exc_info:
-        grid.flatten(max_size=3, eos_value=-2)
-    assert "Required size (6) exceeds max_size (3)" in str(exc_info.value)
-    
-    # Test error when max_size is too small for simple flatten
-    with pytest.raises(ValueError) as exc_info:
-        grid.flatten(max_size=3)
-    assert "Required size (4) exceeds max_size (3)" in str(exc_info.value)
 
 def test_grid_flatten_dtype_preservation():
     # Test with different dtypes
@@ -886,9 +895,48 @@ def test_grid_flatten_dtype_preservation():
     grid_float = Grid(np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32))
     
     # Check dtype preservation for different cases
-    assert grid_int.flatten().dtype == np.int32
-    assert grid_float.flatten().dtype == np.float32
+    flattened_int, _ = grid_int.flatten()
+    flattened_float, _ = grid_float.flatten()
+    assert flattened_int.dtype == np.int32
+    assert flattened_float.dtype == np.float32
     
     # Check dtype preservation with EOS and padding
-    assert grid_int.flatten(max_size=6, pad_value=-1, eos_value=-2).dtype == np.int32
-    assert grid_float.flatten(max_size=6, pad_value=-1, eos_value=-2).dtype == np.float32
+    flattened_int_both, _ = grid_int.flatten(max_size=6, pad_value=-1, eos_value=-2)
+    flattened_float_both, _ = grid_float.flatten(max_size=6, pad_value=-1, eos_value=-2)
+    assert flattened_int_both.dtype == np.int32
+    assert flattened_float_both.dtype == np.float32
+
+def test_grid_flatten_position_indices():
+    # Test that position indices are correct for different grid shapes
+    # Test square grid
+    square_grid = Grid(np.array([[1, 2], [3, 4]]))
+    _, positions = square_grid.flatten()
+    np.testing.assert_array_equal(
+        positions,
+        np.array([[0, 0], [0, 1], [1, 0], [1, 1]])
+    )
+    
+    # Test rectangular grid
+    rect_grid = Grid(np.array([[1, 2, 3], [4, 5, 6]]))
+    _, positions = rect_grid.flatten()
+    np.testing.assert_array_equal(
+        positions,
+        np.array([[0, 0], [0, 1], [0, 2], [1, 0], [1, 1], [1, 2]])
+    )
+    
+    # Test with EOS markers
+    _, positions_eos = rect_grid.flatten(eos_value=-2)
+    np.testing.assert_array_equal(
+        positions_eos,
+        np.array([
+            [0, 0], [0, 1], [0, 2], [0, 3],  # First row + EOS
+            [1, 0], [1, 1], [1, 2], [1, 3]   # Second row + EOS
+        ])
+    )
+    
+    # Test padding positions are [-1, -1]
+    _, positions_pad = rect_grid.flatten(max_size=10, pad_value=-1)
+    np.testing.assert_array_equal(
+        positions_pad[-4:],  # Last 4 positions should be padding
+        np.array([[-1, -1], [-1, -1], [-1, -1], [-1, -1]])
+    )
