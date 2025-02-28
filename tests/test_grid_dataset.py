@@ -87,7 +87,7 @@ def test_grid_dataset_initialization(mock_load_grid_loaders):
     # Update assertion to include verbose parameter
     mock_load_grid_loaders.assert_any_call(TRAIN_GRID_LOADERS, cache_dir, verbose=True)
 
-def test_collate_fn():
+def test_collate_fn_project():
     # Create mock Grid objects
     mock_grids = [
         MagicMock(spec=Grid, array=np.array([[1, 2], [3, 4]]), idx=0, program_id='prog_id_0', task_id='task_id_0',
@@ -96,20 +96,22 @@ def test_collate_fn():
                   dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
     ]
 
-    # Mock the flatten method to return a padded array
+    # Mock the project method to return a properly padded 32x32 array
     for grid in mock_grids:
-        grid.flatten.return_value = np.array([*grid.array.flatten(), *[-1] * (1024 - 4)])
+        padded = np.full((32, 32), -1)  # Create a 32x32 array filled with -1
+        padded[:2, :2] = grid.array  # Place the original 2x2 array in the top-left corner
+        grid.project.return_value = padded
 
-    # Call the collate function
-    result = GridDataset.collate_fn(mock_grids, pad_value=-1, device='cpu', max_size=1024)
+    # Call the collate function with max_height and max_width
+    result = GridDataset.collate_fn_project(mock_grids, pad_value=-1, device='cpu', max_height=32, max_width=32)
+
+    # Check the shape of the grids tensor
+    assert result.grids.shape == (2, 1024)  # 32 * 32 = 1024
 
     # Check the type of the result
     assert isinstance(result, GRID_INPUT)
 
-    # Check the shape of the grids tensor
-    assert result.grids.shape == (2, 1024)
-
-    # Check that the attributes are correct
+    # Check the attributes
     assert len(result.attributes) == 2
     assert result.attributes[0]['idx'] == 0
     assert result.attributes[0]['program_id'] == 'prog_id_0'
@@ -180,7 +182,7 @@ def test_process_grid_loader_valid_grids():
         mock_logger.info.assert_any_call(f"Loaded 2 grids for {mock_loader.name}")
         mock_logger.info.assert_any_call(f"Saved 2 valid grids to {mock_output_file} for {mock_loader.name}")
 
-def test_collate_fn_different_sizes():
+def test_collate_fn_project_different_sizes():
     # Create mock Grid objects with different sizes
     mock_grids = [
         MagicMock(spec=Grid, array=np.array([[1, 2], [3, 4]]), idx=0, program_id='prog_id_0', task_id='task_id_0',
@@ -189,17 +191,22 @@ def test_collate_fn_different_sizes():
                   dataset='dataset_1', color_perm='color_perm_1', transform='transform_1', is_test=True, is_input=False)
     ]
 
-    # Mock the flatten method to return arrays padded to max_size=512
+    # Mock the project method to return a properly padded 16x32 array
     for grid in mock_grids:
-        grid.flatten.return_value = np.array([*grid.array.flatten(), *[-1] * (512 - 4)])
+        padded = np.full((16, 32), -1)  # Create a 16x32 array filled with -1
+        padded[:2, :2] = grid.array  # Place the original 2x2 array in the top-left corner
+        grid.project.return_value = padded
 
-    # Call the collate function with a different max_size
-    result = GridDataset.collate_fn(mock_grids, pad_value=-1, device='cpu', max_size=512)
+    # Call the collate function with different dimensions
+    result = GridDataset.collate_fn_project(mock_grids, pad_value=-1, device='cpu', max_height=16, max_width=32)
 
-    # Check the shape of the grids tensor matches the specified max_size
-    assert result.grids.shape == (2, 512)
+    # Check the shape of the grids tensor matches the specified dimensions
+    assert result.grids.shape == (2, 512)  # 16 * 32 = 512
 
-    # Check that the attributes are correct
+    # Check the type of the result
+    assert isinstance(result, GRID_INPUT)
+
+    # Check the attributes
     assert len(result.attributes) == 2
     assert result.attributes[0]['idx'] == 0
     assert result.attributes[0]['program_id'] == 'prog_id_0'
