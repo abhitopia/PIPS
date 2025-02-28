@@ -506,16 +506,22 @@ class Codebook(nn.Module):
 
         return hard_code
     
-    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
-
-        logits = self.head(logits)
-
-        if hardness < 0: # Use softmax
-            soft_code = F.softmax(logits/tau, dim=-1)
-        else: # Use gumbel
+    @torch.jit.script
+    def _compute_soft_code(logits: Tensor, tau: float, hardness: float) -> Tensor:
+        """Compute soft code with proper branching for JIT compatibility"""
+        if hardness < 0:  # Use softmax
+            return F.softmax(logits/tau, dim=-1)
+        else:  # Use gumbel
             assert hardness <= 1.0, f"hardness must be between 0 and 1 when non-negative, got {hardness}"
-            soft_code = F.gumbel_softmax(logits, tau=tau, hard=False)
+            return F.gumbel_softmax(logits, tau=tau, hard=False)
 
+    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
+        logits = self.head(logits)
+        
+        # Use the scripted function to handle the branching
+        soft_code = self._compute_soft_code(logits, tau, hardness)
+
+        # Only apply hard sampling if hardness > 0
         if hardness > 0:
             hard_code = self.sample(soft_code, logits=logits, reinMax=reinMax)
             # Interpolate between soft and hard codes based on hardness
