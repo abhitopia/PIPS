@@ -7,6 +7,7 @@ from torch import Tensor
 from torch.nn import functional as F
 from dataclasses import dataclass
 from torch.amp import autocast
+from functorch.experimental.control_flow import cond
 
 
 def is_power_of_two(n):
@@ -505,30 +506,42 @@ class Codebook(nn.Module):
             hard_code = y_hard - soft_code.detach() + soft_code
 
         return hard_code
-    
-    @torch.jit.script
-    def _compute_soft_code(logits: Tensor, tau: float, hardness: float) -> Tensor:
-        """Compute soft code with proper branching for JIT compatibility"""
-        if hardness < 0:  # Use softmax
-            return F.softmax(logits/tau, dim=-1)
-        else:  # Use gumbel
-            assert hardness <= 1.0, f"hardness must be between 0 and 1 when non-negative, got {hardness}"
-            return F.gumbel_softmax(logits, tau=tau, hard=False)
+
 
     def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
         logits = self.head(logits)
         
-        # Use the scripted function to handle the branching
-        soft_code = self._compute_soft_code(logits, tau, hardness)
-
-        # Only apply hard sampling if hardness > 0
-        if hardness > 0:
+        # Define the branch functions
+        def softmax_branch(logits, tau):
+            return F.softmax(logits/tau, dim=-1)
+        
+        def gumbel_branch(logits, tau):
+            return F.gumbel_softmax(logits, tau=tau, hard=False)
+        
+        # Use cond to select the appropriate branch
+        soft_code = cond(
+            hardness < 0,
+            softmax_branch,
+            gumbel_branch,
+            (logits, tau)
+        )
+        
+        # Define branch functions for code computation
+        def no_hard_branch(soft_code, logits, hardness, reinMax):
+            return soft_code
+        
+        def hard_branch(soft_code, logits, hardness, reinMax):
             hard_code = self.sample(soft_code, logits=logits, reinMax=reinMax)
-            # Interpolate between soft and hard codes based on hardness
-            code = hardness * hard_code + (1 - hardness) * soft_code
-        else:
-            code = soft_code
-
+            return hardness * hard_code + (1 - hardness) * soft_code
+        
+        # Use cond to compute the final code
+        code = cond(
+            hardness <= 0,
+            no_hard_branch,
+            hard_branch,
+            (soft_code, logits, hardness, reinMax)
+        )
+        
         return self.codebook(code), soft_code, code
 
     @staticmethod
