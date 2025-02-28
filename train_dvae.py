@@ -67,7 +67,8 @@ class LoggingCallback(pl.Callback):
             code_distribution = soft_code.mean(dim=0)  # [N, C]
 
             # Create heatmap data
-            code_dist_data = code_distribution.detach().cpu().numpy()
+            # Convert to float32 before converting to numpy to avoid BFloat16 error
+            code_dist_data = code_distribution.detach().float().cpu().numpy()
             
             # Create the figure
             fig, ax = plt.subplots(figsize=(20, 15))
@@ -81,8 +82,6 @@ class LoggingCallback(pl.Callback):
             
             # Instead of adding to output_dict, return the figure
             output_dict['Codebook/figure'] = fig
-
-       
 
         return output_dict
 
