@@ -1011,7 +1011,7 @@ class GridDVAE(nn.Module):
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
 
         losses = {
-            "ce_loss": ce_loss/self.config.n_pos,  # Per sample per token
+            "ce_loss": ce_loss,  # Weight normalized loss
             **{k: v/self.config.n_codes for k, v in kld_losses.items()}, # Per sample per latent
         }
         return decoded_logits, soft_code, losses, q_z_marg
@@ -1041,10 +1041,14 @@ class GridDVAE(nn.Module):
             reduction='none'
         )
         
-        # Apply weights and average per sample
-        weighted_loss = (per_token_loss * weights.view(-1)).sum() / x.size(0)
+        # Apply weights and normalize by the sum of weights per sample
+        weighted_loss = (per_token_loss * weights.view(-1)).sum()
+        total_weight = weights.sum()
         
-        return weighted_loss
+        # Normalize by the total weight instead of batch size
+        normalized_loss = weighted_loss / total_weight
+        
+        return normalized_loss
     
 
 
