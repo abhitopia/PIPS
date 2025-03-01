@@ -7,7 +7,6 @@ from torch import Tensor
 from torch.nn import functional as F
 from dataclasses import dataclass
 from torch.amp import autocast
-from functorch.experimental.control_flow import cond
 
 
 def is_power_of_two(n):
@@ -507,41 +506,49 @@ class Codebook(nn.Module):
 
         return hard_code
 
+    def forward(self, logits, tau: float = 1.0, hardness: Tensor = torch.tensor(0.0), reinMax: bool = False):
+        logits = self.head(logits)
 
-    def forward(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
+        # Compute both versions of soft_code.
+        soft_code_softmax = F.softmax(logits / tau, dim=-1)
+        soft_code_gumbel = F.gumbel_softmax(logits, tau=tau, hard=False)
+        
+        # Use hardness to select between softmax and gumbel-softmax.
+        # (Assuming hardness < 0 means use softmax, otherwise use gumbel-softmax)
+        cond_soft = hardness < 0
+        # Expand the condition to match the shape of the soft code if needed.
+        cond_soft = cond_soft.expand_as(soft_code_softmax) if soft_code_softmax.dim() > 0 else cond_soft
+        soft_code = torch.where(cond_soft, soft_code_softmax, soft_code_gumbel)
+        
+        # Compute the hard code branch.
+        hard_code = self.sample(soft_code, logits=logits, reinMax=reinMax)
+        
+        # If hardness > 0, use a linear combination of the hard and soft codes.
+        # Otherwise, just use soft_code.
+        cond_code = hardness > 0
+        combined = hardness * hard_code + (1 - hardness) * soft_code
+        # Again, expand the condition if necessary.
+        cond_code = cond_code.expand_as(soft_code) if soft_code.dim() > 0 else cond_code
+        code = torch.where(cond_code, combined, soft_code)
+    
+        return self.codebook(code), soft_code, code
+
+    def forward_no_compile(self, logits, tau: float = 1.0, hardness: float = 0.0, reinMax: bool = False):
         logits = self.head(logits)
         
-        # Define the branch functions
-        def softmax_branch(logits, tau):
-            return F.softmax(logits/tau, dim=-1)
-        
-        def gumbel_branch(logits, tau):
-            return F.gumbel_softmax(logits, tau=tau, hard=False)
-        
-        # Use cond to select the appropriate branch
-        soft_code = cond(
-            hardness < 0,
-            softmax_branch,
-            gumbel_branch,
-            (logits, tau)
-        )
-        
-        # Define branch functions for code computation
-        def no_hard_branch(soft_code, logits, hardness, reinMax):
-            return soft_code
-        
-        def hard_branch(soft_code, logits, hardness, reinMax):
+        if hardness < 0:
+            # Compute both softmax and gumbel-softmax versions
+            soft_code = F.softmax(logits/tau, dim=-1)
+        else:
+            soft_code = F.gumbel_softmax(logits, tau=tau, hard=False)
+            
+        # For the hard code path, also use tensor operations
+        if hardness > 0:
             hard_code = self.sample(soft_code, logits=logits, reinMax=reinMax)
-            return hardness * hard_code + (1 - hardness) * soft_code
-        
-        # Use cond to compute the final code
-        code = cond(
-            hardness <= 0,
-            no_hard_branch,
-            hard_branch,
-            (soft_code, logits, hardness, reinMax)
-        )
-        
+            code = hardness * hard_code + (1 - hardness) * soft_code
+        else:
+            code = soft_code
+
         return self.codebook(code), soft_code, code
 
     @staticmethod
@@ -986,7 +993,7 @@ class GridDVAE(nn.Module):
         return x
 
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: float = 0.0, mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: Tensor = torch.tensor(0.0), mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x = self.apply_mask(x, mask_percentage)
 

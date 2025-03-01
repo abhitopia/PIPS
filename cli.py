@@ -140,7 +140,7 @@ def new(
     lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
-    
+
     # Append debug suffix to project name if in debug mode
     project_name = f"{project_name}-debug" if debug else project_name
     

@@ -85,6 +85,8 @@
 - [x] Histogram of code usage per code
 
 ## Training Tests
+- [ ] Overfit on 32x1 batches (without betas and masking and no temperature and no hardness)
+- [ ] Overfit on 32x10 batches (without betas and masking and no temperature and no hardness)
 - [ ] Overfit on 100 batches (without betas and masking)
 - [ ] Overfit on 100 batches (with masking and without betas)
 - [ ] Overfit on 100 batches (with masking and betas)

@@ -467,7 +467,7 @@ class DVAETrainingModule(pl.LightningModule):
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            hardness=hardness,
+            hardness=torch.tensor(hardness, device=x.device),
             reinMax=reinMax,
             tau=scheduled_values['tau']
         )
