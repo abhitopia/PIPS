@@ -83,6 +83,18 @@
 - [x] Move entropy calculation to the TrainDVAE class
 - [x] Perplexity per code
 - [x] Histogram of code usage per code
+- [ ] Verify data
+- [ ] Verify masked data and reconstruction loss
+- [ ] Adding padding token accuracy
+- [ ] Add padding weight schedule
+- [ ] Make cude synchronisation optional and configurable
+
+# Fix KLD Losses
+- [ ]Read the paper
+- [ ] Use log_softmax for numerical stability
+- [ ] Use distributions if you have to
+- [ ] KLD loss uses non-temperature scaled logits (verify this)
+- [ ] Do I need to jointly model discrete and continuous codes?
 
 ## Training Tests
 - [ ] Overfit on 32x1 batches (without betas and masking and no temperature and no hardness)
