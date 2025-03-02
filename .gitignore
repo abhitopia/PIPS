@@ -173,3 +173,5 @@ mnist_data/
 experiments/
 
 runs/
+
+.data/

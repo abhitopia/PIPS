@@ -23,6 +23,7 @@ wandb = "^0.19.3"
 pytorch-lightning = "^2.5.0.post0"
 pandas = "^2.2.3"
 ipdb = "^0.13.13"
+torchvision = "^0.21.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^7.4.0"
