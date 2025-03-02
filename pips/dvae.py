@@ -988,6 +988,7 @@ class GridDVAE(nn.Module):
     
 
     def apply_mask(self, x: Tensor, mask_percentage: float = 0.0) -> Tensor:
+        x = x.clone()
         mask = (torch.rand_like(x.float()) < mask_percentage) & (x != self.pad_value)
         x.masked_fill_(mask, self.mask_value)
         return x
@@ -995,12 +996,12 @@ class GridDVAE(nn.Module):
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, hardness: Tensor = torch.tensor(0.0), mask_percentage: float = 0.0, reinMax: bool = False) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
-        x = self.apply_mask(x, mask_percentage)
+        x_masked = self.apply_mask(x, mask_percentage)
 
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
 
-        encoded_logits = self.encode(x, grid_pos_indices, latent_pos_indices)
+        encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
 
         encoded_logits, soft_code, code = self.codebook(encoded_logits, tau=tau, hardness=hardness, reinMax=reinMax)
 

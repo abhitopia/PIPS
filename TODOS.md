@@ -90,11 +90,13 @@
 - [ ] Make cude synchronisation optional and configurable
 
 # Fix KLD Losses
-- [ ]Read the paper
+- [x] Read the paper
 - [ ] Use log_softmax for numerical stability
 - [ ] Use distributions if you have to
 - [ ] KLD loss uses non-temperature scaled logits (verify this)
 - [ ] Do I need to jointly model discrete and continuous codes?
+
+# Implement MNIST DVAE
 
 ## Training Tests
 - [ ] Overfit on 32x1 batches (without betas and masking and no temperature and no hardness)
