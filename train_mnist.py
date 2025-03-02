@@ -131,36 +131,57 @@ def compute_loss(x, x_recon, z, v_dist, model, args):
         bce, kl = model.approximate_loss(x, x_recon, v_dist)
     else:
         bce, kl = model.loss(x, x_recon, z, v_dist)
+
+    # Normalize the losses by batch size and dimensions
+    batch_size = x.size(0)
+    input_size = 784  # MNIST images are 28x28 = 784 pixels
+    
+    # Normalize BCE by both batch size and number of pixels
+    # bce = bce / (batch_size * input_size)
+    bce = bce / batch_size
+    
+    # Normalize KL by batch size
+    kl = kl / batch_size
     elbo = -bce - kl
     loss = -elbo
-    return loss
+    return loss, bce, kl
 
 def train(epoch, model, train_loader, optimizer, device, args):
     model = model.train()
 
     train_loss = 0.
+    train_bce = 0.
+    train_kld = 0
     for i, (x, _) in enumerate(train_loader, 1):
         x = x.to(device)
         x = x.view(x.size(0), -1)
 
+        n_updates = epoch * len(train_loader) + i
+
         # scheduler for temperature
-        if i % args.temp_interval == 0:
-            n_updates = epoch * len(train_loader) + i
+        if n_updates % args.temp_interval == 0:
             temp = max(torch.tensor(args.init_temp) * np.exp(-n_updates*args.temp_anneal), torch.tensor(args.min_temp))
             model.temp = temp
         
         # compute & optimize the loss function
         z, x_recon, v_dist = model(x)
-        loss = compute_loss(x, x_recon, z, v_dist, model, args)
+        loss, bce, kl = compute_loss(x, x_recon, z, v_dist, model, args)
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+
+        # print(f"Epoch: {epoch}\tStep: {i}\tKL: {kl}\t BCE: {bce} \tT: {model.temp}")
     
         train_loss += loss.item()
+        train_bce += bce.item()
+        train_kld += kl.item()
 
+
+    avg_loss = train_loss / len(train_loader)
+    avg_bce = train_bce / len(train_loader)
+    avg_kld = train_kld / len(train_loader)
     # report results
-    print('====> Epoch: {} Average loss: {:.4f}'.format(
-            epoch, train_loss / len(train_loader.dataset)))
+    print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f} Avg KLD: {avg_kld:.4f} Avg BCE: {avg_bce:.4f}')
 
 def test(epoch, model, test_loader, device, args):
     model.eval()
@@ -170,13 +191,9 @@ def test(epoch, model, test_loader, device, args):
         for i, (x, _) in enumerate(test_loader):
             x = x.to(device)
             x = x.view(x.size(0), -1)
-
-            print("x:", x.shape)
-            print("x[0]:", x[0][250:500])
-
             # compute the loss function
             z, x_recon, v_dist = model(x)
-            loss = compute_loss(x, x_recon, z, v_dist, model, args)
+            loss, bce, kl = compute_loss(x, x_recon, z, v_dist, model, args)
             test_loss += loss
 
             # save reconstructed figure
