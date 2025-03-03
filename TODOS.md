@@ -83,6 +83,8 @@
 - [x] Move entropy calculation to the TrainDVAE class
 - [x] Perplexity per code
 - [x] Histogram of code usage per code
+- [x] Log reconstruction images to the validation set
+- [ ] Add ability to scale the CE loss
 - [ ] Verify data
 - [ ] Verify masked data and reconstruction loss
 - [ ] Adding padding token accuracy

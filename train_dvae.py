@@ -34,9 +34,17 @@ from pips.misc.acceleration_config import AccelerationConfig
 
 class LoggingCallback(pl.Callback):
     
-    def __init__(self):
+    def __init__(self, visualization_interval=50, save_to_disk=False, visualization_dir=None, grad_log_interval=100, num_grids_to_visualize=4):
         self.train_batch_start_time = None
         self.val_batch_start_time = None
+        self.visualization_interval = visualization_interval  # Visualize every N steps
+        self.save_to_disk = save_to_disk
+        self.visualization_dir = Path(visualization_dir) if visualization_dir is not None else Path("visualizations")
+        self.grad_log_interval = grad_log_interval  # How often to log gradient norms
+        self.num_grids_to_visualize = num_grids_to_visualize  # Number of grids to visualize
+        if save_to_disk:
+            self.visualization_dir.mkdir(exist_ok=True, parents=True)
+        self.val_batch_to_visualize = None
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
@@ -96,14 +104,134 @@ class LoggingCallback(pl.Callback):
             return tokens_per_sec, time_per_batch_ms
         return 0, 0
 
+    def visualize_reconstructions(self, pl_module, x, logits, phase):
+        """Create visualization of input grids and their reconstructions."""
+
+        if pl_module.global_rank != 0:
+            return
+
+        # Skip if not using WandB and not saving to disk
+        should_log_wandb = isinstance(pl_module.logger, WandbLogger)
+        if not (should_log_wandb or self.save_to_disk):
+            return
+
+        if x is None or logits is None:
+            return
+        # Take a subset of the batch for visualization (e.g., 4 samples)
+        n_samples = min(self.num_grids_to_visualize, x.size(0))
+        x_subset = x[:n_samples]
+        logits_subset = logits[:n_samples]
+        
+        # Get reconstructions from logits
+        reconstructions = logits_subset.argmax(dim=-1)
+        
+        # Reshape inputs and reconstructions to 2D grids
+        # Get grid dimensions from model config
+        height = pl_module.model_config.max_grid_height
+        width = pl_module.model_config.max_grid_width
+        
+        # Reshape tensors to [batch, height, width]
+        x_reshaped = x_subset.reshape(n_samples, height, width)
+        recon_reshaped = reconstructions.reshape(n_samples, height, width)
+        
+        # Convert tensors to numpy arrays
+        x_np = x_reshaped.cpu().numpy()
+        recon_np = recon_reshaped.cpu().numpy()
+        
+        # Define specific colors for values 0-9 and 15
+        color_map = {
+            0: '#000000',  # black
+            1: '#0074D9',  # blue
+            2: '#FF4136',  # red
+            3: '#2ECC40',  # green
+            4: '#FFDC00',  # yellow
+            5: '#AAAAAA',  # grey
+            6: '#F012BE',  # fuschia
+            7: '#FF851B',  # orange
+            8: '#7FDBFF',  # teal
+            9: '#870C25',  # brown
+            15: '#FFFFFF'  # white
+        }
+        
+        # Default color for other values (obnoxious pink)
+        default_color = '#FF00FF'
+        
+        # Get all unique values from both input and reconstruction
+        all_values = np.unique(np.concatenate([x_np.flatten(), recon_np.flatten()]))
+        
+        # Create a custom colormap
+        import matplotlib.colors as mcolors
+        colors = []
+        for val in range(max(all_values.max() + 1, 16)):  # Ensure we have at least 16 colors (for value 15)
+            if val in color_map:
+                colors.append(color_map[val])
+            else:
+                colors.append(default_color)
+        
+        custom_cmap = mcolors.ListedColormap(colors)
+        
+        # Create the figure with proper space for colorbar
+        fig = plt.figure(figsize=(n_samples * 3 + 1, 6))
+        
+        # Create a gridspec layout with space for the colorbar
+        gs = fig.add_gridspec(2, n_samples + 1, width_ratios=[1] * n_samples + [0.1])
+        
+        # Create axes for the plots
+        axes = [[fig.add_subplot(gs[i, j]) for j in range(n_samples)] for i in range(2)]
+        
+        # Plot inputs on top row
+        for i in range(n_samples):
+            im = axes[0][i].imshow(x_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors)-1)
+            axes[0][i].set_title(f"Input {i+1}")
+            axes[0][i].axis('off')
+            
+        # Plot reconstructions on bottom row
+        for i in range(n_samples):
+            axes[1][i].imshow(recon_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors)-1)
+            axes[1][i].set_title(f"Reconstruction {i+1}")
+            axes[1][i].axis('off')
+            
+        # Add colorbar as legend using the gridspec
+        cbar_ax = fig.add_subplot(gs[:, -1])
+        cbar = fig.colorbar(im, cax=cbar_ax)
+        cbar.set_label('Grid Values')
+        
+        # Add ticks for the values that appear in the data
+        present_values = sorted(np.unique(np.concatenate([x_np.flatten(), recon_np.flatten()])))
+        cbar.set_ticks(present_values)
+        cbar.set_ticklabels([str(int(v)) for v in present_values])
+        
+        # Use tight_layout without rect parameter
+        plt.tight_layout()
+        
+        # Log to wandb if available
+        if should_log_wandb:
+            pl_module.logger.experiment.log({
+                f'Reconstructions/{phase}': wandb.Image(fig)
+            })
+        
+        # Save to disk if requested
+        if self.save_to_disk:
+            filename = f"{phase}_step_{pl_module.global_step:07d}.png"
+            save_path = self.visualization_dir / filename
+            fig.savefig(save_path)
+            print(f"Saved visualization to {save_path}")
+        
+        plt.close(fig)  # Close the figure to free memory
+
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for GPU operations to finish
 
-
         code = outputs.pop('code')
+        x = outputs.pop('input')
+        logits = outputs.pop('logits')
         entropy_dict = self.compute_entropy(code, add_codebook_usage=pl_module.global_step % 20 == 0)
         outputs.update(entropy_dict)
+        
+        # Visualize reconstructions
+        if pl_module.global_step % self.visualization_interval == 0:
+            self.visualize_reconstructions(pl_module, x, logits, 'train')
         
         # Calculate tokens per second for the training batch
         if self.train_batch_start_time is not None:
@@ -122,6 +250,10 @@ class LoggingCallback(pl.Callback):
 
     def on_validation_epoch_start(self, trainer, pl_module):
         self.codebook_usage_figure_logged = False
+        # Randomly select a batch index to visualize during this validation epoch
+        if trainer.val_dataloaders is not None:
+            val_dataloader = trainer.val_dataloaders[0]
+            self.val_batch_to_visualize = np.random.randint(0, len(val_dataloader))
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
         # Record the start time of the validation batch
@@ -132,12 +264,18 @@ class LoggingCallback(pl.Callback):
             torch.cuda.synchronize()  # Wait for GPU operations to finish
 
         code = outputs.pop('code')
+        x = outputs.pop('input')
+        logits = outputs.pop('logits')
 
         # Only log the codebook usage figure once per epoch
         entropy_dict = self.compute_entropy(code, add_codebook_usage=not self.codebook_usage_figure_logged)
         self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
+
+        # Visualize reconstructions only for the randomly selected batch
+        if batch_idx == self.val_batch_to_visualize:
+            self.visualize_reconstructions(pl_module, x, logits, 'val')
 
         # Calculate tokens per second for the validation batch
         if self.val_batch_start_time is not None:
@@ -185,6 +323,14 @@ class LoggingCallback(pl.Callback):
             
             sync_dist = False if phase == 'train' else True
             pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True, sync_dist=sync_dist)
+
+    def on_before_optimizer_step(self, trainer, pl_module, optimizer):
+        """Log gradient norms at specified intervals."""
+        # Compute the 2-norm for each layer
+        # If using mixed precision, the gradients are already unscaled here
+        if pl_module.global_rank == 0 and trainer.global_step % self.grad_log_interval == 0:
+            norms = grad_norm(pl_module.model, norm_type=2)
+            pl_module.log_dict(norms)
 
 @dataclass
 class ExperimentConfig:
@@ -518,6 +664,8 @@ class DVAETrainingModule(pl.LightningModule):
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
             'code': soft_code.detach(),
+            'logits': logits.detach(),  # Add logits to the output dictionary
+            'input': x.detach(),  # Add input to the output dictionary
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
@@ -536,14 +684,6 @@ class DVAETrainingModule(pl.LightningModule):
             self.q_z_marg.copy_(updated_q_z_marg.detach())
         return output_dict
 
-    def on_before_optimizer_step(self, optimizer):
-        # Compute the 2-norm for each layer
-        # If using mixed precision, the gradients are already unscaled here
-        grad_log_interval = 100 # Log every 100 steps
-        if self.global_rank == 0 and self.trainer.global_step % grad_log_interval == 0:
-            norms = grad_norm(self.model, norm_type=2)
-            self.log_dict(norms)
-        
     def validation_step(self, batch, batch_idx):
         torch.compiler.cudagraph_mark_step_begin()
         x, _ = batch
@@ -726,6 +866,10 @@ def train(
     lr_find: bool = False,
     acceleration: AccelerationConfig | None = None,
     limit_train_batches: int | None = None,
+    save_visualizations: bool = False,
+    grad_log_interval: int = 100,  # New parameter
+    visualization_interval: int = 100,
+    num_grids_to_visualize: int = 4
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -765,8 +909,16 @@ def train(
         config=experiment_config.to_dict()
     )
 
+    visualization_dir = Path(checkpoint_dir) / project_name / run_name / 'visualizations'
+
     # Define callbacks
-    logging_callback = LoggingCallback()
+    logging_callback = LoggingCallback(
+        visualization_interval=visualization_interval,
+        save_to_disk=save_visualizations,
+        visualization_dir=visualization_dir,
+        grad_log_interval=grad_log_interval,  # Pass the gradient logging interval
+        num_grids_to_visualize=num_grids_to_visualize  # Pass the number of grids to visualize
+    )
     custom_progress_bar = CustomRichProgressBar()
 
     # Only add checkpoint callbacks if validation is enabled
