@@ -494,7 +494,7 @@ class GumbelCodebook(nn.Module):
         else:
             return RelaxedOneHotCategorical(temp, logits=log_alpha).rsample()
 
-    def forward(self, logits, tau=1.0):
+    def forward(self, logits: Tensor, tau: Tensor):
         """
         Forward pass through the Gumbel-Softmax codebook.
         
@@ -764,7 +764,7 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = 1.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
 

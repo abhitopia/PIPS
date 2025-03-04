@@ -599,12 +599,15 @@ class DVAETrainingModule(pl.LightningModule):
             max_mask_pct = scheduled_values['max_pct(MASK)']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
+        # Ensure tau is a tensor on the same device as x before passing it to the model
+        tau_tensor = scheduled_values['tau']
+        tau_tensor = torch.tensor(scheduled_values['tau'], dtype=x.dtype, device=x.device)
         # Forward pass with current scheduled values and provided q_z_marg
         logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            tau=scheduled_values['tau']
+            tau=tau_tensor
         )
 
         # Calculate token accuracy excluding padding tokens
