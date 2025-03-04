@@ -74,6 +74,14 @@ def get_common_options():
 
         "lr_find": typer.Option(False, "--lr-find", help="Run learning rate finder instead of training"),
 
+        # Add visualization interval option
+        "viz_interval": typer.Option(
+            100, 
+            "--viz-interval", 
+            "--vi",
+            help="Number of steps between visualizations and gradient logging"
+        ),
+
     }
 
 @dvae_app.command("train")
@@ -120,16 +128,17 @@ def new(
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
     
     # Beta values for loss components
-    beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss"),
+    beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss. Stays constant."),
+    beta_kl: float = typer.Option(1.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
     beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
-    beta_kl: float = typer.Option(2.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     
     seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
     limit_train_batches: int = typer.Option(None, "--limit-train-batches", "--ltb", help="Limit the number of training batches per epoch. None means use all batches."),
 
     # Common options
+    viz_interval: int = get_common_options()["viz_interval"],
     val_check_interval: int = get_common_options()["val_check_interval"],
     debug: bool = get_common_options()["debug"],
     compile_model: bool = get_common_options()["compile_model"],
@@ -174,7 +183,7 @@ def new(
         model_src=model_src,
         tau_start=tau_start,
         tau=tau,
-        beta_ce_start=1.0,
+        beta_ce_start=beta_ce,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
@@ -214,7 +223,9 @@ def new(
         lr_find=lr_find,
         acceleration=acceleration,
         val_check_interval=val_check_interval,
-        limit_train_batches=limit_train_batches
+        limit_train_batches=limit_train_batches,
+        visualization_interval=viz_interval,
+        grad_log_interval=viz_interval
     )
 
 
@@ -232,6 +243,7 @@ def resume(
     learning_rate: float = typer.Option(None, "--learning-rate", "--lr", help="Override learning rate"),
     lr_find: bool = get_common_options()["lr_find"],
     val_check_interval: int = get_common_options()["val_check_interval"],
+    viz_interval: int = get_common_options()["viz_interval"],
 ):
     """Resume training from a checkpoint."""
     
@@ -284,7 +296,9 @@ def resume(
         resume_from=local_checkpoint_path,
         acceleration=acceleration,
         val_check_interval=val_check_interval,
-        lr_find=lr_find
+        lr_find=lr_find,
+        visualization_interval=viz_interval,
+        grad_log_interval=viz_interval
     )
 
 

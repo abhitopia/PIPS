@@ -235,7 +235,7 @@ class LoggingCallback(pl.Callback):
         logits = outputs.pop('logits')
 
         
-        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=pl_module.global_step % 20 == 0)
+        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=pl_module.global_step % self.visualization_interval == 0)
         outputs.update(entropy_dict)
         
         # Visualize reconstructions.
