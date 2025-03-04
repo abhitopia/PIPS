@@ -311,16 +311,13 @@ class LoggingCallback(pl.Callback):
 
             # Handle the main loss separately.
             if key == 'loss':
-                metric_name = f'{phase}/{key}'  # Default format.
-                pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=False)
-                continue
-
+                metric_name = f'TotalLoss/{key}_{phase}'  # Default format.
             # Handle metrics with categories - loss(CE), loss(MI), etc.
-            if '(' in key and ')' in key:
+            elif '(' in key and ')' in key:
                 category = key.split('(')[-1].split(')')[0]  # Extract category.
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['tau', 'beta', 'mask_pct', 'max_mask_pct']:
+            elif key in ['tau', 'mask_pct', 'max_mask_pct']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'.
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
@@ -353,6 +350,8 @@ class ExperimentConfig:
     # Initial values (renamed from initial_*)
     tau_start: float = 3.5  # this is difference from Dalle-E paper which starts with 1.0. This is to match vanilla softmax.
     tau: float = 0.0625 # 1/16 as per Dalle-E paper
+    beta_ce_start: float = 1.0  # Default to 1.0 to maintain original behavior
+    beta_ce: float = 1.0  # Default to 1.0 to maintain original behavior
     beta_mi_start: float = 0.0
     beta_tc_start: float = 0.0
     beta_dwkl_start: float = 0.0
@@ -535,6 +534,14 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.tau_schedule_type
         )
         
+        # Add beta_ce schedule with shared beta warmup
+        beta_ce_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_ce_start,
+            target_value=cfg.beta_ce,
+            warmup_steps=cfg.warmup_steps_beta,
+            schedule_type=cfg.beta_schedule_type
+        )
+        
         # Beta schedules with shared beta warmup
         beta_mi_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_mi_start,
@@ -574,6 +581,7 @@ class DVAETrainingModule(pl.LightningModule):
         
         return {
             'tau': tau_schedule(step),
+            'beta(CE)': beta_ce_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
             'beta(DWKL)': beta_dwkl_schedule(step),
@@ -628,7 +636,7 @@ class DVAETrainingModule(pl.LightningModule):
         
         # Compute weighted losses for total loss
         weighted_losses = {
-            'loss(CE)': raw_losses['loss(CE)'],
+            'loss(CE)': raw_losses['loss(CE)'] * scheduled_values['beta(CE)'],
             'loss(MI)': raw_losses['loss(MI)'] * scheduled_values['beta(MI)'],
             'loss(DWKL)': raw_losses['loss(DWKL)'] * scheduled_values['beta(DWKL)'],
             'loss(TC)': raw_losses['loss(TC)'] * scheduled_values['beta(TC)'],

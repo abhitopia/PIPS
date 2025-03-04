@@ -120,8 +120,9 @@ def new(
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
     
     # Beta values for loss components
+    beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss"),
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
-    beta_tc: float = typer.Option(6.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
+    beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
     beta_kl: float = typer.Option(2.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     
@@ -173,11 +174,13 @@ def new(
         model_src=model_src,
         tau_start=tau_start,
         tau=tau,
+        beta_ce_start=1.0,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
         beta_kl_start=0.0,
         mask_pct_start=0.0,
+        beta_ce=beta_ce,
         beta_mi=beta_mi,
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
