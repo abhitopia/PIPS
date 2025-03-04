@@ -488,13 +488,16 @@ class GumbelCodebook(nn.Module):
 
     def sample(self, log_alpha, temp):
         """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical"""
+
+        assert temp > 0.0, "Temperature must be greater than 0.0"
+
         if self.use_exp_relaxed:
             # We need to exponentiate the sample to get the correct sample from the (relaxed) OneHotCategorical
             return ExpRelaxedCategorical(temp, logits=log_alpha).rsample().exp() 
         else:
             return RelaxedOneHotCategorical(temp, logits=log_alpha).rsample()
 
-    def forward(self, logits: Tensor, tau: Tensor):
+    def forward(self, logits: Tensor, tau: float):
         """
         Forward pass through the Gumbel-Softmax codebook.
         
@@ -509,7 +512,7 @@ class GumbelCodebook(nn.Module):
         """
         # Project to codebook space
         log_alpha = self.head(logits)  # [B, N, C]
-        
+
         # Sample using the appropriate distribution
         z = self.sample(log_alpha, tau) # [B, N, C]
 
@@ -750,9 +753,9 @@ class GridDVAE(nn.Module):
         return latent_encoded
 
 
-    def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
-        latent_decoded, _ = self.latent_decoder(x, positions=latent_pos_indices)
-        grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)
+    def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:    
+        latent_decoded, _ = self.latent_decoder(x, positions=latent_pos_indices)        
+        grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)        
         grid_decoded_logits = self.decoder_head(grid_decoded)
         return grid_decoded_logits
     
@@ -764,7 +767,8 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = 1.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
+        
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
 
@@ -781,13 +785,14 @@ class GridDVAE(nn.Module):
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
 
-        decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
         
+        decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
+
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
 
         losses = {
-            "ce_loss": ce_loss,  # Weight normalized loss
-            **kld_losses.to_dict()
+             "ce_loss": ce_loss,  # Weight normalized loss
+             **kld_losses.to_dict()
         }
         return decoded_logits, log_alpha, losses, q_z_marg_updated
 

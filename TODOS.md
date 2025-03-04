@@ -98,6 +98,8 @@
 - [x] Use log_softmax for numerical stability
 - [x] Use distributions if you have to
 - [x] KLD loss uses non-temperature scaled logits (verify this)
+- [x] Nan on approximate KLD loss
+- [ ] Fix Monte Carlo KLD on compilation failure
 - [ ] Do I need to jointly model discrete and continuous codes?
 
 # Implement MNIST DVAE

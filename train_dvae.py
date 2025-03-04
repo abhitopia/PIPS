@@ -27,7 +27,7 @@ import wandb
 import sys
 import matplotlib.pyplot as plt
 from pips.misc.acceleration_config import AccelerationConfig
-
+from pips.misc.gradient_check_callback import GradientCheckCallback
 
 class LoggingCallback(pl.Callback):
     
@@ -600,15 +600,12 @@ class DVAETrainingModule(pl.LightningModule):
             max_mask_pct = scheduled_values['max_pct(MASK)']
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
-        # Ensure tau is a tensor on the same device as x before passing it to the model
-        tau_tensor = scheduled_values['tau']
-        tau_tensor = torch.tensor(scheduled_values['tau'], dtype=x.dtype, device=x.device)
         # Forward pass with current scheduled values and provided q_z_marg
         logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            tau=tau_tensor
+            tau=scheduled_values['tau']
         )
 
         # Calculate token accuracy excluding padding tokens
@@ -913,9 +910,13 @@ def train(
         num_grids_to_visualize=num_grids_to_visualize  # Pass the number of grids to visualize
     )
     custom_progress_bar = CustomRichProgressBar()
+    gradient_check_callback = GradientCheckCallback()
 
     # Only add checkpoint callbacks if validation is enabled
     callbacks = [logging_callback, custom_progress_bar]
+
+    # if debug_mode:
+    #     callbacks.append(gradient_check_callback)
     
     if not validation_disabled:
         callbacks.extend([
