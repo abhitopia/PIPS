@@ -103,6 +103,7 @@ class LoggingCallback(pl.Callback):
                 # Use a CUDA event for timing.
                 end_event = torch.cuda.Event(enable_timing=True)
                 end_event.record()
+                end_event.synchronize()  # Ensure all CUDA kernels have finished executing.
                 # Get elapsed time in milliseconds (this waits only on the two events, not the entire GPU).
                 elapsed_time_ms = start.elapsed_time(end_event)
                 elapsed_time = elapsed_time_ms / 1000.0
