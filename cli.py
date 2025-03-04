@@ -3,10 +3,11 @@
 import typer
 from pathlib import Path
 import logging
-from train_dvae import ExperimentConfig, GridDVAEConfig, train, generate_friendly_name
+from train_dvae import ExperimentConfig, GridDVAEConfig, train
 from torch.serialization import add_safe_globals
 import wandb
 from pips.misc.artifact import Artifact
+from pips.utils import generate_friendly_name
 from pips.misc.acceleration_config import AccelerationConfig
 import click
 from rich import print

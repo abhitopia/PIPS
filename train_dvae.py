@@ -4,8 +4,6 @@ from typing import Dict, Any
 import numpy as np
 from dataclasses import dataclass
 import tempfile
-
-import warnings
 import torch
 import time
 from torch import Tensor
@@ -20,7 +18,6 @@ from torch.nn import functional as F
 from pips.grid_dataset import GridDataset, worker_init_fn
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.misc.artifact import Artifact
-from pips.utils import generate_friendly_name
 from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.misc.schedule import Schedule  # Add this import
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
@@ -50,14 +47,17 @@ class LoggingCallback(pl.Callback):
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
     
     def on_train_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
-        # Record the start time of the training batch
-        self.train_batch_start_time = time.monotonic()
-
+        # Record the start time of the training batch.
+        # If on GPU, record a CUDA event; otherwise, use time.monotonic().
+        if torch.cuda.is_available():
+            self.train_batch_start_time = torch.cuda.Event(enable_timing=True)
+            self.train_batch_start_time.record()
+        else:
+            self.train_batch_start_time = time.monotonic()
 
     def compute_entropy(self, log_alpha: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
         output_dict = {}
         # Calculate per-code perplexity
-
         normalized_log_alpha = F.softmax(log_alpha, dim=-1)
         probs = normalized_log_alpha.exp()
 
@@ -67,10 +67,10 @@ class LoggingCallback(pl.Callback):
         avg_perplexity = per_code_perplexity.mean()
         output_dict['CodebookUsage/perplexity'] = avg_perplexity.detach()
 
-         # Average across batch dimension
+        # Average across batch dimension
         avg_per_code_perplexity = per_code_perplexity.mean(dim=0)  # [N]
 
-         # Add per-code perplexity metrics
+        # Add per-code perplexity metrics
         for i, perp in enumerate(avg_per_code_perplexity):
             output_dict[f'Codebook/perplexity_code_{i}'] = perp.detach()
         
@@ -78,29 +78,36 @@ class LoggingCallback(pl.Callback):
             # Calculate distribution for each code position
             code_distribution = probs.mean(dim=0)  # [N, C]
 
-            # Create heatmap data
-            # Convert to float32 before converting to numpy to avoid BFloat16 error
+            # Create heatmap data.
+            # Convert to float32 before converting to numpy to avoid BFloat16 error.
             code_dist_data = code_distribution.detach().float().cpu().numpy()
             
-            # Create the figure
+            # Create the figure.
             fig, ax = plt.subplots(figsize=(20, 15))
             im = ax.imshow(code_dist_data, aspect='auto', cmap='viridis')
             plt.colorbar(im)
             
-            # Add labels
+            # Add labels.
             ax.set_xlabel('Codebook Index')
             ax.set_ylabel('Position')
             ax.set_title('Code Usage Distribution')
             
-            # Instead of adding to output_dict, return the figure
+            # Instead of adding to output_dict, return the figure.
             output_dict['Codebook/figure'] = fig
 
         return output_dict
 
-
-    def _calculate_tokens_per_sec(self, start_time, batch):
-        if start_time is not None:
-            elapsed_time = time.monotonic() - start_time
+    def _calculate_tokens_per_sec(self, start, batch):
+        if start is not None:
+            if isinstance(start, torch.cuda.Event):
+                # Use a CUDA event for timing.
+                end_event = torch.cuda.Event(enable_timing=True)
+                end_event.record()
+                # Get elapsed time in milliseconds (this waits only on the two events, not the entire GPU).
+                elapsed_time_ms = start.elapsed_time(end_event)
+                elapsed_time = elapsed_time_ms / 1000.0
+            else:
+                elapsed_time = time.monotonic() - start
             x, _ = batch
             num_tokens = x.size(0) * x.size(1)  # batch_size * tokens_per_batch
             tokens_per_sec = num_tokens / elapsed_time if elapsed_time > 0 else 0
@@ -110,11 +117,10 @@ class LoggingCallback(pl.Callback):
 
     def visualize_reconstructions(self, pl_module, x, logits, phase):
         """Create visualization of input grids and their reconstructions."""
-
         if pl_module.global_rank != 0:
             return
 
-        # Skip if not using WandB and not saving to disk
+        # Skip if not using WandB and not saving to disk.
         should_log_wandb = isinstance(pl_module.logger, WandbLogger)
         if not (should_log_wandb or self.save_to_disk):
             return
@@ -126,23 +132,23 @@ class LoggingCallback(pl.Callback):
         x_subset = x[:n_samples]
         logits_subset = logits[:n_samples]
         
-        # Get reconstructions from logits
+        # Get reconstructions from logits.
         reconstructions = logits_subset.argmax(dim=-1)
         
-        # Reshape inputs and reconstructions to 2D grids
-        # Get grid dimensions from model config
+        # Reshape inputs and reconstructions to 2D grids.
+        # Get grid dimensions from model config.
         height = pl_module.model_config.max_grid_height
         width = pl_module.model_config.max_grid_width
         
-        # Reshape tensors to [batch, height, width]
+        # Reshape tensors to [batch, height, width].
         x_reshaped = x_subset.reshape(n_samples, height, width)
         recon_reshaped = reconstructions.reshape(n_samples, height, width)
         
-        # Convert tensors to numpy arrays
+        # Convert tensors to numpy arrays.
         x_np = x_reshaped.cpu().numpy()
         recon_np = recon_reshaped.cpu().numpy()
         
-        # Define specific colors for values 0-9 and 15
+        # Define specific colors for values 0-9 and 15.
         color_map = {
             0: '#000000',  # black
             1: '#0074D9',  # blue
@@ -157,13 +163,13 @@ class LoggingCallback(pl.Callback):
             15: '#FFFFFF'  # white
         }
         
-        # Default color for other values (obnoxious pink)
+        # Default color for other values (obnoxious pink).
         default_color = '#FF00FF'
         
-        # Get all unique values from both input and reconstruction
+        # Get all unique values from both input and reconstruction.
         all_values = np.unique(np.concatenate([x_np.flatten(), recon_np.flatten()]))
         
-        # Create a custom colormap
+        # Create a custom colormap.
         import matplotlib.colors as mcolors
         colors = []
         for val in range(max(all_values.max() + 1, 16)):  # Ensure we have at least 16 colors (for value 15)
@@ -174,47 +180,47 @@ class LoggingCallback(pl.Callback):
         
         custom_cmap = mcolors.ListedColormap(colors)
         
-        # Create the figure with proper space for colorbar
+        # Create the figure with proper space for a colorbar.
         fig = plt.figure(figsize=(n_samples * 3 + 1, 6))
         
-        # Create a gridspec layout with space for the colorbar
+        # Create a gridspec layout with space for the colorbar.
         gs = fig.add_gridspec(2, n_samples + 1, width_ratios=[1] * n_samples + [0.1])
         
-        # Create axes for the plots
+        # Create axes for the plots.
         axes = [[fig.add_subplot(gs[i, j]) for j in range(n_samples)] for i in range(2)]
         
-        # Plot inputs on top row
+        # Plot inputs on the top row.
         for i in range(n_samples):
-            im = axes[0][i].imshow(x_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors)-1)
+            im = axes[0][i].imshow(x_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors) - 1)
             axes[0][i].set_title(f"Input {i+1}")
             axes[0][i].axis('off')
             
-        # Plot reconstructions on bottom row
+        # Plot reconstructions on the bottom row.
         for i in range(n_samples):
-            axes[1][i].imshow(recon_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors)-1)
+            axes[1][i].imshow(recon_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors) - 1)
             axes[1][i].set_title(f"Reconstruction {i+1}")
             axes[1][i].axis('off')
             
-        # Add colorbar as legend using the gridspec
+        # Add a colorbar as a legend using the gridspec.
         cbar_ax = fig.add_subplot(gs[:, -1])
         cbar = fig.colorbar(im, cax=cbar_ax)
         cbar.set_label('Grid Values')
         
-        # Add ticks for the values that appear in the data
+        # Add ticks for the values that appear in the data.
         present_values = sorted(np.unique(np.concatenate([x_np.flatten(), recon_np.flatten()])))
         cbar.set_ticks(present_values)
         cbar.set_ticklabels([str(int(v)) for v in present_values])
         
-        # Use tight_layout without rect parameter
+        # Use tight_layout without a rect parameter.
         plt.tight_layout()
         
-        # Log to wandb if available
+        # Log to wandb if available.
         if should_log_wandb:
             pl_module.logger.experiment.log({
                 f'Reconstructions/{phase}': wandb.Image(fig)
             })
         
-        # Save to disk if requested
+        # Save to disk if requested.
         if self.save_to_disk:
             filename = f"{phase}_step_{pl_module.global_step:07d}.png"
             save_path = self.visualization_dir / filename
@@ -224,104 +230,103 @@ class LoggingCallback(pl.Callback):
         plt.close(fig)  # Close the figure to free memory
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()  # Wait for GPU operations to finish
-
         log_alpha = outputs.pop('log_alpha')
         x = outputs.pop('input')
         logits = outputs.pop('logits')
+
+        
         entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=pl_module.global_step % 20 == 0)
         outputs.update(entropy_dict)
         
-        # Visualize reconstructions
+        # Visualize reconstructions.
         if pl_module.global_step % self.visualization_interval == 0:
             self.visualize_reconstructions(pl_module, x, logits, 'train')
         
-        # Calculate tokens per second for the training batch
+        # Calculate tokens per second for the training batch.
         if self.train_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
             print(f"\n[Train] {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
             outputs['Δ_ms'] = time_per_batch_ms
         
-        # Log the current learning rate
+        # Log the current learning rate.
         current_lr = trainer.optimizers[0].param_groups[0]['lr']
         pl_module.log('params/learning_rate', current_lr, on_step=True, on_epoch=False)
         
-        # Log loss metrics using the helper method
+        # Log loss metrics using the helper method.
         self._log_metrics(pl_module, 'train', outputs, batch[0].size(0), on_step=True, on_epoch=False)
-
 
     def on_validation_epoch_start(self, trainer, pl_module):
         self.codebook_usage_figure_logged = False
-        # Randomly select a batch index to visualize during this validation epoch
+        # Randomly select a batch index to visualize during this validation epoch.
         if trainer.val_dataloaders is not None:
             val_dataloader = trainer.val_dataloaders[0]
             self.val_batch_to_visualize = np.random.randint(0, len(val_dataloader))
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
-        # Record the start time of the validation batch
-        self.val_batch_start_time = time.monotonic()
+        # Record the start time of the validation batch.
+        if torch.cuda.is_available():
+            self.val_batch_start_time = torch.cuda.Event(enable_timing=True)
+            self.val_batch_start_time.record()
+        else:
+            self.val_batch_start_time = time.monotonic()
 
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
-        if torch.cuda.is_available():
-            torch.cuda.synchronize()  # Wait for GPU operations to finish
-
         log_alpha = outputs.pop('log_alpha')
         x = outputs.pop('input')
         logits = outputs.pop('logits')
 
-        # Only log the codebook usage figure once per epoch
+        # Only log the codebook usage figure once per epoch.
         entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=not self.codebook_usage_figure_logged)
         self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
 
-        # Visualize reconstructions only for the randomly selected batch
+        # Visualize reconstructions only for the randomly selected batch.
         if batch_idx == self.val_batch_to_visualize:
             self.visualize_reconstructions(pl_module, x, logits, 'val')
 
-        # Calculate tokens per second for the validation batch
+        # Calculate tokens per second for the validation batch.
         if self.val_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
             print(f"\n[Eval]  {self.get_loss_string(outputs)} | T/s: {tokens_per_sec:.2f} | Δ(ms): {time_per_batch_ms:.1f}ms")
             outputs['tokens_per_sec'] = tokens_per_sec
             outputs['Δ_ms'] = time_per_batch_ms
         
-        # Log loss metrics using the helper method
+        # Log loss metrics using the helper method.
         self._log_metrics(pl_module, 'val', outputs, batch[0].size(0), on_step=False, on_epoch=True)
 
     def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
-            # Handle the figure separately
+            # Handle the figure separately.
             if key == 'Codebook/figure':
                 if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
-                    # Only log every 20 global steps and only from rank 0
+                    # Only log every 20 global steps and only from rank 0.
                     pl_module.logger.experiment.log({
                         f'CodebookUsage/Usage_{phase}': wandb.Image(value)
                     })
-                plt.close(value)  # Close the figure to free memory
+                plt.close(value)  # Close the figure to free memory.
                 continue
 
-            # Handle the main loss separately
+            # Handle the main loss separately.
             if key == 'loss':
-                metric_name = f'{phase}/{key}'  # Default format
+                metric_name = f'{phase}/{key}'  # Default format.
                 pl_module.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=False)
                 continue
 
             # Handle metrics with categories - loss(CE), loss(MI), etc.
             if '(' in key and ')' in key:
-                category = key.split('(')[-1].split(')')[0]  # Extract category
+                category = key.split('(')[-1].split(')')[0]  # Extract category.
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
             elif key in ['tau', 'beta', 'mask_pct', 'max_mask_pct']:
-                metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
+                metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'.
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
             elif 'Codebook' in key:
                 metric_name = f'{key}_{phase}'
-            # Handle any remaining metrics
+            # Handle any remaining metrics.
             elif key.strip():
                 metric_name = f'{key.capitalize()}/{key}_{phase}'
             
@@ -330,8 +335,8 @@ class LoggingCallback(pl.Callback):
 
     def on_before_optimizer_step(self, trainer, pl_module, optimizer):
         """Log gradient norms at specified intervals."""
-        # Compute the 2-norm for each layer
-        # If using mixed precision, the gradients are already unscaled here
+        # Compute the 2-norm for each layer.
+        # If using mixed precision, the gradients are already unscaled here.
         if pl_module.global_rank == 0 and trainer.global_step % self.grad_log_interval == 0:
             norms = grad_norm(pl_module.model, norm_type=2)
             pl_module.log_dict(norms)

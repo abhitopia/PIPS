@@ -84,13 +84,14 @@
 - [x] Perplexity per code
 - [x] Histogram of code usage per code
 - [x] Log reconstruction images to the validation set
+- [x] Make cude synchronisation optional and configurable
+- [ ] Add option to choose whether to use betas loss or not
 - [ ] Log loss as a whole as well
 - [ ] Add ability to scale the CE loss
 - [ ] Verify data
 - [ ] Verify masked data and reconstruction loss
 - [ ] Adding padding token accuracy
 - [ ] Add padding weight schedule
-- [ ] Make cude synchronisation optional and configurable
 
 # Fix KLD Losses
 - [x] Read the paper
