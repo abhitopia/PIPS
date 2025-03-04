@@ -95,10 +95,6 @@ def new(
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     
-    # Sampling parameters (updated)
-    hardness: float = typer.Option(0.0, "--hardness", "--h", help="Target hardness value (negative = deterministic softmax, 0.0-1.0 = interpolated hardness)"),
-    reinMax: bool = typer.Option(False, "--reinmax", "--rm", help="Whether to use ReinMax sampling"),
-    
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
     learning_rate: float = typer.Option(1e-4, "--learning-rate", "--lr", help="Initial learning rate"),
@@ -108,8 +104,7 @@ def new(
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
     accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
     
-    # Split warmup steps into separate parameters
-    warmup_steps_hardness: int = typer.Option(150_000, "--warmup-steps-hardness", "--wsh", help="Hardness warmup steps"),
+    # Learning rate and other warmup / decay steps
     warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
     decay_steps_lr: int = typer.Option(None, "--decay-steps-lr", "--dsl", help="Learning rate decay steps, if not specified, will be set to max_steps - warmup_steps_lr"),
     warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
@@ -171,11 +166,8 @@ def new(
     config = ExperimentConfig(
         model_config=model_config,
         model_src=model_src,
-        hardness=hardness,
-        reinMax=reinMax,
         tau_start=tau_start,
         tau=tau,
-        hardness_start=0.0,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
@@ -185,7 +177,6 @@ def new(
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
         beta_kl=beta_kl,
-        warmup_steps_hardness=warmup_steps_hardness,
         warmup_steps_lr=warmup_steps_lr,
         decay_steps_lr=decay_steps_lr,
         warmup_steps_tau=warmup_steps_tau,

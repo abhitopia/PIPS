@@ -1,6 +1,6 @@
 # Reference: https://github.com/leequant761/Gumbel-VAE/
 
-# Main Reference : https://github.com/daandouwe/concrete-vae
+# Main Reference : https://github.com/daxandouwe/concrete-vae
 import argparse
 import os
 import numpy as np

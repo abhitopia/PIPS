@@ -54,10 +54,14 @@ class LoggingCallback(pl.Callback):
         self.train_batch_start_time = time.monotonic()
 
 
-    def compute_entropy(self, soft_code: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
+    def compute_entropy(self, log_alpha: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
         output_dict = {}
         # Calculate per-code perplexity
-        per_code_entropy = -(soft_code * torch.log(soft_code + eps)).sum(dim=-1)  # [B, N]
+
+        normalized_log_alpha = F.softmax(log_alpha, dim=-1)
+        probs = normalized_log_alpha.exp()
+
+        per_code_entropy = -(probs * torch.log(normalized_log_alpha + eps)).sum(dim=-1)  # [B, N]
         per_code_perplexity = torch.exp(per_code_entropy)  # [B, N]
 
         avg_perplexity = per_code_perplexity.mean()
@@ -72,7 +76,7 @@ class LoggingCallback(pl.Callback):
         
         if add_codebook_usage:
             # Calculate distribution for each code position
-            code_distribution = soft_code.mean(dim=0)  # [N, C]
+            code_distribution = probs.mean(dim=0)  # [N, C]
 
             # Create heatmap data
             # Convert to float32 before converting to numpy to avoid BFloat16 error
@@ -223,10 +227,10 @@ class LoggingCallback(pl.Callback):
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for GPU operations to finish
 
-        code = outputs.pop('code')
+        log_alpha = outputs.pop('log_alpha')
         x = outputs.pop('input')
         logits = outputs.pop('logits')
-        entropy_dict = self.compute_entropy(code, add_codebook_usage=pl_module.global_step % 20 == 0)
+        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=pl_module.global_step % 20 == 0)
         outputs.update(entropy_dict)
         
         # Visualize reconstructions
@@ -263,12 +267,12 @@ class LoggingCallback(pl.Callback):
         if torch.cuda.is_available():
             torch.cuda.synchronize()  # Wait for GPU operations to finish
 
-        code = outputs.pop('code')
+        log_alpha = outputs.pop('log_alpha')
         x = outputs.pop('input')
         logits = outputs.pop('logits')
 
         # Only log the codebook usage figure once per epoch
-        entropy_dict = self.compute_entropy(code, add_codebook_usage=not self.codebook_usage_figure_logged)
+        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=not self.codebook_usage_figure_logged)
         self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
@@ -311,7 +315,7 @@ class LoggingCallback(pl.Callback):
                 category = key.split('(')[-1].split(')')[0]  # Extract category
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['hardness', 'tau', 'beta', 'mask_pct', 'max_mask_pct']:
+            elif key in ['tau', 'beta', 'mask_pct', 'max_mask_pct']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
@@ -341,11 +345,6 @@ class ExperimentConfig:
     # Add seed parameter
     seed: int | None = None  # None means random seed
     
-    # Sampling parameters (updated)
-    hardness_start: float = 0.0
-    hardness: float = 0.0  # Target hardness value (During training keep it zero)
-    reinMax: bool = True
-
     # Initial values (renamed from initial_*)
     tau_start: float = 3.5  # this is difference from Dalle-E paper which starts with 1.0. This is to match vanilla softmax.
     tau: float = 0.0625 # 1/16 as per Dalle-E paper
@@ -364,13 +363,11 @@ class ExperimentConfig:
 
     
     # Schedule types
-    hardness_schedule_type: str = 'cosine'
     tau_schedule_type: str = 'cosine'
     beta_schedule_type: str = 'cosine'
     mask_schedule_type: str = 'cosine'
     
     # Replace single warmup_steps with separate warmups
-    warmup_steps_hardness: int = 150_000  # Same default as tau warmup
     warmup_steps_lr: int = 10_000
     decay_steps_lr: int | None = None
     warmup_steps_tau: int = 150_000
@@ -394,19 +391,11 @@ class ExperimentConfig:
         if self.accumulate_grad_batches < 1:
             raise ValueError("accumulate_grad_batches must be >= 1")
             
-        # Handle negative hardness by making it a constant schedule
-        if self.hardness < 0:
-            print(f"Setting hardness schedule to constant {self.hardness}")
-            print(f"Operating in deterministic (softmax) mode")
-            self.hardness_start = self.hardness
-            self.hardness_schedule_type = 'constant'
-            
         # Generate random seed if none provided
         if self.seed is None:
             self.seed = np.random.randint(0, 2**32 - 1)
 
         ## Make all warmup steps <= max_steps
-        self.warmup_steps_hardness = min(self.warmup_steps_hardness, self.max_steps)
         self.warmup_steps_tau = min(self.warmup_steps_tau, self.max_steps)
         self.warmup_steps_beta = min(self.warmup_steps_beta, self.max_steps)
         self.warmup_steps_mask_pct = min(self.warmup_steps_mask_pct, self.max_steps)
@@ -533,14 +522,6 @@ class DVAETrainingModule(pl.LightningModule):
         """Returns all scheduled values for the current step."""
         cfg = self.experiment_config
         
-        # Hardness schedule with its own warmup
-        hardness_schedule = Schedule.get_schedule(
-            initial_value=cfg.hardness_start,
-            target_value=cfg.hardness,
-            warmup_steps=cfg.warmup_steps_hardness,
-            schedule_type=cfg.hardness_schedule_type
-        )
-        
         # Temperature schedule with its own warmup
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.tau_start,
@@ -587,7 +568,6 @@ class DVAETrainingModule(pl.LightningModule):
         )
         
         return {
-            'hardness': hardness_schedule(step),
             'tau': tau_schedule(step),
             'beta(MI)': beta_mi_schedule(step),
             'beta(TC)': beta_tc_schedule(step),
@@ -599,8 +579,6 @@ class DVAETrainingModule(pl.LightningModule):
     def forward(self, x, q_z_marg=None, train=True, tc_relu=False):
         # Get current values for all scheduled parameters
         scheduled_values = self.get_scheduled_values(self.global_step)
-        hardness = scheduled_values['hardness']
-        reinMax = self.experiment_config.reinMax and hardness >= 0
 
         # Sample mask percentage for this batch
         mask_pct = 0.0  # No masking during validation
@@ -609,12 +587,10 @@ class DVAETrainingModule(pl.LightningModule):
             mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
         
         # Forward pass with current scheduled values and provided q_z_marg
-        logits, soft_code, losses, updated_q_z_marg = self.model.forward(
+        logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            hardness=torch.tensor(hardness, device=x.device),
-            reinMax=reinMax,
             tau=scheduled_values['tau']
         )
 
@@ -663,7 +639,7 @@ class DVAETrainingModule(pl.LightningModule):
             'percent(MASK)': mask_pct,
             'accuracy(TOKENS)': token_accuracy.detach(),
             'accuracy(SAMPLES)': sample_accuracy.detach(),
-            'code': soft_code.detach(),
+            'log_alpha': log_alpha.detach(),
             'logits': logits.detach(),  # Add logits to the output dictionary
             'input': x.detach(),  # Add input to the output dictionary
         }, updated_q_z_marg

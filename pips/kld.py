@@ -1,14 +1,25 @@
+from dataclasses import dataclass, field
 import math
 import torch
 from torch.distributions.relaxed_categorical import ExpRelaxedCategorical, RelaxedOneHotCategorical
 from torch.nn import functional as F
-from typing import NamedTuple
+from typing import Any
 
-class KLDLosses(NamedTuple):
-    overall_kl: torch.Tensor 
-    mutual_info: torch.Tensor = torch.tensor(0.0)
-    total_correlation: torch.Tensor = torch.tensor(0.0)
-    dimension_wise_kl: torch.Tensor = torch.tensor(0.0)
+@dataclass
+class KLDLosses:
+    overall_kl: torch.Tensor
+    mutual_info: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    total_correlation: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+    dimension_wise_kl: torch.Tensor = field(default_factory=lambda: torch.tensor(0.0))
+
+    def to_dict(self) -> dict:
+        return {
+            "kl_loss": self.overall_kl,
+            "mi_loss": self.mutual_info, 
+            "tc_loss": self.total_correlation, 
+            "dwkl_loss": self.dimension_wise_kl 
+        }
+
 
 def compute_decomposed_kld(
     log_alpha, 

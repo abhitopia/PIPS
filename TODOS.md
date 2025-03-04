@@ -84,6 +84,7 @@
 - [x] Perplexity per code
 - [x] Histogram of code usage per code
 - [x] Log reconstruction images to the validation set
+- [ ] Log loss as a whole as well
 - [ ] Add ability to scale the CE loss
 - [ ] Verify data
 - [ ] Verify masked data and reconstruction loss
@@ -93,9 +94,9 @@
 
 # Fix KLD Losses
 - [x] Read the paper
-- [ ] Use log_softmax for numerical stability
-- [ ] Use distributions if you have to
-- [ ] KLD loss uses non-temperature scaled logits (verify this)
+- [x] Use log_softmax for numerical stability
+- [x] Use distributions if you have to
+- [x] KLD loss uses non-temperature scaled logits (verify this)
 - [ ] Do I need to jointly model discrete and continuous codes?
 
 # Implement MNIST DVAE
