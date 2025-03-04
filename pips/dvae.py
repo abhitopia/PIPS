@@ -570,7 +570,7 @@ class GridDVAEConfig(Config):
     mask_idx: int | None = None
     pad_weight: float = 0.01,
     use_exp_relaxed: bool = False,
-    use_approximate_kld: bool = True
+    use_monte_carlo_kld: bool = False
 
 
     def __post_init__(self):
@@ -665,7 +665,7 @@ class GridDVAE(nn.Module):
     def __init__(self, config: GridDVAEConfig):
         super().__init__()
         self.config = config
-        self.use_approximate_kld = config.use_approximate_kld
+        self.use_monte_carlo_kld = config.use_monte_carlo_kld
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.pad_value = config.padding_idx  # Store padding value here
@@ -775,10 +775,11 @@ class GridDVAE(nn.Module):
 
         quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau)
 
-        if not self.use_approximate_kld:
+        if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean')
+            q_z_marg_updated = q_z_marg
         else:
-            kld_losses = approximate_kld_loss(log_alpha, reduction='mean')
+            kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
 
         decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
         
@@ -788,7 +789,7 @@ class GridDVAE(nn.Module):
             "ce_loss": ce_loss,  # Weight normalized loss
             **kld_losses.to_dict()
         }
-        return decoded_logits, log_alpha, losses, q_z_marg
+        return decoded_logits, log_alpha, losses, q_z_marg_updated
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 0.01) -> Tensor:
         """

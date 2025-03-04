@@ -95,6 +95,8 @@ def new(
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
+    use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
+    use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -162,6 +164,8 @@ def new(
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
         pad_weight=pad_weight,
+        use_exp_relaxed=use_exp_relaxed,
+        use_monte_carlo_kld=use_monte_carlo_kld,
     )
     
     config = ExperimentConfig(

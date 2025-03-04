@@ -85,6 +85,7 @@
 - [x] Histogram of code usage per code
 - [x] Log reconstruction images to the validation set
 - [x] Make cude synchronisation optional and configurable
+- [x] Add use_exp_relaxed flag and use_monte_carlo_kld flag to CLI
 - [ ] Add option to choose whether to use betas loss or not
 - [ ] Log loss as a whole as well
 - [ ] Add ability to scale the CE loss
