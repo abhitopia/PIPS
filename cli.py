@@ -136,18 +136,24 @@ def new(
     beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
     
+    # Training data options
     seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
-    limit_train_batches: int = typer.Option(None, "--limit-train-batches", "--ltb", help="Limit the number of training batches per epoch. None means use all batches."),
+    limit_training_samples: int = typer.Option(None, "--limit-samples", "--lts", help="Limit the number of training samples. None means use all samples."),
+    shuffle_train: bool = typer.Option(True, "--no-shuffle", help="Shuffle the training data. Default is True.", is_flag=True, flag_value=False),
 
-    # Common options
+    # Logging options
     viz_interval: int = get_common_options()["viz_interval"],
     val_check_interval: int = get_common_options()["val_check_interval"],
     debug: bool = get_common_options()["debug"],
-    compile_model: bool = get_common_options()["compile_model"],
     wandb_logging: bool = get_common_options()["wandb_logging"],
+
+    # Acceleration options
     matmul_precision: str = get_common_options()["matmul_precision"],
     precision: str = get_common_options()["precision"],
+    compile_model: bool = get_common_options()["compile_model"],
     device: str = get_common_options()["device"],
+
+    # Misc options
     lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
@@ -226,7 +232,8 @@ def new(
         lr_find=lr_find,
         acceleration=acceleration,
         val_check_interval=val_check_interval,
-        limit_train_batches=limit_train_batches,
+        limit_training_samples=limit_training_samples,
+        shuffle_train=shuffle_train,
         visualization_interval=viz_interval,
         grad_log_interval=viz_interval,
         wandb_logging=wandb_logging

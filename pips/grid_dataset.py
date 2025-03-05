@@ -166,9 +166,12 @@ class GRID_INPUT(NamedTuple):
     # positions: torch.Tensor = None # (B, S, 2) where S is the flattened size of the projected grid
 
 class GridDataset(Dataset):
-    def __init__(self, train: bool = True, cache_dir=Path(__file__).resolve().parent.parent / '.cache'):
+    def __init__(self, train: bool = True, 
+                 cache_dir=Path(__file__).resolve().parent.parent / '.cache', 
+                 max_samples: int = None):
         self.train = train
         self.cache_dir = cache_dir
+        self.max_samples = max_samples  # New parameter to limit available samples
         self.data = None
         
         # Store the length in a class variable (shared across all instances)
@@ -188,6 +191,9 @@ class GridDataset(Dataset):
             # print(f"Initialized data with {len(self.data)} grids for {'train' if self.train else 'val'}")
 
     def __len__(self):
+        # If max_samples declared, return the minimum between the actual dataset size and max_samples.
+        if self.max_samples is not None:
+            return min(self._shared_length, self.max_samples)
         return self._shared_length
 
     def __getitem__(self, idx):

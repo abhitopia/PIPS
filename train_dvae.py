@@ -747,26 +747,27 @@ class DVAETrainingModule(pl.LightningModule):
             }
         }
 
-def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool = True):
+def create_dataloaders(experiment_config: ExperimentConfig, shuffle_train: bool = True, limit_training_samples: int | None = None):
     """Create train and validation dataloaders based on experiment configuration.
     
     Args:
         experiment_config: Configuration containing batch_size and padding_idx
-        permute_train: If True, permute the training data
+        shuffle_train: If True, shuffle the training data
+        limit_training_samples: Maximum number of training samples to use. None means use all samples.
     """
     padding_idx = experiment_config.model_config.padding_idx
     batch_size = experiment_config.batch_size
 
-    print("permute_train:", permute_train)
+    print("shuffle_train:", shuffle_train)
 
     # Create training dataloader
     collate_fn_train = partial(GridDataset.collate_fn_project, 
                              pad_value=padding_idx, 
-                             permute=permute_train,  # Use the permute_train parameter
+                             permute=shuffle_train,  # Use the permute_train parameter
                              max_height=experiment_config.model_config.max_grid_height,
                              max_width=experiment_config.model_config.max_grid_width
                              )
-    train_dataset = GridDataset(train=True)
+    train_dataset = GridDataset(train=True, max_samples=limit_training_samples)
 
     num_workers = min(8, os.cpu_count() or 1)
     
@@ -774,7 +775,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
         train_dataset, 
         batch_size=batch_size, 
         collate_fn=collate_fn_train,
-        shuffle=permute_train,  ## True if training only if permute_train is True
+        shuffle=shuffle_train,  ## True if training only if permute_train is True
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
@@ -866,7 +867,8 @@ def train(
     resume_from: str | None = None,
     lr_find: bool = False,
     acceleration: AccelerationConfig | None = None,
-    limit_train_batches: int | None = None,
+    limit_training_samples: int | None = None,
+    shuffle_train: bool = True,
     save_visualizations: bool = False,
     grad_log_interval: int = 100,  # New parameter
     visualization_interval: int = 100,
@@ -889,7 +891,7 @@ def train(
     validation_disabled = val_check_interval is not None and val_check_interval < 0
    
     # Create dataloaders
-    train_loader, val_loader = create_dataloaders(experiment_config, permute_train=not validation_disabled)
+    train_loader, val_loader = create_dataloaders(experiment_config, shuffle_train=shuffle_train, limit_training_samples=limit_training_samples)
 
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")
@@ -970,7 +972,7 @@ def train(
         callbacks=callbacks,
         max_epochs=-1,
         max_steps=experiment_config.max_steps,
-        limit_train_batches=100 if lr_find else limit_train_batches,
+        limit_train_batches=100 if lr_find else None,
         limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
         val_check_interval=None if lr_find or validation_disabled else val_check_interval,
         enable_model_summary=not lr_find,

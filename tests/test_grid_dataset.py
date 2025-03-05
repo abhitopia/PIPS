@@ -226,4 +226,51 @@ def test_collate_fn_project_different_sizes():
     assert result.attributes[1]['is_test'] is True
     assert result.attributes[1]['is_input'] is False
 
+# Added new tests for the max_samples functionality
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_max_samples_lower(mock_load_grid_loaders):
+    """
+    Test that when max_samples is lower than the actual dataset length,
+    __len__ returns max_samples.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset with max_samples set to 5 (less than available).
+    dataset = GridDataset(train=True, max_samples=5)
+    # Since the underlying dataset has 10 samples, __len__ should return 5.
+    assert len(dataset) == 5
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_max_samples_higher(mock_load_grid_loaders):
+    """
+    Test that when max_samples is higher than the actual dataset length,
+    __len__ returns the actual dataset length.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset with max_samples set to 15 (more than available).
+    dataset = GridDataset(train=True, max_samples=15)
+    # __len__ should return the full dataset length (10 samples).
+    assert len(dataset) == 10
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_default_length(mock_load_grid_loaders):
+    """
+    Test that when max_samples is not specified, __len__ returns the full
+    dataset length.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset without specifying max_samples.
+    dataset = GridDataset(train=True)
+    # __len__ should return the full dataset length (10 samples).
+    assert len(dataset) == 10
+
 # Add more tests as needed... 
