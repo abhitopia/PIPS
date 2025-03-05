@@ -99,7 +99,7 @@
 - [x] Use distributions if you have to
 - [x] KLD loss uses non-temperature scaled logits (verify this)
 - [x] Nan on approximate KLD loss
-- [ ] Fix Monte Carlo KLD on compilation failure
+- [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
 - [ ] Do I need to jointly model discrete and continuous codes?
 
 # Implement MNIST DVAE

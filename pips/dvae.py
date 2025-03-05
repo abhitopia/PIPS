@@ -669,6 +669,7 @@ class GridDVAE(nn.Module):
         super().__init__()
         self.config = config
         self.use_monte_carlo_kld = config.use_monte_carlo_kld
+        self.use_exp_relaxed = config.use_exp_relaxed
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.pad_value = config.padding_idx  # Store padding value here
@@ -780,7 +781,7 @@ class GridDVAE(nn.Module):
         quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau)
 
         if self.use_monte_carlo_kld:
-            kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean')
+            kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
             q_z_marg_updated = q_z_marg
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')

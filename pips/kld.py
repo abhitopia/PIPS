@@ -149,6 +149,7 @@ def approximate_kld_loss(log_alpha, eps=1e-6, reduction='sum'):
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
 
+
 def monte_carlo_kld(log_alpha, tau, reduction='sum', use_exp_relaxed=False):
     """
     Compute KL divergence using Monte Carlo estimation.
@@ -166,30 +167,35 @@ def monte_carlo_kld(log_alpha, tau, reduction='sum', use_exp_relaxed=False):
     """
 
     #[B, N, C] -> [B, N] Batch Shape, [C] Event Shape
+    tau = torch.as_tensor(tau, device=log_alpha.device, dtype=log_alpha.dtype)
+    # assert tau > 0, f"Tau must be greater than 0, got {tau}"
 
-    codebook_size = log_alpha.shape[-1]
-    tau = tau.clone().detach() if isinstance(tau, torch.Tensor) else torch.tensor(tau)
     # Create posterior distribution from original logits
     # It is important that the temperature use the same temperature as the one used in the forward pass
     # Even for the prior distribution
+        
+    # Compute the uniform logit.
+    codebook_size = log_alpha.shape[-1]
+    # Using -log(codebook_size) explicitly signals that each category has probability 1/C after softmax.
+    prior_val = -torch.log(torch.tensor(codebook_size, device=log_alpha.device, dtype=log_alpha.dtype))
+    # Create uniform logits for the prior with the same shape as log_alpha.
+    prior_logits = torch.full_like(log_alpha, prior_val)
+
+    # Create the posterior distribution using the given logits.
+    # For the prior, we use uniform logits which result in a uniform probability (1/C per code).
     if use_exp_relaxed:
         v_dist = ExpRelaxedCategorical(tau, logits=log_alpha)
-        prior = ExpRelaxedCategorical(tau, probs=torch.ones(codebook_size, device=log_alpha.device))
+        prior = ExpRelaxedCategorical(tau, logits=prior_logits)
     else:
         v_dist = RelaxedOneHotCategorical(tau, logits=log_alpha)
-        prior = RelaxedOneHotCategorical(tau, probs=torch.ones(codebook_size, device=log_alpha.device))
+        prior = RelaxedOneHotCategorical(tau, logits=prior_logits)
     
     # Sample from the posterior distribution
-    z = v_dist.rsample() # relaxed sample from the posterior distribution
+    z = v_dist.rsample()  # relaxed sample from the posterior distribution
     
     # Compute KL divergence using Monte Carlo estimation
-    n_batch = log_alpha.shape[0]
-    n_latent = log_alpha.shape[1]
-
-    prior_expanded = prior.expand(torch.Size([n_batch, n_latent]))
-
     # [B, N, C] -> [B, N] (Batch Shape) because it collapsed on the event shape (even for relaxed sample z)
-    kld = (v_dist.log_prob(z) - prior_expanded.log_prob(z)) # [B, N] (Batch Shape)
+    kld = (v_dist.log_prob(z) - prior.log_prob(z)) # [B, N] (Batch Shape)
     
     if reduction == 'sum':
         return KLDLosses(overall_kl=kld.sum())
