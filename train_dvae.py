@@ -58,7 +58,7 @@ class LoggingCallback(pl.Callback):
     def compute_entropy(self, log_alpha: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
         output_dict = {}
         # Calculate per-code perplexity
-        normalized_log_alpha = F.softmax(log_alpha, dim=-1)
+        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
         probs = normalized_log_alpha.exp()
 
         per_code_entropy = -(probs * torch.log(normalized_log_alpha + eps)).sum(dim=-1)  # [B, N]
