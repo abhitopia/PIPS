@@ -260,9 +260,12 @@ class LoggingCallback(pl.Callback):
     def on_validation_epoch_start(self, trainer, pl_module):
         self.codebook_usage_figure_logged = False
         # Randomly select a batch index to visualize during this validation epoch.
-        if trainer.val_dataloaders is not None:
-            val_dataloader = trainer.val_dataloaders[0]
+        if trainer.val_dataloaders is not None: 
+            val_dataloader = trainer.val_dataloaders[0] if len(trainer.val_dataloaders) > 0 else trainer.val_dataloaders
             self.val_batch_to_visualize = np.random.randint(0, len(val_dataloader))
+        else:
+            # No validation dataloader available.
+            self.val_batch_to_visualize = None
 
     def on_validation_batch_start(self, trainer, pl_module, batch, batch_idx, dataloader_idx=None):
         # Record the start time of the validation batch.

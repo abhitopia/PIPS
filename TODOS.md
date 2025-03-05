@@ -99,6 +99,17 @@
 - [x] Use distributions if you have to
 - [x] KLD loss uses non-temperature scaled logits (verify this)
 - [x] Nan on approximate KLD loss
+- [ ] Perplexity is Inf
+- [ ] fix following
+```
+    skipping cudagraphs due to skipping cudagraphs due to cpu device (primals_88). Found from : 
+   File "/teamspace/studios/this_studio/PIPS/pips/dvae.py", line 782, in forward
+    quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau)
+  File "/teamspace/studios/this_studio/PIPS/pips/dvae.py", line 518, in forward
+    z = self.sample(log_alpha, tau) # [B, N, C]
+  File "/teamspace/studios/this_studio/PIPS/pips/dvae.py", line 493, in sample
+    tau = torch.as_tensor(temp, device=log_alpha.device, dtype=log_alpha.dtype)
+```
 - [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
 - [ ] Do I need to jointly model discrete and continuous codes?
 
