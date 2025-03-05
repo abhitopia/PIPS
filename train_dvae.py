@@ -850,7 +850,7 @@ def train(
     project_name: str,
     checkpoint_dir: Path,
     debug_mode: bool = False,
-    debug_logging: bool = True,
+    wandb_logging: bool = True,
     val_check_interval: int | None = None,
     resume_from: str | None = None,
     lr_find: bool = False,
@@ -895,7 +895,7 @@ def train(
         log_model=False,
         save_dir=checkpoint_dir,
         reinit=True,
-        mode="disabled" if debug_mode and not debug_logging else "online",
+        mode="disabled" if not wandb_logging else "online",
         config=experiment_config.to_dict()
     )
 
@@ -910,12 +910,12 @@ def train(
         num_grids_to_visualize=num_grids_to_visualize  # Pass the number of grids to visualize
     )
     custom_progress_bar = CustomRichProgressBar()
-    gradient_check_callback = GradientCheckCallback()
 
     # Only add checkpoint callbacks if validation is enabled
     callbacks = [logging_callback, custom_progress_bar]
 
     # if debug_mode:
+    #     gradient_check_callback = GradientCheckCallback()
     #     callbacks.append(gradient_check_callback)
     
     if not validation_disabled:

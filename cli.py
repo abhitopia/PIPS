@@ -82,6 +82,8 @@ def get_common_options():
             help="Number of steps between visualizations and gradient logging"
         ),
 
+        "wandb_logging": typer.Option(True, "--no-wandb", help="Disable WandB logging", is_flag=True, flag_value=False),
+
     }
 
 @dvae_app.command("train")
@@ -142,6 +144,7 @@ def new(
     val_check_interval: int = get_common_options()["val_check_interval"],
     debug: bool = get_common_options()["debug"],
     compile_model: bool = get_common_options()["compile_model"],
+    wandb_logging: bool = get_common_options()["wandb_logging"],
     matmul_precision: str = get_common_options()["matmul_precision"],
     precision: str = get_common_options()["precision"],
     device: str = get_common_options()["device"],
@@ -225,7 +228,8 @@ def new(
         val_check_interval=val_check_interval,
         limit_train_batches=limit_train_batches,
         visualization_interval=viz_interval,
-        grad_log_interval=viz_interval
+        grad_log_interval=viz_interval,
+        wandb_logging=wandb_logging
     )
 
 
@@ -244,6 +248,7 @@ def resume(
     lr_find: bool = get_common_options()["lr_find"],
     val_check_interval: int = get_common_options()["val_check_interval"],
     viz_interval: int = get_common_options()["viz_interval"],
+    wandb_logging: bool = get_common_options()["wandb_logging"],
 ):
     """Resume training from a checkpoint."""
     
@@ -298,7 +303,8 @@ def resume(
         val_check_interval=val_check_interval,
         lr_find=lr_find,
         visualization_interval=viz_interval,
-        grad_log_interval=viz_interval
+        grad_log_interval=viz_interval,
+        wandb_logging=wandb_logging
     )
 
 
