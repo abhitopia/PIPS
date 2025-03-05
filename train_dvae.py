@@ -61,7 +61,7 @@ class LoggingCallback(pl.Callback):
         normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
         probs = normalized_log_alpha.exp()
 
-        per_code_entropy = -(probs * torch.log(normalized_log_alpha + eps)).sum(dim=-1)  # [B, N]
+        per_code_entropy = -(probs * normalized_log_alpha).sum(dim=-1)  # [B, N]
         per_code_perplexity = torch.exp(per_code_entropy)  # [B, N]
 
         avg_perplexity = per_code_perplexity.mean()
