@@ -796,7 +796,7 @@ def create_dataloaders(experiment_config: ExperimentConfig, permute_train: bool 
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
-        drop_last=False
+        drop_last=True # Drop last batch to avoid errors on compilation
     )
 
     print("Number of batches in training set: ", len(train_loader))
