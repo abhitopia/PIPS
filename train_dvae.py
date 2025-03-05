@@ -260,8 +260,16 @@ class LoggingCallback(pl.Callback):
     def on_validation_epoch_start(self, trainer, pl_module):
         self.codebook_usage_figure_logged = False
         # Randomly select a batch index to visualize during this validation epoch.
-        if trainer.val_dataloaders is not None: 
-            val_dataloader = trainer.val_dataloaders[0] if len(trainer.val_dataloaders) > 0 else trainer.val_dataloaders
+
+        val_dataloader = None
+        if trainer.val_dataloaders is not None:
+            if isinstance(trainer.val_dataloaders, list):
+                val_dataloader = trainer.val_dataloaders[0] if len(trainer.val_dataloaders) > 0 else None
+            else:
+                # In some PyTorch Lightning versions, val_dataloaders might be a single dataloader
+                val_dataloader = trainer.val_dataloaders
+        
+        if val_dataloader is not None:
             self.val_batch_to_visualize = np.random.randint(0, len(val_dataloader))
         else:
             # No validation dataloader available.
