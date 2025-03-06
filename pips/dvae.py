@@ -597,8 +597,8 @@ class GridDVAEConfig(Config):
         self.n_pos = self.max_grid_height * self.max_grid_width
         
         assert is_power_of_two(self.n_pos), "Product of max_grid_height and max_grid_width must be a power of 2"
-        assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"
-        assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
+        # assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"
+        # assert self.n_pos % self.n_codes == 0, "Number of positions must be divisible by the number of codes"
 
         # Set default padding_idx and eos_idx if not provided
         if self.padding_idx is None:
