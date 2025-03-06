@@ -542,22 +542,27 @@ class GumbelCodebook(nn.Module):
 
 @dataclass
 class GridDVAEConfig(Config):
-    """Configuration class for GridDVAE model.
+    """
+    Configuration class for GridDVAE model.
     
     Attributes:
         n_dim (int): Model dimension
         n_head (int): Number of attention heads
-        n_base_layers (int): Number of base transformer layers
-        n_latent_layers (int): Number of latent transformer layers
+        n_grid_layer (int): Number of base transformer layers
+        n_latent_layer (int): Number of latent transformer layers
         n_codes (int): Number of discrete codes (must be power of 2)
         codebook_size (int): Size of codebook (default: 512)
-        rope_base (int): Base for rotary position encoding (default: 10_000)
+        rope_base (int): Base for geometric progression in angle computation (default: 10_000)
         dropout (float): Dropout probability (default: 0.0)
         max_grid_height (int): Maximum grid height (default: 32)
         max_grid_width (int): Maximum grid width (default: 32)
         n_vocab (int): Vocabulary size (default: 16)
         padding_idx (int | None): Index for padding token (default: n_vocab - 1)
-        eos_idx (int | None): Index for end-of-sequence token (default: n_vocab - 2)
+        mask_idx (int | None): Index for masking token (default: n_vocab - 2)
+        pad_weight (float): Weight for pad token loss (default: 0.01)
+        use_exp_relaxed (bool): Whether to use exponentially relaxed Gumbel-Softmax (default: False)
+        use_monte_carlo_kld (bool): Whether to use Monte Carlo KLD (default: False)
+        gamma (float): Focal loss gamma parameter. With \(\gamma=0\) there is no focal modulation, defaulting to 2.0.
     """
     n_dim: int
     n_head: int
@@ -574,7 +579,8 @@ class GridDVAEConfig(Config):
     mask_idx: int | None = None
     pad_weight: float = 0.01,
     use_exp_relaxed: bool = False,
-    use_monte_carlo_kld: bool = False
+    use_monte_carlo_kld: bool = False,
+    gamma: float = 2.0
 
 
     def __post_init__(self):
@@ -671,6 +677,7 @@ class GridDVAE(nn.Module):
         self.config = config
         self.use_monte_carlo_kld = config.use_monte_carlo_kld
         self.use_exp_relaxed = config.use_exp_relaxed
+        self.gamma = config.gamma
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.pad_value = config.padding_idx  # Store padding value here
@@ -790,7 +797,7 @@ class GridDVAE(nn.Module):
         
         decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
 
-        ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value)
+        ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
 
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
@@ -798,38 +805,54 @@ class GridDVAE(nn.Module):
         }
         return decoded_logits, log_alpha, losses, q_z_marg_updated
 
-    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 0.01) -> Tensor:
+    def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 1.0, gamma: float = 0.0) -> Tensor:
         """
-        Compute the reconstruction loss using cross-entropy per sample, with pad tokens weighted differently.
+        Compute the reconstruction loss using focal loss weighted cross-entropy per sample, with 
+        padded tokens handled separately.
+
+        When gamma == 0.0, the focal modulation factor is effectively 1 (i.e. standard cross-entropy loss).
+        This avoids unnecessary computation.
 
         Args:
-            decoded_logits (Tensor): Predicted logits of shape [B, S, V]
-            x (Tensor): Target tokens of shape [B, S]
-            pad_value (int): Token value for padding tokens
-            pad_weight (float): Weight for pad token loss (default: 0.01 = 1% of normal weight)
+            decoded_logits (Tensor): Predicted logits of shape [B, S, V].
+            x (Tensor): Target tokens of shape [B, S].
+            pad_value (int): Token value for padding tokens.
+            pad_weight (float): Weight for pad token loss. Valid tokens have weight 1.0.
+            gamma (float): Focusing parameter for focal loss. If 0.0, no focal modulation is applied (default: 0.0).
 
         Returns:
-            Tensor: Average reconstruction loss per sample, with weighted pad tokens
+            Tensor: Average reconstruction loss per sample.
         """
-        # Create a weight tensor where pad tokens have pad_weight and others have 1.0
-        weights = torch.where(x == pad_value, 
-                            torch.full_like(x, pad_weight, dtype=decoded_logits.dtype),
-                            torch.ones_like(x, dtype=decoded_logits.dtype))
+        # Create a weight tensor: assign pad tokens pad_weight, and valid tokens a weight of 1.0.
+        weights = torch.where(
+            x == pad_value,
+            torch.full_like(x, pad_weight, dtype=decoded_logits.dtype),
+            torch.ones_like(x, dtype=decoded_logits.dtype)
+        )
         
-        # Compute per-token cross entropy loss
-        per_token_loss = F.cross_entropy(
+        # Compute the standard cross-entropy loss per token without reduction.
+        ce_loss = F.cross_entropy(
             decoded_logits.view(-1, decoded_logits.size(-1)),
             x.view(-1),
             reduction='none'
         )
         
-        # Apply weights and normalize by the sum of weights per sample
-        weighted_loss = (per_token_loss * weights.view(-1)).sum()
+        # If gamma > 0, apply focal loss modulation; otherwise, use the cross-entropy loss directly.
+        if gamma > 0.0:
+            # Estimate the probability for the true class: p_t ≈ exp(-ce_loss)
+            p_t = torch.exp(-ce_loss)
+            # Compute the focal modulation factor: (1 - p_t)^gamma.
+            modulating_factor = (1 - p_t) ** gamma
+            loss = modulating_factor * ce_loss
+        else:
+            loss = ce_loss
+        
+        # Compute the total loss: each token's loss is scaled by its corresponding weight.
+        total_loss = (loss * weights.view(-1)).sum()
+        # Normalize by the sum of static weights (this includes valid and pad tokens).
         total_weight = weights.sum()
         
-        # Normalize by the total weight instead of batch size
-        normalized_loss = weighted_loss / total_weight
-        
+        normalized_loss = total_loss / total_weight
         return normalized_loss
 
 

@@ -104,6 +104,7 @@ def new(
     n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
+    gamma: float = typer.Option(2.0, "--gamma", "--g", help="Focal loss gamma parameter (default: 2.0)"),
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
     use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
@@ -179,6 +180,7 @@ def new(
         codebook_size=codebook_size,
         rope_base=10000,
         dropout=dropout,
+        gamma=gamma,
         n_vocab=16,  # Fixed for grid world
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
