@@ -126,7 +126,8 @@ class RoPE2D(nn.Module):
         dim (int): Total embedding dimension (must be even).
         max_height (int): Maximum expected value for the first positional dimension.
         max_width (int): Maximum expected value for the second positional dimension.
-        base (int): Base for geometric progression in angle computation.
+        base_height (int): Base for geometric progression in angle computation for the height dimension.
+        base_width (int): Base for geometric progression in angle computation for the width dimension.
     """
 
     def __init__(
@@ -134,7 +135,8 @@ class RoPE2D(nn.Module):
         dim: int,
         max_height: int = 1024,
         max_width: int = 1024,
-        base: int = 10_000,
+        base_height: int = 10_000,
+        base_width: int = 10_000,
     ) -> None:
         super().__init__()
         assert dim % 2 == 0, "Embedding dimension 'dim' must be even to split for 2D RoPE."
@@ -142,16 +144,16 @@ class RoPE2D(nn.Module):
         self.dim = dim
         self.half_dim = dim // 2
 
-        # Initialize two RotaryPositionalEmbeddings for each positional dimension
+        # Initialize two RotaryPositionalEmbeddings for each positional dimension with separate bases
         self.rope_height = RotaryPositionalEmbeddings(
             dim=self.half_dim,
             max_seq_len=max_height,
-            base=base
+            base=base_height
         )
         self.rope_width = RotaryPositionalEmbeddings(
             dim=self.half_dim,
             max_seq_len=max_width,
-            base=base
+            base=base_width
         )
 
     @autocast('cuda', enabled=False)
@@ -552,7 +554,8 @@ class GridDVAEConfig(Config):
         n_latent_layer (int): Number of latent transformer layers
         n_codes (int): Number of discrete codes (must be power of 2)
         codebook_size (int): Size of codebook (default: 512)
-        rope_base (int): Base for geometric progression in angle computation (default: 10_000)
+        rope_base_height (int): Base for the geometric progression in angle computation for height (default: 10007)
+        rope_base_width (int): Base for the geometric progression in angle computation for width (default: 5003)
         dropout (float): Dropout probability (default: 0.0)
         max_grid_height (int): Maximum grid height (default: 32)
         max_grid_width (int): Maximum grid width (default: 32)
@@ -570,7 +573,8 @@ class GridDVAEConfig(Config):
     n_latent_layer: int
     n_codes: int
     codebook_size: int = 512
-    rope_base: int = 10_000
+    rope_base_height: int = 10007  # ~10k, prime
+    rope_base_width: int = 5003    # ~5k, prime
     dropout: float = 0.0
     max_grid_height: int = 32
     max_grid_width: int = 32
@@ -620,7 +624,6 @@ class GridDVAEConfig(Config):
         Returns:
             dict: Dictionary containing all config values, including computed attributes
         """
-        # Get all explicitly defined fields
         base_dict = {
             'n_dim': self.n_dim,
             'n_head': self.n_head,
@@ -628,7 +631,8 @@ class GridDVAEConfig(Config):
             'n_latent_layer': self.n_latent_layer,
             'n_codes': self.n_codes,
             'codebook_size': self.codebook_size,
-            'rope_base': self.rope_base,
+            'rope_base_height': self.rope_base_height,
+            'rope_base_width': self.rope_base_width,
             'dropout': self.dropout,
             'max_grid_height': self.max_grid_height,
             'max_grid_width': self.max_grid_width,

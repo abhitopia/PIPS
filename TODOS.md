@@ -106,6 +106,7 @@
 - [x] Measure avg grid information content
 - [x] Add focal loss
 - [x] Remove power of 2 restriction on the number of latent codes   
+- [x] Different Rope base for different axes
 - [ ] fix following
 ```
     skipping cudagraphs due to skipping cudagraphs due to cpu device (primals_88). Found from : 
