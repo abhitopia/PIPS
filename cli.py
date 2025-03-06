@@ -178,7 +178,6 @@ def new(
         n_latent_layer=n_latent_layer,
         n_codes=n_codes,
         codebook_size=codebook_size,
-        rope_base=10000,
         dropout=dropout,
         gamma=gamma,
         n_vocab=16,  # Fixed for grid world
