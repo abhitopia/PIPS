@@ -300,7 +300,7 @@ def small_config():
         'mask_idx': None,
         'pad_weight': 0.01,
         'use_exp_relaxed': False,
-        'use_approximate_kld': True
+        'use_monte_carlo_kld': False
     }
     return GridDVAEConfig(**config_dict)
 
@@ -349,7 +349,7 @@ def test_reconstruction_loss():
         mask_idx=n_vocab - 2,
         pad_weight=0.01,
         use_exp_relaxed=False,
-        use_approximate_kld=True
+        use_monte_carlo_kld=False
     )
     model = GridDVAE(config)
     loss = model.reconstruction_loss(decoded_logits, x, pad_value=pad_value, pad_weight=0.01)
@@ -417,10 +417,13 @@ def test_griddvae_decode(small_config):
 
 def test_griddvae_qz_marg_propagation(small_config):
     """Test that the provided q_z_marg is passed through unchanged in the forward method."""
+    # Override to force the Monte Carlo KLD branch so that q_z_marg is unmodified.
+    small_config.use_monte_carlo_kld = True
     model = GridDVAE(small_config)
     batch = 2
-    S = small_config.n_pos
+    S = small_config.n_pos  # n_pos = max_grid_height * max_grid_width (e.g. 16)
     x = torch.randint(0, small_config.n_vocab, (batch, S))
-    dummy_q_z_marg = torch.randn(batch, S)
+    # Create dummy q_z_marg with the expected shape [n_codes, codebook_size]
+    dummy_q_z_marg = torch.randn(small_config.n_codes, small_config.codebook_size)
     _, _, _, q_z_marg_out = model(x, q_z_marg=dummy_q_z_marg, tau=0.5, mask_percentage=0.0)
     assert torch.equal(dummy_q_z_marg, q_z_marg_out)

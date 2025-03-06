@@ -103,8 +103,8 @@
 - [x] Add ability to limit the number of samples in the dataset
 - [x] Change the cli to use the new max_training_samples parameter instead of limit_train_batches
 - [x] Allow configurable permutation
+- [x] Measure avg grid information content
 - [ ] Add focal loss
-- [ ] Measure avg grid information content
 - [ ] fix following
 ```
     skipping cudagraphs due to skipping cudagraphs due to cpu device (primals_88). Found from : 

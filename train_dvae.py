@@ -28,6 +28,9 @@ import sys
 import matplotlib.pyplot as plt
 from pips.misc.acceleration_config import AccelerationConfig
 from pips.misc.gradient_check_callback import GradientCheckCallback
+import zlib
+import random
+from rich import print
 
 class LoggingCallback(pl.Callback):
     
@@ -747,33 +750,68 @@ class DVAETrainingModule(pl.LightningModule):
             }
         }
 
-def create_dataloaders(experiment_config: ExperimentConfig, shuffle_train: bool = True, limit_training_samples: int | None = None):
-    """Create train and validation dataloaders based on experiment configuration.
-    
-    Args:
-        experiment_config: Configuration containing batch_size and padding_idx
-        shuffle_train: If True, shuffle the training data
-        limit_training_samples: Maximum number of training samples to use. None means use all samples.
-    """
-    padding_idx = experiment_config.model_config.padding_idx
-    batch_size = experiment_config.batch_size
+def create_dataloaders(
+    batch_size: int,
+    padding_idx: int,
+    max_grid_height: int,
+    max_grid_width: int,
+    shuffle_train: bool = True,
+    limit_training_samples: int | None = None,
+    num_measure_samples: int = 100  # Number of samples to measure average information in bits
+):
+    """Create train and validation dataloaders and measure average grid information bits.
 
+    Args:
+        batch_size: Number of samples per batch.
+        padding_idx: Padding index to be used in the grids.
+        max_grid_height: Maximum grid height.
+        max_grid_width: Maximum grid width.
+        shuffle_train: If True, shuffle the training data.
+        limit_training_samples: Maximum number of training samples to use. None means use all samples.
+        num_measure_samples: Number of grid samples to use for measuring average compressed bits.
+    """
     print("shuffle_train:", shuffle_train)
 
     # Create training dataloader
-    collate_fn_train = partial(GridDataset.collate_fn_project, 
-                             pad_value=padding_idx, 
-                             permute=shuffle_train,  # Use the permute_train parameter
-                             max_height=experiment_config.model_config.max_grid_height,
-                             max_width=experiment_config.model_config.max_grid_width
-                             )
+    collate_fn_train = partial(
+        GridDataset.collate_fn_project,
+        pad_value=padding_idx,
+        permute=shuffle_train,  # Use the permute_train parameter
+        max_height=max_grid_height,
+        max_width=max_grid_width
+    )
+
     train_dataset = GridDataset(train=True, max_samples=limit_training_samples)
 
+    # Create validation dataset
+    collate_fn_val = partial(
+        GridDataset.collate_fn_project,
+        pad_value=padding_idx,
+        permute=False,
+        max_height=max_grid_height,
+        max_width=max_grid_width
+    )
+    val_dataset = GridDataset(train=False)
+
+    # Measure average compressed bits directly from the datasets (not using the dataloader)
+    train_stats = measure_bits_stats_from_dataset(train_dataset, num_samples=10000)
+    val_stats = measure_bits_stats_from_dataset(val_dataset, num_samples=10000)
+
+
+    # The reset is necessary so that the dataset is not cached in the workers.
+    train_dataset.unload()
+    val_dataset.unload()
+
+    # Print stats
+    print("Train stats:", train_stats)
+    print("Val stats:", val_stats)
+
+    # Proceed to create DataLoader objects for training and validation
     num_workers = min(8, os.cpu_count() or 1)
     
     train_loader = DataLoader(
-        train_dataset, 
-        batch_size=batch_size, 
+        train_dataset,
+        batch_size=batch_size,
         collate_fn=collate_fn_train,
         shuffle=shuffle_train,  ## True if training only if permute_train is True
         num_workers=num_workers,
@@ -782,22 +820,15 @@ def create_dataloaders(experiment_config: ExperimentConfig, shuffle_train: bool 
         drop_last=True
     )
 
-    # Create validation dataloader
-    collate_fn_val = partial(GridDataset.collate_fn_project, 
-                             pad_value=padding_idx, 
-                             permute=False,
-                             max_height=experiment_config.model_config.max_grid_height,
-                             max_width=experiment_config.model_config.max_grid_width)
-    val_dataset = GridDataset(train=False)
     val_loader = DataLoader(
-        val_dataset, 
+        val_dataset,
         batch_size=batch_size,
         collate_fn=collate_fn_val,
-        shuffle=False, 
+        shuffle=False,
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
-        drop_last=True # Drop last batch to avoid errors on compilation
+        drop_last=True  # Drop last batch to avoid errors on compilation
     )
 
     print("Number of batches in training set: ", len(train_loader))
@@ -805,6 +836,70 @@ def create_dataloaders(experiment_config: ExperimentConfig, shuffle_train: bool 
 
     return train_loader, val_loader
 
+
+def measure_bits_stats_from_dataset(dataset: GridDataset, num_samples: int) -> dict:
+    """
+    Measures the compressed bits for grids in the dataset by selecting random samples,
+    then computes statistics: overall mean, median, standard deviation, and a trimmed mean
+    (mean computed on values within 2 standard deviations of the overall mean).
+
+    Args:
+        dataset: A GridDataset where each item has an 'array' attribute representing the grid.
+        num_samples: The number of grid samples to use for the measurement.
+    
+    Returns:
+        A dictionary with the following keys:
+            'mean'         : Mean of all sample bits.
+            'median'       : Median of all sample bits.
+            'std'          : Standard deviation of all sample bits.
+            'lower_bound'  : Lower bound of the range within 2 standard deviations of the overall mean.
+            'upper_bound'  : Upper bound of the range within 2 standard deviations of the overall mean.
+    """
+    import numpy as np
+
+    sample_bits = []
+    total_samples = min(num_samples, len(dataset))
+    # Generate a list of random indices from the dataset
+    indices = random.sample(range(len(dataset)), total_samples)
+    
+    for i in indices:
+        grid = dataset[i].array
+        # If grid is a PyTorch tensor, convert it to a NumPy array.
+        grid_array = grid.numpy() if hasattr(grid, "numpy") else grid
+        bits = compress_grid(grid_array)
+        sample_bits.append(bits)
+    
+    sample_bits_arr = np.array(sample_bits)
+    overall_mean = np.mean(sample_bits_arr)
+    overall_median = np.median(sample_bits_arr)
+    overall_std = np.std(sample_bits_arr)
+    
+    # Filter values that fall within 2 standard deviations of the overall mean
+    lower_bound = max(0, overall_mean - 2 * overall_std)
+    upper_bound = overall_mean + 2 * overall_std    
+
+    return {
+        'mean': float(overall_mean) ,
+        'median': float(overall_median),
+        'std': float(overall_std),
+        'lower_bound': float(lower_bound),
+        'upper_bound': float(upper_bound)
+    } 
+
+
+def compress_grid(grid):
+    """
+    Compresses a grid using zlib and returns its size in bits.
+    
+    Args:
+        grid: A grid object with a tobytes() method.
+        
+    Returns:
+        The size of the compressed grid in bits.
+    """
+    grid_bytes = grid.tobytes()
+    compressed = zlib.compress(grid_bytes)
+    return len(compressed) * 8  # bits
 
 def load_model_weights(
     model: pl.LightningModule,
@@ -891,7 +986,14 @@ def train(
     validation_disabled = val_check_interval is not None and val_check_interval < 0
    
     # Create dataloaders
-    train_loader, val_loader = create_dataloaders(experiment_config, shuffle_train=shuffle_train, limit_training_samples=limit_training_samples)
+    train_loader, val_loader = create_dataloaders(
+        batch_size=experiment_config.batch_size,
+        padding_idx=experiment_config.model_config.padding_idx,
+        max_grid_height=experiment_config.model_config.max_grid_height,
+        max_grid_width=experiment_config.model_config.max_grid_width,
+        shuffle_train=shuffle_train,
+        limit_training_samples=limit_training_samples
+    )
 
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")

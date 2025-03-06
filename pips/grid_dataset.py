@@ -174,13 +174,20 @@ class GridDataset(Dataset):
         self.max_samples = max_samples  # New parameter to limit available samples
         self.data = None
         
-        # Store the length in a class variable (shared across all instances)
+        # Initialize shared length if not present.
         if not hasattr(self, '_shared_length'):
-            # Quick load just to get length using memory mapping
-            loaders = TRAIN_GRID_LOADERS if train else VAL_GRID_LOADERS
-            temp_data = load_grid_loaders(loaders, cache_dir, verbose=True)
-            self._shared_length = len(temp_data)
-            del temp_data  # Clean up the temporary mapping
+            self._init_len_without_data()
+
+    def _init_len_without_data(self):
+        """
+        Initialize the shared length without fully loading the data.
+        This function quickly loads the grid data (using memory mapping)
+        to compute the length and stores it as _shared_length.
+        """
+        loaders = TRAIN_GRID_LOADERS if self.train else VAL_GRID_LOADERS
+        temp_data = load_grid_loaders(loaders, self.cache_dir, verbose=True)
+        self._shared_length = len(temp_data)
+        del temp_data  # Clean up the temporary mapping
 
     def _initialize_data(self):
         """Initialize the data for this process"""
@@ -324,6 +331,14 @@ class GridDataset(Dataset):
         flattened_positions = torch.tensor(flattened_positions, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
 
         return GRID_INPUT(grids=flattened_grids, attributes=attributes, positions=flattened_positions)
+
+    def unload(self):
+        """
+        Reset the internal state of the dataset to simulate a never-initialized condition.
+        After calling this, the dataset will behave as if neither __len__ nor __getitem__
+        has ever been called.
+        """
+        self.data = None
 
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):
