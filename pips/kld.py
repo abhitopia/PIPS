@@ -116,7 +116,7 @@ def compute_decomposed_kld(
     ), running_q_marginals
 
 
-def approximate_kld_loss(log_alpha, eps=1e-6, reduction='sum'):
+def approximate_kld_loss(log_alpha: torch.Tensor, eps: float = 1e-6, reduction: str = 'sum') -> KLDLosses:
     """
     Compute KL divergence using Eric Jang's trick. 
     Here we completely disregard the sample (relaxed value using temperature) of the distribution
@@ -150,30 +150,26 @@ def approximate_kld_loss(log_alpha, eps=1e-6, reduction='sum'):
         raise ValueError(f"Invalid reduction: {reduction}")
 
 
-def monte_carlo_kld(log_alpha, tau, reduction='sum', use_exp_relaxed=False):
+def monte_carlo_kld(log_alpha: torch.Tensor, tau: torch.Tensor, reduction: str = 'sum', use_exp_relaxed: bool = False) -> KLDLosses:
     """
     Compute KL divergence using Monte Carlo estimation.
     In this case, we create distributions from the original logits, sample,
     and then use the probability density functions to obtain the sample estimate.
 
-    If we want even better estimate, we can call this function multiple times and average the results.
+    If we want an even better estimate, we can call this function multiple times and average the results.
     
     Args:
-        log_alpha: Original logits from forward pass [B, N, C]
-        tau: Temperature parameter
+        log_alpha (Tensor): Original logits from forward pass [B, N, C]
+        tau (Tensor): Temperature parameter as a scalar tensor.
+        reduction (str, optional): Reduction method, one of 'sum', 'mean', or 'batchmean'. Default is 'sum'.
+        use_exp_relaxed (bool, optional): Whether to use ExpRelaxedCategorical. Default is False.
         
     Returns:
-        KL divergence loss
+        KLDLosses: A dataclass containing the KL divergence losses.
     """
+    # Ensure tau is a valid positive scalar tensor.
+    assert tau > 0.0, f"Temperature must be greater than 0.0, got {tau.item()}"
 
-    #[B, N, C] -> [B, N] Batch Shape, [C] Event Shape
-    tau = torch.as_tensor(tau, device=log_alpha.device, dtype=log_alpha.dtype)
-    # assert tau > 0, f"Tau must be greater than 0, got {tau}"
-
-    # Create posterior distribution from original logits
-    # It is important that the temperature use the same temperature as the one used in the forward pass
-    # Even for the prior distribution
-        
     # Compute the uniform logit.
     codebook_size = log_alpha.shape[-1]
     # Using -log(codebook_size) explicitly signals that each category has probability 1/C after softmax.
@@ -181,8 +177,7 @@ def monte_carlo_kld(log_alpha, tau, reduction='sum', use_exp_relaxed=False):
     # Create uniform logits for the prior with the same shape as log_alpha.
     prior_logits = torch.full_like(log_alpha, prior_val)
 
-    # Create the posterior distribution using the given logits.
-    # For the prior, we use uniform logits which result in a uniform probability (1/C per code).
+    # Create the posterior and prior distributions using the given logits.
     if use_exp_relaxed:
         v_dist = ExpRelaxedCategorical(tau, logits=log_alpha)
         prior = ExpRelaxedCategorical(tau, logits=prior_logits)
@@ -190,7 +185,7 @@ def monte_carlo_kld(log_alpha, tau, reduction='sum', use_exp_relaxed=False):
         v_dist = RelaxedOneHotCategorical(tau, logits=log_alpha)
         prior = RelaxedOneHotCategorical(tau, logits=prior_logits)
     
-    # Sample from the posterior distribution
+    # Sample from the posterior distribution.
     z = v_dist.rsample()  # relaxed sample from the posterior distribution
     
     # Compute KL divergence using Monte Carlo estimation

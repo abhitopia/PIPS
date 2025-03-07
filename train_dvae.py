@@ -1,6 +1,6 @@
 from functools import partial
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 import numpy as np
 from dataclasses import dataclass
 import tempfile
@@ -537,11 +537,20 @@ class DVAETrainingModule(pl.LightningModule):
                         new_state_dict[key] = value
                 checkpoint["state_dict"] = new_state_dict
 
-    def get_scheduled_values(self, step: int) -> Dict[str, float]:
-        """Returns all scheduled values for the current step."""
-        cfg = self.experiment_config
+    def get_scheduled_values(self, step: int, device: torch.device = torch.device("cpu")) -> Dict[str, torch.Tensor]:
+        """Returns all scheduled values for the current step as tensors on the specified device.
         
-        # Temperature schedule with its own warmup
+        Args:
+            step (int): Current training step.
+            device (torch.device): The device on which to allocate the scheduled value tensors. Defaults to CPU.
+        
+        Returns:
+            Dict[str, torch.Tensor]: A dictionary containing scheduled values (tau, beta(CE), beta(MI), beta(TC),
+            beta(DWKL), beta(KL), max_pct(MASK)) as tensors.
+        """
+        cfg = self.experiment_config
+
+        # Temperature schedule with its own warmup.
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.tau_start,
             target_value=cfg.tau,
@@ -549,7 +558,7 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.tau_schedule_type
         )
         
-        # Add beta_ce schedule with shared beta warmup
+        # Add beta_ce schedule with shared beta warmup.
         beta_ce_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_ce_start,
             target_value=cfg.beta_ce,
@@ -557,7 +566,7 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Beta schedules with shared beta warmup
+        # Beta schedules with shared beta warmup.
         beta_mi_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_mi_start,
             target_value=cfg.beta_mi,
@@ -586,7 +595,7 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Add max mask percentage schedule (using beta warmup)
+        # Add max mask percentage schedule (using beta warmup).
         max_mask_pct_schedule = Schedule.get_schedule(
             initial_value=cfg.mask_pct_start,
             target_value=cfg.max_mask_pct,
@@ -595,49 +604,42 @@ class DVAETrainingModule(pl.LightningModule):
         )
         
         return {
-            'tau': tau_schedule(step),
-            'beta(CE)': beta_ce_schedule(step),
-            'beta(MI)': beta_mi_schedule(step),
-            'beta(TC)': beta_tc_schedule(step),
-            'beta(DWKL)': beta_dwkl_schedule(step),
-            'beta(KL)': beta_kl_schedule(step),
-            'max_pct(MASK)': max_mask_pct_schedule(step),
+            'tau': torch.tensor(tau_schedule(step), device=device, dtype=torch.float32),
+            'beta(CE)': torch.tensor(beta_ce_schedule(step), device=device, dtype=torch.float32),
+            'beta(MI)': torch.tensor(beta_mi_schedule(step), device=device, dtype=torch.float32),
+            'beta(TC)': torch.tensor(beta_tc_schedule(step), device=device, dtype=torch.float32),
+            'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
+            'beta(KL)': torch.tensor(beta_kl_schedule(step), device=device, dtype=torch.float32),
+            'max_pct(MASK)': torch.tensor(max_mask_pct_schedule(step), device=device, dtype=torch.float32)
         }
 
-    def forward(self, x, q_z_marg=None, train=True, tc_relu=False):
-        # Get current values for all scheduled parameters
-        scheduled_values = self.get_scheduled_values(self.global_step)
-
-        # Sample mask percentage for this batch
-        mask_pct = 0.0  # No masking during validation
-        if train:
-            max_mask_pct = scheduled_values['max_pct(MASK)']
-            mask_pct = torch.empty(1, device=x.device).uniform_(0.0, max_mask_pct)[0]
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
+        # All scheduled parameters are required as tensor arguments.
         
-        # Forward pass with current scheduled values and provided q_z_marg
+        # Forward pass with provided scheduled parameters.
         logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            tau=scheduled_values['tau']
+            tau=tau
         )
-
-        # Calculate token accuracy excluding padding tokens
+        
+        # Calculate token accuracy excluding padding tokens.
         non_padding_mask = (x != self.padding_idx)
         masked_correct_tokens = logits.argmax(dim=-1) == x
         masked_correct_tokens = masked_correct_tokens * non_padding_mask
         token_accuracy = masked_correct_tokens.sum() / non_padding_mask.sum()
-
-        # Calculate sample accuracy (all tokens must be predicted correctly)
+        
+        # Calculate sample accuracy (all tokens must be predicted correctly).
         sample_correct = (logits.argmax(dim=-1) == x).all(dim=1).float()
         sample_accuracy = sample_correct.mean()
-
-        # Helper function to conditionally apply ReLU
+        
+        # Helper function to conditionally apply ReLU.
         def maybe_relu(x):
             return F.relu(x) if tc_relu else x
         
         # Compute total loss in a way that maintains the computational graph.
-        # Scale the KLD losses by the number of latents (similar to Dalle-E paper)
+        # Scale the KLD losses by the number of latents (similar to Dalle-E paper).
         raw_losses = {
             'loss(CE)': losses['ce_loss'],
             'loss(MI)': losses['mi_loss'],
@@ -646,27 +648,26 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(KL)': losses['kl_loss']
         }
         
-        # Compute weighted losses for total loss
+        # Compute weighted losses for total loss.
         weighted_losses = {
-            'loss(CE)': raw_losses['loss(CE)'] * scheduled_values['beta(CE)'],
-            'loss(MI)': raw_losses['loss(MI)'] * scheduled_values['beta(MI)'],
-            'loss(DWKL)': raw_losses['loss(DWKL)'] * scheduled_values['beta(DWKL)'],
-            'loss(TC)': raw_losses['loss(TC)'] * scheduled_values['beta(TC)'],
-            'loss(KL)': raw_losses['loss(KL)'] * scheduled_values['beta(KL)']
+            'loss(CE)': raw_losses['loss(CE)'] * beta_ce,
+            'loss(MI)': raw_losses['loss(MI)'] * beta_mi,
+            'loss(DWKL)': raw_losses['loss(DWKL)'] * beta_dwkl,
+            'loss(TC)': raw_losses['loss(TC)'] * beta_tc,
+            'loss(KL)': raw_losses['loss(KL)'] * beta_kl
         }
         
         total_loss = sum(weighted_losses.values())
-
+        
+        # Return tensor values; logging callbacks can detach/convert them as needed.
         return {
             'loss': total_loss,
-            **{k: v.detach() for k, v in raw_losses.items()},  # Log raw losses
-            **{k: v for k, v in scheduled_values.items()},
-            'percent(MASK)': mask_pct,
-            'accuracy(TOKENS)': token_accuracy.detach(),
-            'accuracy(SAMPLES)': sample_accuracy.detach(),
-            'log_alpha': log_alpha.detach(),
-            'logits': logits.detach(),  # Add logits to the output dictionary
-            'input': x.detach(),  # Add input to the output dictionary
+            **raw_losses,
+            'accuracy(TOKENS)': token_accuracy,
+            'accuracy(SAMPLES)': sample_accuracy,
+            'log_alpha': log_alpha,
+            'logits': logits,  # Add logits to the output dictionary.
+            'input': x,        # Add input to the output dictionary.
         }, updated_q_z_marg
 
     def training_step(self, batch, batch_idx):
@@ -678,8 +679,28 @@ class DVAETrainingModule(pl.LightningModule):
         # Check if q_z_marg should be treated as None
         effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
 
-        output_dict, updated_q_z_marg = self(x, q_z_marg=effective_q_z_marg, train=True, tc_relu=self.experiment_config.tc_relu)
+        # Extract scheduled values and convert them to tensors on the current device.
+        scheduled = self.get_scheduled_values(self.global_step, device=x.device)
 
+        # Sample mask percentage for this batch; set max_pct_mask to 0 in validation for no masking.
+        mask_pct = torch.empty(1, device=x.device).uniform_(0.0, scheduled['max_pct(MASK)'])[0]
+
+        output_dict, updated_q_z_marg = self(
+             x,
+             q_z_marg=effective_q_z_marg,
+             tc_relu=self.experiment_config.tc_relu,
+             tau=scheduled['tau'],
+             beta_ce=scheduled['beta(CE)'],
+             beta_mi=scheduled['beta(MI)'],
+             beta_dwkl=scheduled['beta(DWKL)'],
+             beta_tc=scheduled['beta(TC)'],
+             beta_kl=scheduled['beta(KL)'],
+             mask_pct=mask_pct
+        )
+
+        output_dict['percent(MASK)'] = mask_pct
+        output_dict.update(scheduled)
+        
         # Update the global q_z_marg estimate using copy_ instead of assignment
         if updated_q_z_marg is not None:
             self.q_z_marg.copy_(updated_q_z_marg.detach())
@@ -693,9 +714,27 @@ class DVAETrainingModule(pl.LightningModule):
         # Check if q_z_marg should be treated as None
         effective_q_z_marg = None if q_z_marg_clone.sum() == 0 else q_z_marg_clone
 
-        # No update of q_z_marg in validation
-        output_dict, _ = self(x, q_z_marg=effective_q_z_marg, train=False, tc_relu=self.experiment_config.tc_relu)
-    
+        # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).
+        scheduled = self.get_scheduled_values(self.global_step, device=x.device)
+        
+        mask_pct = torch.tensor(0.0, device=x.device) # No masking in validation
+
+        output_dict, _ = self(
+             x,
+             q_z_marg=effective_q_z_marg,
+             tc_relu=self.experiment_config.tc_relu,
+             tau=scheduled['tau'],
+             beta_ce=scheduled['beta(CE)'],
+             beta_mi=scheduled['beta(MI)'],
+             beta_dwkl=scheduled['beta(DWKL)'],
+             beta_tc=scheduled['beta(TC)'],
+             beta_kl=scheduled['beta(KL)'],
+             mask_pct=mask_pct
+        )
+
+        output_dict.update(scheduled)
+        output_dict.pop('max_pct(MASK)') # Remove max_pct(MASK) from output_dict
+
         return output_dict
 
     def configure_optimizers(self):

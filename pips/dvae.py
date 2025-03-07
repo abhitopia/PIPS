@@ -489,40 +489,49 @@ class GumbelCodebook(nn.Module):
         self.use_exp_relaxed = use_exp_relaxed
         self.sampling = sampling
 
-    def sample(self, log_alpha, tau):
-        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical"""
-        assert tau > 0.0, "Temperature must be greater than 0.0"
-        tau_tensor = tau * torch.ones((), device=log_alpha.device, dtype=log_alpha.dtype)
-        if self.use_exp_relaxed:
-            # We need to exponentiate the sample to get the correct sample from the distribution
-            return ExpRelaxedCategorical(tau_tensor, logits=log_alpha).rsample().exp()
-        else:
-            return RelaxedOneHotCategorical(tau_tensor, logits=log_alpha).rsample()
+    def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
+        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical.
 
-    def forward(self, logits: Tensor, tau: float):
+        Args:
+            log_alpha (Tensor): Logits after projection.
+            tau (Tensor): Temperature parameter as a scalar tensor.
+            
+        Returns:
+            Tensor: The sampled soft assignment (if self.use_exp_relaxed is True,
+            the sample is exponentiated).
+        """
+        assert tau > 0.0, "Temperature must be greater than 0.0"
+        # tau is already a tensor, so we simply use it directly.
+        if self.use_exp_relaxed:
+            # We need to exponentiate the sample to get the correct sample from the distribution.
+            return ExpRelaxedCategorical(tau, logits=log_alpha).rsample().exp()
+        else:
+            return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
+
+    def forward(self, logits: Tensor, tau: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
         Forward pass through the Gumbel-Softmax codebook.
         
         Args:
-            logits: Input tensor of shape [B, N, D].
-            tau: Temperature parameter for quantization. When sampling mode is enabled
-                 (self.sampling=True), tau is used as the temperature in the Gumbel-Softmax sampling.
-                 When sampling mode is disabled (self.sampling=False), tau is used to scale the logits before softmax.
+            logits (Tensor): Input tensor of shape [B, N, D].
+            tau (Tensor): Temperature parameter for quantization as a scalar tensor.
+                When sampling mode is enabled (self.sampling=True), tau is used as the temperature in the Gumbel-Softmax sampling.
+                When sampling mode is disabled (self.sampling=False), tau is used to scale the logits before softmax.
             
         Returns:
-            Tuple of (quantized, log_alpha, z), where:
-                quantized: The quantized vector after projection via the codebook.
-                log_alpha: The logits after projecting through the head.
-                z: The soft assignment code (either sampled or computed deterministically via softmax).
+            Tuple[Tensor, Tensor, Tensor]: A tuple of (quantized, log_alpha, z), where:
+                quantized (Tensor): The quantized vector after projection via the codebook.
+                log_alpha (Tensor): The logits after projecting through the head.
+                z (Tensor): The soft assignment code (either sampled or computed deterministically via softmax).
         """
-        # Project to codebook space
+        # Project to codebook space.
         log_alpha = self.head(logits)  # [B, N, C]
 
         if self.sampling:
-            # Sample using the (Gumbel-Softmax) distribution
+            # Sample using the (Gumbel-Softmax) distribution.
             z = self.sample(log_alpha, tau)  # [B, N, C]
         else:
-            # Apply softmax with temperature scaling
+            # Apply softmax with temperature scaling.
             z = torch.softmax(log_alpha / tau, dim=-1)
 
         quantized = self.codebook(z)
@@ -800,36 +809,34 @@ class GridDVAE(nn.Module):
         return grid_decoded_logits
     
 
-    def apply_mask(self, x: Tensor, mask_percentage: float = 0.0) -> Tensor:
+    def apply_mask(self, x: Tensor, mask_percentage: Tensor) -> Tensor:
         x = x.clone()
-        mask = (torch.rand_like(x.float()) < mask_percentage) & (x != self.pad_value)
+        # Create a random tensor with values in the range [0,1) for each element in x.
+        mask = (torch.rand(x.shape, device=x.device, dtype=torch.float32) < mask_percentage) & (x != self.pad_value)
         x.masked_fill_(mask, self.mask_value)
         return x
     
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: float = 1.0, mask_percentage: float = 0.0) -> Tuple[Tensor, dict, Tensor]:
-        
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
-
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
-
+    
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
-
+    
         quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau)
-
+            
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
             q_z_marg_updated = q_z_marg
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
-
-        
+    
         decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
-
+    
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
-
+    
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
              **kld_losses.to_dict()
