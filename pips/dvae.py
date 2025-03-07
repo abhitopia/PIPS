@@ -554,8 +554,8 @@ class GridDVAEConfig(Config):
         n_latent_layer (int): Number of latent transformer layers
         n_codes (int): Number of discrete codes (must be power of 2)
         codebook_size (int): Size of codebook (default: 512)
-        rope_base_height (int): Base for the geometric progression in angle computation for height (default: 10007)
-        rope_base_width (int): Base for the geometric progression in angle computation for width (default: 5003)
+        rope_base_height (int): Base for geometric progression in angle computation for height (default: 10007)
+        rope_base_width (int): Base for geometric progression in angle computation for width (default: 5003)
         dropout (float): Dropout probability (default: 0.0)
         max_grid_height (int): Maximum grid height (default: 32)
         max_grid_width (int): Maximum grid width (default: 32)
@@ -695,14 +695,26 @@ class GridDVAE(nn.Module):
         ## In my case, we normalise the final output of the encoder as well as that of decoder before applyin their
         ## respective heads. Nothing gets normalised from base to bottleneck and vice versa.
 
+        rope_2d = RoPE2D(
+                dim=config.n_dim // config.n_head,  # per-head dimension (e.g., 256//8 = 32)
+                max_height=config.max_grid_height,
+                max_width=config.max_grid_width,
+                base_height=config.rope_base_height,
+                base_width=config.rope_base_width)
         
-        # Keep the base transformer blocks
-        # self.encoder_base = Transformer(config, out_norm=False)
+        rope_1d = RotaryPositionalEmbeddings(
+            dim=config.n_dim // config.n_head,  # 256//8 = 32, per-head dimension
+            max_seq_len=config.n_pos,
+            base=config.rope_base_height
+        )
+
+        
         self.grid_encoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_grid_layer,
-            out_norm=False
+            out_norm=False,
+            rope=rope_2d
         )
 
         self.latent_encoder = LatentTransformer(
@@ -710,7 +722,8 @@ class GridDVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=False
+            out_norm=False,
+            rope=rope_1d
         )
 
         self.codebook = GumbelCodebook(config.n_dim, 
@@ -722,14 +735,16 @@ class GridDVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=False
+            out_norm=False,
+            rope=rope_1d
         )
 
         self.grid_decoder = Transformer(
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_grid_layer,
-            out_norm=True
+            out_norm=True,
+            rope=rope_2d
         )
 
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
