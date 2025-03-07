@@ -108,6 +108,7 @@ def new(
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
     use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
+    no_sample: bool = typer.Option(False, "--no-sample", help="Do not sample (use Gumbel Noise) using Gumbel-Softmax", is_flag=True, flag_value=True),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -186,6 +187,7 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
+        sampling=not no_sample,
     )
     
     config = ExperimentConfig(
