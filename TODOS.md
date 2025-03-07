@@ -107,6 +107,7 @@
 - [x] Add focal loss
 - [x] Remove power of 2 restriction on the number of latent codes   
 - [x] Different Rope base for different axes
+- [x] Sample accuracy includes padding tokens
 - [ ] fix following
 ```
     skipping cudagraphs due to skipping cudagraphs due to cpu device (primals_88). Found from : 

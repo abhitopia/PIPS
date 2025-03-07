@@ -626,14 +626,11 @@ class DVAETrainingModule(pl.LightningModule):
         non_padding_mask = (x != self.padding_idx)
         masked_correct_tokens = logits.argmax(dim=-1) == x
         masked_correct_tokens = masked_correct_tokens * non_padding_mask
-        
-        # Calculate token accuracy
         token_accuracy = masked_correct_tokens.sum() / non_padding_mask.sum()
 
-        # Calculate sample accuracy (all non-padding tokens must be correct)
-        sample_correct = (masked_correct_tokens.sum(dim=1) == non_padding_mask.sum(dim=1)).float()
+        # Calculate sample accuracy (all tokens must be predicted correctly)
+        sample_correct = (logits.argmax(dim=-1) == x).all(dim=1).float()
         sample_accuracy = sample_correct.mean()
-
 
         # Helper function to conditionally apply ReLU
         def maybe_relu(x):
