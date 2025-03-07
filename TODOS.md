@@ -109,6 +109,9 @@
 - [x] Different Rope base for different axes
 - [x] Sample accuracy includes padding tokens
 - [x] Add soft codebook (ignores temperature altogether)
+- [x] Add sampling flag to the codebook, temperature is applied regardless of sampling or not. For regular softmax, keep temperature
+at 1.0
+- [ ] Make forward pass of DVAEModule only take tensors and no python variables, and output only tensors
 - [ ] Make validation deterministic (no sampling)
 - [ ] fix following
 ```

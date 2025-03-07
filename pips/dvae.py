@@ -481,49 +481,49 @@ class LatentTransformer(nn.Module):
 
 
 class GumbelCodebook(nn.Module):
-    def __init__(self, d_model, codebook_size, use_exp_relaxed=False):
+    def __init__(self, d_model, codebook_size, use_exp_relaxed=False, sampling: bool = True):
         super().__init__()
         self.head = nn.Linear(d_model, codebook_size, bias=False)
         self.codebook = nn.Linear(codebook_size, d_model, bias=False)
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
+        self.sampling = sampling
 
-    def sample(self, log_alpha, temp):
+    def sample(self, log_alpha, tau):
         """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical"""
-
-        assert temp > 0.0, "Temperature must be greater than 0.0"
-        # tau = torch.as_tensor(temp, device=log_alpha.device, dtype=log_alpha.dtype)
-        tau = temp * torch.ones((), device=log_alpha.device, dtype=log_alpha.dtype)
-
+        assert tau > 0.0, "Temperature must be greater than 0.0"
+        tau_tensor = tau * torch.ones((), device=log_alpha.device, dtype=log_alpha.dtype)
         if self.use_exp_relaxed:
-            # We need to exponentiate the sample to get the correct sample from the (relaxed) OneHotCategorical
-            return ExpRelaxedCategorical(tau, logits=log_alpha).rsample().exp() 
+            # We need to exponentiate the sample to get the correct sample from the distribution
+            return ExpRelaxedCategorical(tau_tensor, logits=log_alpha).rsample().exp()
         else:
-            return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
+            return RelaxedOneHotCategorical(tau_tensor, logits=log_alpha).rsample()
 
     def forward(self, logits: Tensor, tau: float):
         """
         Forward pass through the Gumbel-Softmax codebook.
         
         Args:
-            logits: Input tensor of shape [B, N, D]
-            tau: Temperature parameter for quantization. If tau >= 0, Gumbel-Softmax sampling is used.
-                 If tau < 0, regular softmax is used for quantization.
-            hardness: Not used in this implementation (kept for API compatibility)
-            reinMax: Not used in this implementation (kept for API compatibility)
+            logits: Input tensor of shape [B, N, D].
+            tau: Temperature parameter for quantization. When sampling mode is enabled
+                 (self.sampling=True), tau is used as the temperature in the Gumbel-Softmax sampling.
+                 When sampling mode is disabled (self.sampling=False), tau is used to scale the logits before softmax.
             
         Returns:
-            Tuple of (quantized_logits, log_alpha, z), where z is the quantized code.
+            Tuple of (quantized, log_alpha, z), where:
+                quantized: The quantized vector after projection via the codebook.
+                log_alpha: The logits after projecting through the head.
+                z: The soft assignment code (either sampled or computed deterministically via softmax).
         """
         # Project to codebook space
         log_alpha = self.head(logits)  # [B, N, C]
 
-        if tau < 0:
-            # Use regular softmax instead of Gumbel sampling
-            z = torch.softmax(log_alpha, dim=-1)
-        else:
-            # Sample using the appropriate (Gumbel-Softmax) distribution
+        if self.sampling:
+            # Sample using the (Gumbel-Softmax) distribution
             z = self.sample(log_alpha, tau)  # [B, N, C]
+        else:
+            # Apply softmax with temperature scaling
+            z = torch.softmax(log_alpha / tau, dim=-1)
 
         quantized = self.codebook(z)
             
@@ -550,7 +550,7 @@ class GumbelCodebook(nn.Module):
 
 @dataclass
 class GridDVAEConfig(Config):
-    """
+    r"""
     Configuration class for GridDVAE model.
     
     Attributes:
@@ -588,6 +588,7 @@ class GridDVAEConfig(Config):
     padding_idx: int | None = None
     mask_idx: int | None = None
     pad_weight: float = 0.01,
+    sampling: bool = True,
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
@@ -645,7 +646,11 @@ class GridDVAEConfig(Config):
             'n_vocab': self.n_vocab,
             'padding_idx': self.padding_idx,
             'mask_idx': self.mask_idx,
-            'pad_weight': self.pad_weight
+            'pad_weight': self.pad_weight,
+            'sampling': self.sampling,
+            'use_exp_relaxed': self.use_exp_relaxed,
+            'use_monte_carlo_kld': self.use_monte_carlo_kld,
+            'gamma': self.gamma
         }
         
         # Add computed attributes if they exist
@@ -734,7 +739,8 @@ class GridDVAE(nn.Module):
 
         self.codebook = GumbelCodebook(config.n_dim, 
                                        config.codebook_size,
-                                       use_exp_relaxed=config.use_exp_relaxed)
+                                       use_exp_relaxed=config.use_exp_relaxed,
+                                       sampling=config.sampling)
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
