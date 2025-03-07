@@ -763,11 +763,11 @@ def create_dataloaders(
         padding_idx: Padding index to be used in the grids.
         max_grid_height: Maximum grid height.
         max_grid_width: Maximum grid width.
-        shuffle_train: If True, shuffle the training data.
+        permute_train: If True, permute the training data.
         limit_training_samples: Maximum number of training samples to use. None means use all samples.
         num_measure_samples: Number of grid samples to use for measuring average compressed bits.
     """
-    print("shuffle_train:", permute_train)
+    print("permute_train:", permute_train)
 
     # Create training dataloader
     collate_fn_train = partial(
