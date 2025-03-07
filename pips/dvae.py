@@ -492,7 +492,8 @@ class GumbelCodebook(nn.Module):
         """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical"""
 
         assert temp > 0.0, "Temperature must be greater than 0.0"
-        tau = torch.as_tensor(temp, device=log_alpha.device, dtype=log_alpha.dtype)
+        # tau = torch.as_tensor(temp, device=log_alpha.device, dtype=log_alpha.dtype)
+        tau = temp * torch.ones((), device=log_alpha.device, dtype=log_alpha.dtype)
 
         if self.use_exp_relaxed:
             # We need to exponentiate the sample to get the correct sample from the (relaxed) OneHotCategorical
