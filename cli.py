@@ -140,7 +140,7 @@ def new(
     # Training data options
     seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
     limit_training_samples: int = typer.Option(None, "--limit-samples", "--lts", help="Limit the number of training samples. None means use all samples."),
-    shuffle_train: bool = typer.Option(True, "--no-shuffle", help="Shuffle the training data. Default is True.", is_flag=True, flag_value=False),
+    permute_train: bool = typer.Option(True, "--no-permute", help="Permute the training data. Default is True.", is_flag=True, flag_value=False),
 
     # Logging options
     viz_interval: int = get_common_options()["viz_interval"],
@@ -234,7 +234,7 @@ def new(
         acceleration=acceleration,
         val_check_interval=val_check_interval,
         limit_training_samples=limit_training_samples,
-        shuffle_train=shuffle_train,
+        permute_train=permute_train,
         visualization_interval=viz_interval,
         grad_log_interval=viz_interval,
         wandb_logging=wandb_logging

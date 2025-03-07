@@ -752,7 +752,7 @@ def create_dataloaders(
     padding_idx: int,
     max_grid_height: int,
     max_grid_width: int,
-    shuffle_train: bool = True,
+    permute_train: bool = True,
     limit_training_samples: int | None = None,
     num_measure_samples: int = 100  # Number of samples to measure average information in bits
 ):
@@ -767,13 +767,13 @@ def create_dataloaders(
         limit_training_samples: Maximum number of training samples to use. None means use all samples.
         num_measure_samples: Number of grid samples to use for measuring average compressed bits.
     """
-    print("shuffle_train:", shuffle_train)
+    print("shuffle_train:", permute_train)
 
     # Create training dataloader
     collate_fn_train = partial(
         GridDataset.collate_fn_project,
         pad_value=padding_idx,
-        permute=shuffle_train,  # Use the permute_train parameter
+        permute=permute_train,  # Use the permute_train parameter
         max_height=max_grid_height,
         max_width=max_grid_width
     )
@@ -810,7 +810,7 @@ def create_dataloaders(
         train_dataset,
         batch_size=batch_size,
         collate_fn=collate_fn_train,
-        shuffle=shuffle_train,  ## True if training only if permute_train is True
+        shuffle=True, 
         num_workers=num_workers,
         persistent_workers=True,
         worker_init_fn=worker_init_fn,
@@ -960,7 +960,7 @@ def train(
     lr_find: bool = False,
     acceleration: AccelerationConfig | None = None,
     limit_training_samples: int | None = None,
-    shuffle_train: bool = True,
+    permute_train: bool = True,
     save_visualizations: bool = False,
     grad_log_interval: int = 100,  # New parameter
     visualization_interval: int = 100,
@@ -988,7 +988,7 @@ def train(
         padding_idx=experiment_config.model_config.padding_idx,
         max_grid_height=experiment_config.model_config.max_grid_height,
         max_grid_width=experiment_config.model_config.max_grid_width,
-        shuffle_train=shuffle_train,
+        permute_train=permute_train,
         limit_training_samples=limit_training_samples
     )
 
