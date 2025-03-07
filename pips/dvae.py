@@ -507,18 +507,23 @@ class GumbelCodebook(nn.Module):
         
         Args:
             logits: Input tensor of shape [B, N, D]
-            tau: Temperature parameter for Gumbel-Softmax
+            tau: Temperature parameter for quantization. If tau >= 0, Gumbel-Softmax sampling is used.
+                 If tau < 0, regular softmax is used for quantization.
             hardness: Not used in this implementation (kept for API compatibility)
             reinMax: Not used in this implementation (kept for API compatibility)
             
         Returns:
-            Tuple of (quantized_logits, soft_code, code)
+            Tuple of (quantized_logits, log_alpha, z), where z is the quantized code.
         """
         # Project to codebook space
         log_alpha = self.head(logits)  # [B, N, C]
 
-        # Sample using the appropriate distribution
-        z = self.sample(log_alpha, tau) # [B, N, C]
+        if tau < 0:
+            # Use regular softmax instead of Gumbel sampling
+            z = torch.softmax(log_alpha, dim=-1)
+        else:
+            # Sample using the appropriate (Gumbel-Softmax) distribution
+            z = self.sample(log_alpha, tau)  # [B, N, C]
 
         quantized = self.codebook(z)
             

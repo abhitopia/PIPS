@@ -291,7 +291,8 @@ def small_config():
         'n_latent_layer': 1,
         'n_codes': 4,           # must be a power of 2
         'codebook_size': 16,
-        'rope_base': 10000,
+        'rope_base_height': 10007,
+        'rope_base_width': 5003,
         'dropout': 0.0,
         'max_grid_height': 4,   # grid height: 4x4 gives n_pos=16 (a power of 2)
         'max_grid_width': 4,

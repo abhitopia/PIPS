@@ -126,8 +126,8 @@ def new(
     warmup_steps_mask_pct: int = typer.Option(50_000, "--warmup-steps-mask-pct", "--wsm", help="Mask percentage warmup steps"),
 
     # Regularization parameters
-    tau_start: float = typer.Option(3.5, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax"),
-    tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax"),
+    tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
+    tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
     
     # Beta values for loss components

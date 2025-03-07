@@ -108,6 +108,7 @@
 - [x] Remove power of 2 restriction on the number of latent codes   
 - [x] Different Rope base for different axes
 - [x] Sample accuracy includes padding tokens
+- [x] Add soft codebook (ignores temperature altogether)
 - [ ] Make validation deterministic (no sampling)
 - [ ] fix following
 ```
