@@ -7,6 +7,7 @@ from train_dvae import ExperimentConfig, GridDVAEConfig, train
 from torch.serialization import add_safe_globals
 import wandb
 from pips.misc.artifact import Artifact
+from pips.grid_dataset import DatasetType
 from pips.utils import generate_friendly_name
 from pips.misc.acceleration_config import AccelerationConfig
 import click
@@ -139,6 +140,8 @@ def new(
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
     
     # Training data options
+    train_ds: DatasetType = typer.Option(DatasetType.TRAIN, "--train-ds", "-tds", help="Training dataset type. Default is TRAIN.", case_sensitive=False, show_choices=True),
+    val_ds: DatasetType = typer.Option(DatasetType.VAL, "--val-ds", "-vds", help="Validation dataset type. Default is VAL.", case_sensitive=False, show_choices=True),
     seed: int = typer.Option(None, "--seed", "-s", help="Random seed for reproducibility. If not provided, a random seed will be generated."),
     limit_training_samples: int = typer.Option(None, "--limit-samples", "--lts", help="Limit the number of training samples. None means use all samples."),
     permute_train: bool = typer.Option(True, "--no-permute", help="Permute the training data. Default is True.", is_flag=True, flag_value=False),
@@ -212,6 +215,8 @@ def new(
         warmup_steps_beta=warmup_steps_beta,
         warmup_steps_mask_pct=warmup_steps_mask_pct,
         batch_size=batch_size,
+        train_ds=train_ds,
+        val_ds=val_ds,
         learning_rate=learning_rate,
         lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         weight_decay=weight_decay,

@@ -8,6 +8,7 @@ from torch.utils.data import Dataset, DataLoader
 import torch
 from typing import NamedTuple, List, Dict
 import hashlib
+from enum import Enum
 
 logger = logging.getLogger(__name__)
 
@@ -165,11 +166,63 @@ class GRID_INPUT(NamedTuple):
     attributes: List[Dict[str, any]]
     # positions: torch.Tensor = None # (B, S, 2) where S is the flattened size of the projected grid
 
+class DatasetType(str, Enum):
+    TRAIN = "train"  # Current train collection
+    VAL = "val"    # Current val collection
+    ARC_1D = "arc_1d"
+    BARC_GP4OM_OM = "barc_gp4om_om"
+    BARC_GP4_OM = "barc_gp4_om"
+    BARC_GP4O_OM = "barc_gp4o_om"
+    BARC_GP4O_OM_SUG = "barc_gp4o_om_sug"
+    ARC_COMMUNITY = "arc_community"
+    ARC_CONCEPT = "arc_concept"
+    ARC_DBIGHAM = "arc_dbigham"
+    ARC_DIVA = "arc_diva"
+    ARC_EVAL = "arc_eval"
+    ARC_MINI = "arc_mini"
+    ARC_NOSOUND = "arc_nosound"
+    ARC_PQA = "arc_pqa"
+    ARC_REARC_EASY = "arc_rearc_easy"
+    ARC_REARC_HARD = "arc_rearc_hard"
+    ARC_SEQUENCE = "arc_sequence"
+    ARC_SORTOF = "arc_sortof"
+    ARC_SYNTH_RIDDLES = "arc_synth_riddles"
+    ARC_TAMA = "arc_tama"
+    ARC_TRAIN = "arc_train"
+    ARC_IPARC = "arc_iparc"
+
+# Map enum values to their corresponding loaders
+DATASET_LOADERS = {
+    DatasetType.TRAIN: TRAIN_GRID_LOADERS,
+    DatasetType.VAL: VAL_GRID_LOADERS,
+    DatasetType.ARC_1D: [ARC_1D],
+    DatasetType.BARC_GP4OM_OM: [BARC_GP4OM_OM],
+    DatasetType.BARC_GP4_OM: [BARC_GP4_OM],
+    DatasetType.BARC_GP4O_OM: [BARC_GP4O_OM],
+    DatasetType.BARC_GP4O_OM_SUG: [BARC_GP4O_OM_SUG],
+    DatasetType.ARC_COMMUNITY: [ARC_COMMUNITY],
+    DatasetType.ARC_CONCEPT: [ARC_CONCEPT],
+    DatasetType.ARC_DBIGHAM: [ARC_DBIGHAM],
+    DatasetType.ARC_DIVA: [ARC_DIVA],
+    DatasetType.ARC_EVAL: [ARC_EVAL],
+    DatasetType.ARC_MINI: [ARC_MINI],
+    DatasetType.ARC_NOSOUND: [ARC_NOSOUND],
+    DatasetType.ARC_PQA: [ARC_PQA],
+    DatasetType.ARC_REARC_EASY: [ARC_REARC_EASY],
+    DatasetType.ARC_REARC_HARD: [ARC_REARC_HARD],
+    DatasetType.ARC_SEQUENCE: [ARC_SEQUENCE],
+    DatasetType.ARC_SORTOF: [ARC_SORTOF],
+    DatasetType.ARC_SYNTH_RIDDLES: [ARC_SYNTH_RIDDLES],
+    DatasetType.ARC_TAMA: [ARC_TAMA],
+    DatasetType.ARC_TRAIN: [ARC_TRAIN],
+    DatasetType.ARC_IPARC: [ARC_IPARC],
+}
+
 class GridDataset(Dataset):
-    def __init__(self, train: bool = True, 
+    def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
                  cache_dir=Path(__file__).resolve().parent.parent / '.cache', 
                  max_samples: int = None):
-        self.train = train
+        self.dataset_type = dataset_type
         self.cache_dir = cache_dir
         self.max_samples = max_samples  # New parameter to limit available samples
         self.data = None
@@ -184,7 +237,7 @@ class GridDataset(Dataset):
         This function quickly loads the grid data (using memory mapping)
         to compute the length and stores it as _shared_length.
         """
-        loaders = TRAIN_GRID_LOADERS if self.train else VAL_GRID_LOADERS
+        loaders = DATASET_LOADERS[self.dataset_type]
         temp_data = load_grid_loaders(loaders, self.cache_dir, verbose=True)
         self._shared_length = len(temp_data)
         del temp_data  # Clean up the temporary mapping
@@ -192,10 +245,10 @@ class GridDataset(Dataset):
     def _initialize_data(self):
         """Initialize the data for this process"""
         if self.data is None:
-            loaders = TRAIN_GRID_LOADERS if self.train else VAL_GRID_LOADERS
+            loaders = DATASET_LOADERS[self.dataset_type]
             self.data = load_grid_loaders(loaders, self.cache_dir)
             self._shared_length = len(self.data)
-            # print(f"Initialized data with {len(self.data)} grids for {'train' if self.train else 'val'}")
+            # print(f"Initialized data with {len(self.data)} grids for {self.dataset_type.name}")
 
     def __len__(self):
         # If max_samples declared, return the minimum between the actual dataset size and max_samples.
@@ -355,7 +408,7 @@ if __name__ == '__main__':
         format='%(message)s'  # Simplified format to just show the message
     )
 
-    dataset = GridDataset(train=True)
+    dataset = GridDataset(dataset_type=DatasetType.ARC_TRAIN)
     print(f"Total number of samples in dataset: {len(dataset)}")
 
     # Create a DataLoader with batch size 32, pad_value 15, and random shuffling
@@ -363,7 +416,7 @@ if __name__ == '__main__':
         dataset,
         batch_size=32,
         shuffle=True,
-        collate_fn=lambda x: GridDataset.collate_fn(x, pad_value=15, device='cpu', permute=True),
+        collate_fn=lambda x: GridDataset.collate_fn_project(x, pad_value=15, device='cpu', permute=True),
         drop_last=False,
         worker_init_fn=worker_init_fn
     )
@@ -371,6 +424,6 @@ if __name__ == '__main__':
     # Iterate over the DataLoader
     for batch in dataloader:
         print(f"Batch grids shape: {batch.grids.shape}")  # Should be (32, 32, 32)
-        print(f"Batch attributes: {batch.attributes}")
+        # print(f"Batch attributes: {batch.attributes}")
         break  # Just process the first batch for demonstration
 

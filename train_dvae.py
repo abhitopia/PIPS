@@ -15,7 +15,7 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import LambdaLR
 from torch.nn import functional as F
-from pips.grid_dataset import GridDataset, worker_init_fn
+from pips.grid_dataset import DatasetType, GridDataset, worker_init_fn
 from pips.dvae import GridDVAEConfig, GridDVAE
 from pips.misc.artifact import Artifact
 from pips.misc.custom_progress_bar import CustomRichProgressBar
@@ -408,6 +408,10 @@ class ExperimentConfig:
     gradient_clip_val: float = 1.0
     accumulate_grad_batches: int = 1
 
+    # Dataset parameters
+    train_ds: DatasetType = DatasetType.TRAIN
+    val_ds: DatasetType = DatasetType.VAL
+
     # Add max_mask_pct parameter
     model_src: str | None = None
     tc_relu: bool = False
@@ -799,7 +803,9 @@ def create_dataloaders(
     max_grid_width: int,
     permute_train: bool = True,
     limit_training_samples: int | None = None,
-    num_measure_samples: int = 100  # Number of samples to measure average information in bits
+    train_ds: DatasetType = DatasetType.TRAIN,
+    val_ds: DatasetType = DatasetType.VAL,
+    num_measure_samples: int = 100,  # Number of samples to measure average information in bits
 ):
     """Create train and validation dataloaders and measure average grid information bits.
 
@@ -823,7 +829,7 @@ def create_dataloaders(
         max_width=max_grid_width
     )
 
-    train_dataset = GridDataset(train=True, max_samples=limit_training_samples)
+    train_dataset = GridDataset(dataset_type=train_ds, max_samples=limit_training_samples)
 
     # Create validation dataset
     collate_fn_val = partial(
@@ -833,7 +839,7 @@ def create_dataloaders(
         max_height=max_grid_height,
         max_width=max_grid_width
     )
-    val_dataset = GridDataset(train=False)
+    val_dataset = GridDataset(dataset_type=val_ds)
 
     # Measure average compressed bits directly from the datasets (not using the dataloader)
     train_stats = measure_bits_stats_from_dataset(train_dataset, num_samples=10000)
@@ -845,8 +851,8 @@ def create_dataloaders(
     val_dataset.unload()
 
     # Print stats
-    print("Train stats:", train_stats)
-    print("Val stats:", val_stats)
+    print("Train Grid Info Bits:", train_stats)
+    print("Val Grid Info Bits:", val_stats)
 
     # Proceed to create DataLoader objects for training and validation
     num_workers = min(8, os.cpu_count() or 1)
@@ -1034,7 +1040,9 @@ def train(
         max_grid_height=experiment_config.model_config.max_grid_height,
         max_grid_width=experiment_config.model_config.max_grid_width,
         permute_train=permute_train,
-        limit_training_samples=limit_training_samples
+        limit_training_samples=limit_training_samples,
+        train_ds=experiment_config.train_ds,
+        val_ds=experiment_config.val_ds
     )
 
     if validation_disabled:

@@ -1,7 +1,7 @@
 import numpy as np
 from unittest.mock import patch, MagicMock
 import pytest
-from pips.grid_dataset import GridDataset, process_grid_loader, combined_dtype, GRID_INPUT, TRAIN_GRID_LOADERS, VAL_GRID_LOADERS
+from pips.grid_dataset import DatasetType, GridDataset, process_grid_loader, combined_dtype, GRID_INPUT, TRAIN_GRID_LOADERS, VAL_GRID_LOADERS
 from pips.data import Grid
 import torch
 from pathlib import Path
@@ -77,11 +77,11 @@ def test_grid_dataset_initialization(mock_load_grid_loaders):
     cache_dir = Path(__file__).resolve().parent.parent / '.cache'
 
     # Initialize the GridDataset for training
-    dataset = GridDataset(train=True)
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN)
     assert len(dataset) == 0
 
     # Initialize the GridDataset for validation
-    dataset = GridDataset(train=False)
+    dataset = GridDataset(dataset_type=DatasetType.VAL)
     assert len(dataset) == 0
 
     # Update assertion to include verbose parameter
@@ -239,7 +239,7 @@ def test_grid_dataset_max_samples_lower(mock_load_grid_loaders):
     mock_load_grid_loaders.return_value = dummy_array
 
     # Create dataset with max_samples set to 5 (less than available).
-    dataset = GridDataset(train=True, max_samples=5)
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, max_samples=5)
     # Since the underlying dataset has 10 samples, __len__ should return 5.
     assert len(dataset) == 5
 
@@ -254,7 +254,7 @@ def test_grid_dataset_max_samples_higher(mock_load_grid_loaders):
     mock_load_grid_loaders.return_value = dummy_array
 
     # Create dataset with max_samples set to 15 (more than available).
-    dataset = GridDataset(train=True, max_samples=15)
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, max_samples=15)
     # __len__ should return the full dataset length (10 samples).
     assert len(dataset) == 10
 
@@ -269,7 +269,7 @@ def test_grid_dataset_default_length(mock_load_grid_loaders):
     mock_load_grid_loaders.return_value = dummy_array
 
     # Create dataset without specifying max_samples.
-    dataset = GridDataset(train=True)
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN)
     # __len__ should return the full dataset length (10 samples).
     assert len(dataset) == 10
 
