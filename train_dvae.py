@@ -411,6 +411,8 @@ class ExperimentConfig:
     # Dataset parameters
     train_ds: DatasetType = DatasetType.TRAIN
     val_ds: DatasetType = DatasetType.VAL
+    limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
+    permute_train: bool = True  # Whether to permute the training data
 
     # Add max_mask_pct parameter
     model_src: str | None = None
@@ -801,11 +803,11 @@ def create_dataloaders(
     padding_idx: int,
     max_grid_height: int,
     max_grid_width: int,
-    permute_train: bool = True,
-    limit_training_samples: int | None = None,
-    train_ds: DatasetType = DatasetType.TRAIN,
-    val_ds: DatasetType = DatasetType.VAL,
-    num_measure_samples: int = 100,  # Number of samples to measure average information in bits
+    permute_train: bool,
+    limit_training_samples: int | None,
+    train_ds: DatasetType,
+    val_ds: DatasetType,
+    num_measure_samples: int = 10000,  # Number of samples to measure average information in bits
 ):
     """Create train and validation dataloaders and measure average grid information bits.
 
@@ -842,8 +844,8 @@ def create_dataloaders(
     val_dataset = GridDataset(dataset_type=val_ds)
 
     # Measure average compressed bits directly from the datasets (not using the dataloader)
-    train_stats = measure_bits_stats_from_dataset(train_dataset, num_samples=10000)
-    val_stats = measure_bits_stats_from_dataset(val_dataset, num_samples=10000)
+    train_stats = measure_bits_stats_from_dataset(train_dataset, num_samples=num_measure_samples)
+    val_stats = measure_bits_stats_from_dataset(val_dataset, num_samples=num_measure_samples)
 
 
     # The reset is necessary so that the dataset is not cached in the workers.
@@ -1010,10 +1012,8 @@ def train(
     resume_from: str | None = None,
     lr_find: bool = False,
     acceleration: AccelerationConfig | None = None,
-    limit_training_samples: int | None = None,
-    permute_train: bool = True,
     save_visualizations: bool = False,
-    grad_log_interval: int = 100,  # New parameter
+    grad_log_interval: int = 100,
     visualization_interval: int = 100,
     num_grids_to_visualize: int = 4
 ) -> None:
@@ -1033,14 +1033,14 @@ def train(
     # Disable validation if val_check_interval is negative
     validation_disabled = val_check_interval is not None and val_check_interval < 0
    
-    # Create dataloaders
+    # Create dataloaders - use values from experiment_config
     train_loader, val_loader = create_dataloaders(
         batch_size=experiment_config.batch_size,
         padding_idx=experiment_config.model_config.padding_idx,
         max_grid_height=experiment_config.model_config.max_grid_height,
         max_grid_width=experiment_config.model_config.max_grid_width,
-        permute_train=permute_train,
-        limit_training_samples=limit_training_samples,
+        permute_train=experiment_config.permute_train,
+        limit_training_samples=experiment_config.limit_training_samples,
         train_ds=experiment_config.train_ds,
         val_ds=experiment_config.val_ds
     )

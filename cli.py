@@ -190,12 +190,15 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        sampling=not no_sample,
+        sampling=not no_sample
     )
     
     config = ExperimentConfig(
+        # Model configuration
         model_config=model_config,
         model_src=model_src,
+
+        # Regularization parameters
         tau_start=tau_start,
         tau=tau,
         beta_ce_start=beta_ce,
@@ -209,14 +212,22 @@ def new(
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
         beta_kl=beta_kl,
+
+        # Learning rate and other warmup / decay steps
         warmup_steps_lr=warmup_steps_lr,
         decay_steps_lr=decay_steps_lr,
         warmup_steps_tau=warmup_steps_tau,
         warmup_steps_beta=warmup_steps_beta,
         warmup_steps_mask_pct=warmup_steps_mask_pct,
         batch_size=batch_size,
+
+        # Dataset options
         train_ds=train_ds,
         val_ds=val_ds,
+        limit_training_samples=limit_training_samples,
+        permute_train=permute_train,
+
+        # Training parameters
         learning_rate=learning_rate,
         lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         weight_decay=weight_decay,
@@ -240,8 +251,6 @@ def new(
         lr_find=lr_find,
         acceleration=acceleration,
         val_check_interval=val_check_interval,
-        limit_training_samples=limit_training_samples,
-        permute_train=permute_train,
         visualization_interval=viz_interval,
         grad_log_interval=viz_interval,
         wandb_logging=wandb_logging
