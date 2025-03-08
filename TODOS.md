@@ -124,8 +124,8 @@ at 1.0
 ```
 - [x] DWKL scale look off. It has a scale >100x KL (The calculation was all messed up. Fixed it now)
 - [x] Add ability to decide which training set to use
-- [ ] Move attributes like limit_training_samples and permute_train to experiment config
-- [ ] Compute the model code bits and compare with the dataset code bits
+- [x] Move attributes like limit_training_samples and permute_train to experiment config
+- [x] Compute the model code bits and compare with the dataset code bits
 - [ ] Make validation deterministic (no sampling)
 - [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
 - [ ] Do I need to jointly model discrete and continuous codes?

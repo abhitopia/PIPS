@@ -31,6 +31,7 @@ from pips.misc.gradient_check_callback import GradientCheckCallback
 import zlib
 import random
 from rich import print
+import math
 
 class LoggingCallback(pl.Callback):
     
@@ -846,15 +847,28 @@ def create_dataloaders(
     # Measure average compressed bits directly from the datasets (not using the dataloader)
     train_stats = measure_bits_stats_from_dataset(train_dataset, num_samples=num_measure_samples)
     val_stats = measure_bits_stats_from_dataset(val_dataset, num_samples=num_measure_samples)
+    max_two_std_info_bits = max(train_stats['upper_bound'], val_stats['upper_bound'])
 
+
+    # Print stats
+    print("Train Grid Info Bits:", train_stats)
+    print("Val Grid Info Bits:", val_stats)
+    print("Max two std info bits:", max_two_std_info_bits)
+
+    color_perm_bits = math.log2(math.factorial(10))  # 10 colors (0-9) permutation entropy
+    array_transform_bits = math.log2(8)  # 8 possible array transformations
+    min_bits_required = max_two_std_info_bits + color_perm_bits + array_transform_bits
+
+    print("Max two std info bits:", max_two_std_info_bits)
+    print("Color permutation bits:", color_perm_bits)
+    print("Array transform bits:", array_transform_bits)
+    print("Total augmentation bits:", color_perm_bits + array_transform_bits)
+    print("Minimum bits required:", min_bits_required)
 
     # The reset is necessary so that the dataset is not cached in the workers.
     train_dataset.unload()
     val_dataset.unload()
 
-    # Print stats
-    print("Train Grid Info Bits:", train_stats)
-    print("Val Grid Info Bits:", val_stats)
 
     # Proceed to create DataLoader objects for training and validation
     num_workers = min(8, os.cpu_count() or 1)
@@ -884,7 +898,7 @@ def create_dataloaders(
     print("Number of batches in training set: ", len(train_loader))
     print("Number of batches in validation set: ", len(val_loader))
 
-    return train_loader, val_loader
+    return train_loader, val_loader, min_bits_required
 
 
 def measure_bits_stats_from_dataset(dataset: GridDataset, num_samples: int) -> dict:
@@ -1034,7 +1048,7 @@ def train(
     validation_disabled = val_check_interval is not None and val_check_interval < 0
    
     # Create dataloaders - use values from experiment_config
-    train_loader, val_loader = create_dataloaders(
+    train_loader, val_loader, min_bits_required = create_dataloaders(
         batch_size=experiment_config.batch_size,
         padding_idx=experiment_config.model_config.padding_idx,
         max_grid_height=experiment_config.model_config.max_grid_height,
@@ -1044,6 +1058,16 @@ def train(
         train_ds=experiment_config.train_ds,
         val_ds=experiment_config.val_ds
     )
+
+    latent_bits = experiment_config.model_config.compute_latent_bits()
+    print("Model Latent Code bits:", latent_bits)
+    print("Model Latent Code bits / Minimum bits required:", latent_bits / min_bits_required)
+
+    if latent_bits < min_bits_required:
+        # Add a warning
+        print("WARNING: Latent bits are less than minimum bits required. This means the model cannot use all the information in the data.")
+        print("Try increasing the number of latent codes or the codebook size.")
+
 
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")

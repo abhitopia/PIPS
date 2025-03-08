@@ -694,6 +694,18 @@ class GridDVAEConfig(Config):
         # Create new instance
         return cls(**config_kwargs)
 
+    def compute_latent_bits(self) -> float:
+        """Calculate the theoretical information capacity of the discrete latent space in bits.
+        
+        The model encodes information using n_codes discrete variables, each with codebook_size 
+        possible values. The total number of possible configurations is codebook_size^n_codes,
+        which corresponds to log2(codebook_size^n_codes) = n_codes * log2(codebook_size) bits.
+        
+        Returns:
+            float: The number of bits that can be encoded in the latent space
+        """
+        return self.n_codes * math.log2(self.codebook_size)
+
 
 class GridDVAE(nn.Module):
     def __init__(self, config: GridDVAEConfig):
