@@ -45,6 +45,8 @@ class LoggingCallback(pl.Callback):
         if save_to_disk:
             self.visualization_dir.mkdir(exist_ok=True, parents=True)
         self.val_batch_to_visualize = None
+        # Initialize last visualization step so that logging happens immediately at start.
+        self.last_logged_visualization = -visualization_interval
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
@@ -238,14 +240,18 @@ class LoggingCallback(pl.Callback):
         x = outputs.pop('input')
         logits = outputs.pop('logits')
 
-        
-        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=pl_module.global_step % self.visualization_interval == 0)
+        # Instead of using an exact modulo, check if it's time to log.
+        current_step = pl_module.global_step
+        should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
+
+        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=should_visualize)
         outputs.update(entropy_dict)
-        
-        # Visualize reconstructions.
-        if pl_module.global_step % self.visualization_interval == 0:
+
+        # Visualize reconstructions if the time interval has been reached.
+        if should_visualize:
             self.visualize_reconstructions(pl_module, x, logits, 'train')
-        
+            self.last_logged_visualization = current_step
+
         # Calculate tokens per second for the training batch.
         if self.train_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.train_batch_start_time, batch)
