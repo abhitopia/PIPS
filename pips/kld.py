@@ -23,7 +23,7 @@ class KLDLosses:
 
 def compute_decomposed_kld(
     log_alpha, 
-    running_q_marginals=None, 
+    q_z_marginals=None, 
     momentum=0.9, 
     eps=1e-10, 
     reduction="mean"
@@ -37,7 +37,7 @@ def compute_decomposed_kld(
     
     Args:
         log_alpha: Tensor of shape [B, N, C] (unnormalized logits).
-        running_q_marginals: Tensor of shape [N, C] representing the running aggregated marginals.
+        q_z_marginals: Tensor of shape [N, C] representing the running aggregated marginals.
                              If None, it is initialized with the current batch average.
         momentum: EMA momentum.
         eps: Small constant for numerical stability.
@@ -53,67 +53,121 @@ def compute_decomposed_kld(
             - overall_kl: Scalar tensor (after reduction) for the overall KL divergence.
         running_q_marginals: Updated running aggregated marginals (Tensor of shape [N, C]).
     """
+    # -----------------------------------------------
+    # Retrieve dimensions.
+    # B: batch size, N: number of latent codes, C: codebook size.
+    # -----------------------------------------------
     B, N, C = log_alpha.shape
 
     # Compute soft probabilities and log-probabilities.
-    log_q = F.log_softmax(log_alpha, dim=-1)     # shape: [B, N, C]
-    q = log_q.exp()                              # shape: [B, N, C]
+    log_q_x_z = F.log_softmax(log_alpha, dim=-1)     # shape: [B, N, C]
+    q_z_x = log_q_x_z.exp()                              # shape: [B, N, C]
 
+
+
+    # -----------------------------------------------
+    # Step 1: Compute the current aggregated marginal posterior q(z_j) from the minibatch.
+    # For each latent dimension j, compute q_z_current[j] as the average over the batch.
+    # q_z_marg_current has shape (N, C). Each row is a valid probability distribution (sums to 1).
+    # -----------------------------------------------
     # Compute batch aggregated marginals (per latent dimension).
-    batch_q_marginals = q.mean(dim=0)            # shape: [N, C]
+    q_z_marg_batch = q_z_x.mean(dim=0)            # shape: [N, C] (q_z_marg_batch)
 
+
+     # -----------------------------------------------
+    # Step 1b: Update the running estimate of q(z_j) using EMA.
+    # If q_z_marg_running is provided, update it; otherwise, initialize it with q_z_marg_current.
+    # The formula is: q_z_running_new = momentum * q_z_running_old + (1 - momentum) * q_z_current
+    # This provides a smoother estimate of the global q(z) than using the current batch alone.
+    # -----------------------------------------------
     # Update running aggregated marginals using EMA.
-    if running_q_marginals is None:
-        running_q_marginals = batch_q_marginals.detach()
+    if q_z_marginals is None:
+        q_z_marginals = q_z_marg_batch
     else:
-        running_q_marginals = momentum * running_q_marginals + (1 - momentum) * batch_q_marginals.detach()
+        q_z_marginals = momentum * q_z_marginals + (1 - momentum) * q_z_marg_batch
 
-    # Compute log of running aggregated marginals.
-    log_q_marginals = torch.log(running_q_marginals + eps)  # shape: [N, C]
-
-    # Compute per-sample Mutual Information.
-    # For each sample b and latent j:
-    #   MI[b,j] = sum_i q[b, j, i] * (log_q[b, j, i] - log_q_marginals[j, i])
-    mi_per_latent = (q * (log_q - log_q_marginals.unsqueeze(0))).sum(dim=-1)  # shape: [B, N]
-    mi_per_sample = mi_per_latent.sum(dim=-1)  # shape: [B]
-
-    # Compute per-sample overall KL divergence.
-    # For each sample b and latent j:
-    #   KL[b,j] = sum_i q[b, j, i] * (log_q[b, j, i] - log p(i))
-    # For a uniform prior, log p(i) = -log(C)
+    q_z_marginals_detached = q_z_marginals.detach()
+    
+    # -----------------------------------------------
+    # Step 1: Compute the Full KL Divergence per sample.
+    #
+    # For each sample i and latent dimension j, compute:
+    #   KL(q(z_j|x_i) || p(z_j)) = Σ[c=1 to C] q(z_j=c|x_i) * 
+    #                                ( log(q(z_j=c|x_i)) - log(1/C) )
+    #
+    # This gives a tensor of shape (B, N) (KL per latent, per sample).
+    # Then, sum over the latent dimensions (for each sample) to get the full KL per sample.
+    # Finally, average over the batch to obtain the final full KL loss.
+    # -----------------------------------------------
     prior_log = -math.log(C)
-    kl_per_latent = (q * (log_q - prior_log)).sum(dim=-1)  # shape: [B, N]
+    kl_per_latent = (q_z_x * (log_q_x_z - prior_log)).sum(dim=-1)  # shape: [B, N]
     kl_per_sample = kl_per_latent.sum(dim=-1)              # shape: [B]
 
-    # Compute Dimension-Wise KL (global) using the running aggregated marginals.
-    # DWKL = sum_{j=1}^{N} sum_{i=1}^{C} running_q_marginals[j, i] * (log(running_q_marginals[j, i] + eps) - (-log(C)))
-    #      = sum_{j=1}^{N} sum_{i=1}^{C} running_q_marginals[j, i] * (log(running_q_marginals[j, i] + eps) + log(C))
-    dw_kl = (running_q_marginals * (torch.log(running_q_marginals + eps) + math.log(C))).sum()  # scalar
 
-    # Compute per-sample Total Correlation.
-    # TC[b] = KL[b] - MI[b] - DWKL (DWKL is global, so subtracted from each sample)
-    tc_per_sample = kl_per_sample - mi_per_sample - dw_kl  # shape: [B]
+    # Compute log of running aggregated marginals.
+    log_q_marginals = torch.log(q_z_marginals + eps)  # shape: [N, C]
+
+    # -----------------------------------------------
+    # Step 3: Compute Dimension-Wise KL (DWKL)
+    # Compute Dimension-Wise KL (global) using the running aggregated marginals.
+    # For each latent dimension j, using the running aggregated posterior marginal q_z_running,
+    # compute:
+    #   DWKL(j) = KL(q(z_j) || p(z_j)) = Σ[c=1 to C] q_z_x[j, c] *
+    #                                   ( log(q_z[j, c]) - log(1/C) )
+    #
+    # This yields a tensor of shape (N,), one value per latent dimension.
+    # Sum over all latent dimensions to yield the total DWKL.
+    # -----------------------------------------------
+    dwkl_per_latent = (q_z_x * (log_q_marginals.unsqueeze(0) - prior_log)).sum(dim=-1)  # shape: [B, N]
+    dwkl_per_sample = dwkl_per_latent.sum(dim=-1)  # shape: [B]
+
+
+    # -----------------------------------------------
+    # Step 4: Compute Mutual Information (MI)
+    # NOTE: As explained above, assume here that q(z) factorises into q(z_j)
+    # For each sample i and latent dimension j, compute:
+    #   MI_component = KL(q(z_j|x_i) || q(z_j)) = Σ[c=1 to C] q(z_j=c|x_i) * 
+    #                     ( log(q(z_j=c|x_i)) - log(q_z_running[j, c]) )
+    #
+    # q_z_running is the EMA estimate for the aggregated posterior.
+    # This gives a tensor of shape (B, N).
+    # Sum over latent dimensions for each sample, then average over the batch.
+    # -----------------------------------------------
+    mi_per_latent = (q_z_x * (log_q_x_z - log_q_marginals.unsqueeze(0))).sum(dim=-1)  # shape: [B, N]
+    mi_per_sample = mi_per_latent.sum(dim=-1)  # shape: [B]
+
+
+    # -----------------------------------------------
+    # Step 5: Compute Total Correlation (TC) loss.
+    # Estimating TC directly is challenging because it requires the joint distribution of all latent codes.
+    # But we cannot also use the approximation q(z) = prod_j q(z_j) as otherwise TC will vanish
+    # We can solve for TC:
+    #   TC_n = KL_n - MI_n - DWKL_n
+    # -----------------------------------------------
+    tc_per_sample = kl_per_sample - mi_per_sample - dwkl_per_sample  # shape: [B]
 
     # Apply reduction.
     if reduction == "sum":
         mutual_info_reduced = mi_per_sample.sum()
         overall_kl_reduced = kl_per_sample.sum()
         total_corr_reduced = tc_per_sample.sum()
+        dimension_wise_kl_reduced = dwkl_per_sample.sum()
     elif reduction in ["mean", "batchmean"]:
         scale = 1/N if reduction == "mean" else 1
         # Optionally, if you want the mean per latent, divide by N.
         mutual_info_reduced = mi_per_sample.mean() * scale
         overall_kl_reduced = kl_per_sample.mean() * scale
         total_corr_reduced = tc_per_sample.mean() * scale
+        dimension_wise_kl_reduced = dwkl_per_sample.mean() * scale
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
 
     return KLDLosses(
         mutual_info=mutual_info_reduced,
         total_correlation=total_corr_reduced,
-        dimension_wise_kl=dw_kl,
+        dimension_wise_kl=dimension_wise_kl_reduced,
         overall_kl=overall_kl_reduced
-    ), running_q_marginals
+    ), q_z_marginals_detached
 
 
 def approximate_kld_loss(log_alpha: torch.Tensor, eps: float = 1e-6, reduction: str = 'sum') -> KLDLosses:

@@ -65,7 +65,7 @@ class TestKLD:
         # Test with provided running_q_marginals
         losses, running_q_updated = compute_decomposed_kld(
             log_alpha, 
-            running_q_marginals=running_q
+            q_z_marginals=running_q
         )
         
         # Check shapes again
@@ -99,8 +99,8 @@ class TestKLD:
         # Use a defined initial running_q (uniform) that is different from the current batch marginals.
         running_q_init = torch.ones(num_latents, codebook_size) / codebook_size
         
-        _, running_q1 = compute_decomposed_kld(log_alpha, running_q_marginals=running_q_init, momentum=0.9)
-        _, running_q2 = compute_decomposed_kld(log_alpha, running_q_marginals=running_q_init, momentum=0.5)
+        _, running_q1 = compute_decomposed_kld(log_alpha, q_z_marginals=running_q_init, momentum=0.9)
+        _, running_q2 = compute_decomposed_kld(log_alpha, q_z_marginals=running_q_init, momentum=0.5)
         
         # Different momentum should result in different running_q values
         assert not torch.allclose(running_q1, running_q2)
@@ -127,7 +127,7 @@ class TestKLD:
     
     def test_monte_carlo_kld(self, setup_data):
         log_alpha = setup_data['log_alpha']
-        tau = 1.0
+        tau = torch.tensor(1.0)
         
         # Test with standard relaxed categorical
         losses_sum = monte_carlo_kld(log_alpha, tau, reduction="sum")
@@ -149,7 +149,7 @@ class TestKLD:
     def test_kld_methods_consistency(self, setup_data):
         """Test that all KLD methods return values in a similar range"""
         log_alpha = setup_data['log_alpha']
-        tau = 1.0
+        tau = torch.tensor(1.0)
         
         # Get losses from different methods with the same reduction
         losses_decomposed, _ = compute_decomposed_kld(log_alpha, reduction="sum")
@@ -184,7 +184,7 @@ class TestKLD:
 
     def test_monte_carlo_kld_gradient(self, setup_data):
         log_alpha = setup_data['log_alpha']
-        tau = 1.0
+        tau = torch.tensor(1.0)
         log_alpha.requires_grad_()
         loss = monte_carlo_kld(log_alpha, tau, reduction="sum")
         loss.overall_kl.backward()
@@ -210,14 +210,14 @@ class TestKLD:
     def test_monte_carlo_kld_uniform(self, setup_data):
         B, N, C = setup_data['batch_size'], setup_data['num_latents'], setup_data['codebook_size']
         log_alpha = torch.zeros(B, N, C)
-        tau = 1.0
+        tau = torch.tensor(1.0)
         loss = monte_carlo_kld(log_alpha, tau, reduction="sum")
         # Allow a small tolerance due to Monte Carlo variance
         assert torch.abs(loss.overall_kl) < 1e-3
 
     def test_monte_carlo_invalid_reduction(self, setup_data):
         log_alpha = setup_data['log_alpha']
-        tau = 1.0
+        tau = torch.tensor(1.0)
         with pytest.raises(ValueError):
             monte_carlo_kld(log_alpha, tau, reduction="invalid")
 
@@ -228,27 +228,39 @@ class TestKLD:
         assert isinstance(loss, KLDLosses)
 
     def test_compute_decomposed_kld_reduction_consistency_sum(self, setup_data):
-        B = setup_data['batch_size']
         log_alpha = setup_data['log_alpha']
         losses_sum, _ = compute_decomposed_kld(log_alpha, reduction="sum")
-        # For 'sum' reduction: overall_kl = mutual_info + total_corr + B * dimension_wise_kl
-        expected = losses_sum.mutual_info + losses_sum.total_correlation + B * losses_sum.dimension_wise_kl
+        # For 'sum' reduction, our fixed decomposition returns:
+        # overall_kl = MI_sum + TC_sum + (average DWKL over batch)
+        # (i.e. DWKL is already averaged per sample, so no extra factor needed)
+        expected = losses_sum.mutual_info + losses_sum.total_correlation + losses_sum.dimension_wise_kl
         assert torch.allclose(losses_sum.overall_kl, expected, atol=1e-5)
 
     def test_compute_decomposed_kld_reduction_consistency_batchmean(self, setup_data):
         log_alpha = setup_data['log_alpha']
-        losses_bm, _ = compute_decomposed_kld(log_alpha, reduction="batchmean")
-        # For 'batchmean' reduction: overall_kl = mutual_info + total_corr + dimension_wise_kl
-        expected = losses_bm.mutual_info + losses_bm.total_correlation + losses_bm.dimension_wise_kl
-        assert torch.allclose(losses_bm.overall_kl, expected, atol=1e-5)
+        B = setup_data['batch_size']
+        losses_sum, _ = compute_decomposed_kld(log_alpha, reduction="sum")
+        losses_batchmean, _ = compute_decomposed_kld(log_alpha, reduction="batchmean")
+
+        # Check for each loss component C, C_batchmean = C_sum / B
+        assert torch.allclose(losses_batchmean.overall_kl, losses_sum.overall_kl / B, atol=1e-5)
+        assert torch.allclose(losses_batchmean.mutual_info, losses_sum.mutual_info / B, atol=1e-5)
+        assert torch.allclose(losses_batchmean.total_correlation, losses_sum.total_correlation / B, atol=1e-5)
+        assert torch.allclose(losses_batchmean.dimension_wise_kl, losses_sum.dimension_wise_kl / B, atol=1e-5)
+
 
     def test_compute_decomposed_kld_reduction_consistency_mean(self, setup_data):
         N_dim = setup_data['num_latents']
+        B = setup_data['batch_size']
         log_alpha = setup_data['log_alpha']
+        losses_sum, _ = compute_decomposed_kld(log_alpha, reduction="sum")
         losses_mean, _ = compute_decomposed_kld(log_alpha, reduction="mean")
-        # For 'mean' reduction: overall_kl = mutual_info + total_corr + (dimension_wise_kl / N_dim)
-        expected = losses_mean.mutual_info + losses_mean.total_correlation + losses_mean.dimension_wise_kl / N_dim
-        assert torch.allclose(losses_mean.overall_kl, expected, atol=1e-5)
+  
+        # Check for each loss component C, C_batchmean = C_sum / (B * N_dim)
+        assert torch.allclose(losses_mean.mutual_info, losses_sum.mutual_info / (B * N_dim), atol=1e-5)
+        assert torch.allclose(losses_mean.total_correlation, losses_sum.total_correlation / (B * N_dim), atol=1e-5)
+        assert torch.allclose(losses_mean.dimension_wise_kl, losses_sum.dimension_wise_kl / (B * N_dim), atol=1e-5)
+        assert torch.allclose(losses_mean.overall_kl, losses_sum.overall_kl / (B * N_dim), atol=1e-5)
 
     def test_approximate_kld_loss_invalid_reduction(self, setup_data):
         log_alpha = setup_data['log_alpha']

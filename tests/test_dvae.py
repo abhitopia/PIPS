@@ -426,5 +426,5 @@ def test_griddvae_qz_marg_propagation(small_config):
     x = torch.randint(0, small_config.n_vocab, (batch, S))
     # Create dummy q_z_marg with the expected shape [n_codes, codebook_size]
     dummy_q_z_marg = torch.randn(small_config.n_codes, small_config.codebook_size)
-    _, _, _, q_z_marg_out = model(x, q_z_marg=dummy_q_z_marg, tau=0.5, mask_percentage=0.0)
+    _, _, _, q_z_marg_out = model(x, q_z_marg=dummy_q_z_marg, tau=torch.tensor(0.5), mask_percentage=0.0)
     assert torch.equal(dummy_q_z_marg, q_z_marg_out)

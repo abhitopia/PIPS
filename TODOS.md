@@ -112,8 +112,7 @@
 - [x] Add sampling flag to the codebook, temperature is applied regardless of sampling or not. For regular softmax, keep temperature
 at 1.0
 - [x] Make forward pass of DVAEModule only take tensors and no python variables, and output only tensors
-- [ ] Make validation deterministic (no sampling)
-- [ ] fix following
+- [x] fix following
 ```
     skipping cudagraphs due to skipping cudagraphs due to cpu device (primals_88). Found from : 
    File "/teamspace/studios/this_studio/PIPS/pips/dvae.py", line 782, in forward
@@ -123,6 +122,9 @@ at 1.0
   File "/teamspace/studios/this_studio/PIPS/pips/dvae.py", line 493, in sample
     tau = torch.as_tensor(temp, device=log_alpha.device, dtype=log_alpha.dtype)
 ```
+- [x] DWKL scale look off. It has a scale >100x KL (The calculation was all messed up. Fixed it now)
+- [ ] Add ability to decide which training set to use
+- [ ] Make validation deterministic (no sampling)
 - [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
 - [ ] Do I need to jointly model discrete and continuous codes?
 
