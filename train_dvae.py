@@ -35,7 +35,7 @@ import math
 
 class LoggingCallback(pl.Callback):
     
-    def __init__(self, visualization_interval=50, save_to_disk=False, visualization_dir=None, grad_log_interval=100, num_grids_to_visualize=4):
+    def __init__(self, visualization_interval=50, save_to_disk=False, visualization_dir=None, grad_log_interval=100, num_grids_to_visualize=4, ema_decay: float = 0.95):
         self.train_batch_start_time = None
         self.val_batch_start_time = None
         self.visualization_interval = visualization_interval  # Visualize every N steps
@@ -48,6 +48,11 @@ class LoggingCallback(pl.Callback):
         self.val_batch_to_visualize = None
         # Initialize last visualization step so that logging happens immediately at start.
         self.last_logged_visualization = -visualization_interval
+        
+        # Initialize EMAs for codebook usage tracking
+        self.train_code_distribution_ema = None
+        self.val_code_distribution_ema = None
+        self.ema_decay = ema_decay  # EMA decay factor (higher = slower adaptation)
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
@@ -61,7 +66,20 @@ class LoggingCallback(pl.Callback):
         else:
             self.train_batch_start_time = time.monotonic()
 
-    def compute_entropy(self, log_alpha: Tensor, eps: float = 1e-8, add_codebook_usage: bool = True):
+    def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95):
+        """
+        Compute entropy metrics and update code distribution EMA.
+        
+        Args:
+            log_alpha: Log alpha values from model output
+            current_ema: Current EMA of code distribution (None for first call)
+            eps: Small value for numerical stability
+            add_codebook_usage: Whether to create and return a figure
+            ema_decay: EMA decay factor (higher = slower adaptation)
+            
+        Returns:
+            Tuple of (output_dict, updated_ema)
+        """
         output_dict = {}
         # Calculate per-code perplexity
         normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
@@ -80,28 +98,36 @@ class LoggingCallback(pl.Callback):
         for i, perp in enumerate(avg_per_code_perplexity):
             output_dict[f'Codebook/perplexity_code_{i}'] = perp.detach()
         
-        if add_codebook_usage:
-            # Calculate distribution for each code position
-            code_distribution = probs.mean(dim=0)  # [N, C]
-
-            # Create heatmap data.
-            # Convert to float32 before converting to numpy to avoid BFloat16 error.
-            code_dist_data = code_distribution.detach().float().cpu().numpy()
+        # Calculate distribution for each code position (for current batch)
+        current_code_distribution = probs.mean(dim=0).detach()  # [N, C]
+        
+        # Update EMA of code distribution
+        if current_ema is None:
+            # Initialize EMA with current distribution on first call
+            updated_ema = current_code_distribution
+        else:
+            # Update EMA with current distribution
+            updated_ema = ema_decay * current_ema + (1 - ema_decay) * current_code_distribution
+        
+        if add_codebook_usage and updated_ema is not None:
+            # Use the EMA distribution for visualization
+            # Convert to float32 before converting to numpy to avoid BFloat16 error
+            code_dist_data = updated_ema.float().cpu().numpy()
             
-            # Create the figure.
+            # Create the figure
             fig, ax = plt.subplots(figsize=(20, 15))
             im = ax.imshow(code_dist_data, aspect='auto', cmap='viridis')
             plt.colorbar(im)
             
-            # Add labels.
+            # Add labels
             ax.set_xlabel('Codebook Index')
             ax.set_ylabel('Position')
-            ax.set_title('Code Usage Distribution')
+            ax.set_title('Code Usage Distribution (EMA)')
             
-            # Instead of adding to output_dict, return the figure.
+            # Add the figure to output_dict
             output_dict['Codebook/figure'] = fig
 
-        return output_dict
+        return output_dict, updated_ema
 
     def _calculate_tokens_per_sec(self, start, batch):
         if start is not None:
@@ -245,7 +271,13 @@ class LoggingCallback(pl.Callback):
         current_step = pl_module.global_step
         should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
 
-        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=should_visualize)
+        # Pass the current train EMA to compute_entropy and get the updated EMA back
+        entropy_dict, self.train_code_distribution_ema = self.compute_entropy(
+            log_alpha, 
+            current_ema=self.train_code_distribution_ema,
+            add_codebook_usage=should_visualize,
+            ema_decay=self.ema_decay
+        )
         outputs.update(entropy_dict)
 
         # Visualize reconstructions if the time interval has been reached.
@@ -299,7 +331,13 @@ class LoggingCallback(pl.Callback):
         logits = outputs.pop('logits')
 
         # Only log the codebook usage figure once per epoch.
-        entropy_dict = self.compute_entropy(log_alpha, add_codebook_usage=not self.codebook_usage_figure_logged)
+        # Pass the current val EMA to compute_entropy and get the updated EMA back
+        entropy_dict, self.val_code_distribution_ema = self.compute_entropy(
+            log_alpha, 
+            current_ema=self.val_code_distribution_ema,
+            add_codebook_usage=not self.codebook_usage_figure_logged,
+            ema_decay=self.ema_decay
+        )
         self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
