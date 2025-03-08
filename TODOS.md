@@ -126,8 +126,9 @@ at 1.0
 - [x] Add ability to decide which training set to use
 - [x] Move attributes like limit_training_samples and permute_train to experiment config
 - [x] Compute the model code bits and compare with the dataset code bits
-- [ ] Make validation deterministic (no sampling)
+- [x] Make validation argmaxed (hard codes, no sampling or temperature)
 - [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
+- [ ] Compute Codebook Usage as EMA
 - [ ] Do I need to jointly model discrete and continuous codes?
 
 # Implement MNIST DVAE

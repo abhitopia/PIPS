@@ -524,6 +524,11 @@ class GumbelCodebook(nn.Module):
                 log_alpha (Tensor): The logits after projecting through the head.
                 z (Tensor): The soft assignment code (either sampled or computed deterministically via softmax).
         """
+
+
+        if not self.training:
+            return self.inference(logits)
+
         # Project to codebook space.
         log_alpha = self.head(logits)  # [B, N, C]
 
@@ -548,8 +553,9 @@ class GumbelCodebook(nn.Module):
         # Take hard assignments: [B, N]
         hard_idx = torch.argmax(log_alpha, dim=-1)
         
-        # Convert indices to one-hot vectors if needed: [B, N, C]
-        hard_one_hot = torch.nn.functional.one_hot(hard_idx, num_classes=self.codebook_size).float()
+        # More efficient approach - create one-hot tensor directly on the correct device
+        hard_one_hot = torch.zeros_like(log_alpha)
+        hard_one_hot.scatter_(-1, hard_idx.unsqueeze(-1), 1.0)
         
         # Get quantized output via the codebook
         quantized = self.codebook(hard_one_hot)
