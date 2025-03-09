@@ -634,7 +634,7 @@ class GridDVAEConfig(Config):
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
-
+    init_mode: str = "normal"
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -693,7 +693,8 @@ class GridDVAEConfig(Config):
             'sampling': self.sampling,
             'use_exp_relaxed': self.use_exp_relaxed,
             'use_monte_carlo_kld': self.use_monte_carlo_kld,
-            'gamma': self.gamma
+            'gamma': self.gamma,
+            'init_mode': self.init_mode
         }
         
         # Add computed attributes if they exist
@@ -826,22 +827,60 @@ class GridDVAE(nn.Module):
 
         self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
         self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
-        self.apply(self._init_weights) # This initialisation seems to be terrible for overfitting.
 
+        # Apply weight initialization on registered modules.
+        self.apply(self._init_weights)
+        # Additionally, initialize any raw nn.Parameters.
+        self.initialize_all_parameters()
 
     def _init_weights(self, module):
+        # Get initialization mode from config (if present). Default is "normal".
+        # Set self.config.init_mode = 'xavier' if you prefer Xavier initialization.
+        init_mode = getattr(self.config, "init_mode", "normal")
+        
         if isinstance(module, nn.Linear):
-            std = 0.02
-            # if hasattr(module, 'RESCALE_INIT'):
-            #     # 2 * (total_layer/2) because each encoder and decoder has a transformer block layers
-            #     # and each transformer block has 2 residual connections.
-            #     std *= self.config.total_layers ** -0.5
-            torch.nn.init.normal_(module.weight, mean=0.0, std=std)
+            if init_mode == "xavier":
+                torch.nn.init.xavier_normal_(module.weight)
+            else:
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            module.weight._initialized = True
             if module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
+                module.bias._initialized = True
         elif isinstance(module, nn.Embedding):
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    
+            if init_mode == "xavier":
+                torch.nn.init.xavier_normal_(module.weight)
+            else:
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            module.weight._initialized = True
+        elif isinstance(module, nn.LayerNorm):
+            # Often LayerNorm weights are initialized to ones and biases to zeros.
+            torch.nn.init.ones_(module.weight)
+            module.weight._initialized = True
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+                module.bias._initialized = True
+
+    def initialize_all_parameters(self):
+        """
+        Initialize all parameters in the model recursively.
+        This method is meant to also initialize raw nn.Parameter attributes that are not part
+        of a submodule (and hence not handled by self.apply).
+        """
+        init_mode = getattr(self.config, "init_mode", "normal")
+        for name, param in self.named_parameters():
+            # If the parameter has already been initialized (flagged via _initialized), skip.
+            if hasattr(param, "_initialized"):
+                continue
+            if param.ndim >= 2:
+                if init_mode == "xavier":
+                    torch.nn.init.xavier_normal_(param)
+                else:
+                    torch.nn.init.normal_(param, mean=0.0, std=0.02)
+            else:
+                # For biases or vector parameters, initialize to zeros.
+                torch.nn.init.zeros_(param)
+            param._initialized = True
 
     def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
         x_embd = self.embd(x)
