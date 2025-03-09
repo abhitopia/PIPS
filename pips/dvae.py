@@ -760,7 +760,7 @@ class GridDVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=False,
+            out_norm=True,
             rope=rope_1d
         )
 
