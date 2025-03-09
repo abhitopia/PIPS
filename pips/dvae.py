@@ -497,7 +497,7 @@ class GumbelCodebook(nn.Module):
         else:
             # Shared head across all positions.
             self.head = nn.Linear(d_model, codebook_size, bias=False)
-            self.positional_mapping = nn.Identity()
+            self.positional_mapping = None
 
         self.codebook = nn.Linear(codebook_size, d_model, bias=False)
 
