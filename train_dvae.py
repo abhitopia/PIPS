@@ -99,7 +99,7 @@ class LoggingCallback(pl.Callback):
         """
         output_dict = {}
         # Calculate per-code perplexity
-        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
+        normalized_log_alpha = F.log_softmax(log_alpha.detach(), dim=-1)
         probs = normalized_log_alpha.exp()
 
         per_code_entropy = -(probs * normalized_log_alpha).sum(dim=-1)  # [B, N]
@@ -131,18 +131,49 @@ class LoggingCallback(pl.Callback):
             # Convert to float32 before converting to numpy to avoid BFloat16 error
             code_dist_data = updated_ema.float().cpu().numpy()
             
-            # Create the figure
-            fig, ax = plt.subplots(figsize=(20, 15))
-            im = ax.imshow(code_dist_data, aspect='auto', cmap='viridis')
-            plt.colorbar(im)
+            # Create a figure with two subplots - one for EMA heatmap and one for single sample distributions
+            fig = plt.figure(figsize=(20, 30))
             
-            # Add labels
-            ax.set_xlabel('Codebook Index')
-            ax.set_ylabel('Position')
-            ax.set_title('Code Usage Distribution (EMA)')
+            # First subplot for EMA distribution heatmap (as before)
+            ax1 = fig.add_subplot(2, 1, 1)
+            im1 = ax1.imshow(code_dist_data, aspect='auto', cmap='viridis')
+            plt.colorbar(im1, ax=ax1)
+            ax1.set_xlabel('Codebook Index')
+            ax1.set_ylabel('Position')
+            ax1.set_title('Code Usage Distribution (EMA)')
             
-            # Add the figure to output_dict
-            output_dict['Codebook/figure'] = fig
+            # Second subplot for single sample distribution across positions
+            # Take the first sample from the batch
+            single_sample_probs = probs[0].float().cpu().numpy()  # [N, C]
+            
+            # Create a grid of subplots for each position
+            n_positions = single_sample_probs.shape[0]
+            n_cols = min(4, n_positions)  # Maximum 4 columns
+            n_rows = (n_positions + n_cols - 1) // n_cols  # Ceiling division
+            
+            # Create a new figure for the distribution plots - make it more compact
+            dist_fig = plt.figure(figsize=(20, 3 * n_rows))  # Reduced height per row from 5 to 3
+            
+            # Plot distribution for each position
+            for i in range(n_positions):
+                ax = dist_fig.add_subplot(n_rows, n_cols, i + 1)
+                position_probs = single_sample_probs[i]  # Distribution for position i
+                ax.bar(range(len(position_probs)), position_probs)
+                ax.set_xlabel('Codebook Index')
+                ax.set_ylabel('Probability')
+                ax.set_title(f'Position {i} Distribution')
+                # Set y-axis to start from 0 and go to a reasonable max
+                # Use a tighter y-limit to compress the plot vertically
+                max_prob = position_probs.max()
+                ax.set_ylim(0, min(1.0, max_prob * 1.2))  # Tighter upper bound
+                # Add grid for better readability
+                ax.grid(True, linestyle='--', alpha=0.7)
+            
+            plt.tight_layout()
+            
+            # Add both figures to output_dict
+            output_dict['Codebook/heatmap'] = fig
+            output_dict['Codebook/figure'] = dist_fig
 
         return output_dict, updated_ema
 
@@ -384,13 +415,14 @@ class LoggingCallback(pl.Callback):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
             # Handle the figure separately.
-            if key == 'Codebook/figure':
+            if key == 'Codebook/figure' or key == 'Codebook/heatmap':
                 if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
-                    # Only log every 20 global steps and only from rank 0.
+                    # Only log from rank 0
+                    log_key = 'CodebookUsage/Distributions_{phase}' if key == 'Codebook/figure' else 'CodebookUsage/Heatmap_{phase}'
                     pl_module.logger.experiment.log({
-                        f'CodebookUsage/Usage_{phase}': wandb.Image(value)
+                        log_key.format(phase=phase): wandb.Image(value)
                     })
-                plt.close(value)  # Close the figure to free memory.
+                plt.close(value)  # Close the figure to free memory
                 continue
 
             # Handle the main loss separately.
