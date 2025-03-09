@@ -796,7 +796,7 @@ class GridDVAE(nn.Module):
 
         self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
         self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
-        # self.apply(self._init_weights) # This initialisation seems to be terrible for overfitting.
+        self.apply(self._init_weights) # This initialisation seems to be terrible for overfitting.
 
 
     def _init_weights(self, module):

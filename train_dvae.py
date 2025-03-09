@@ -66,6 +66,23 @@ class LoggingCallback(pl.Callback):
         else:
             self.train_batch_start_time = time.monotonic()
 
+    @staticmethod
+    def log_alpha_statistics(log_alpha: torch.Tensor, tau: torch.Tensor):
+        mean_val = log_alpha.mean().item()
+        std_val = log_alpha.std().item()
+        median_val = log_alpha.median().item()
+        tau_val = tau.item()
+        
+        # Compute the ratio of standard deviation to temperature
+        ratio = std_val / tau_val
+
+        return {
+            'logα_mean(Stats)': mean_val,
+            'logα_std(Stats)': std_val,
+            'logα_median(Stats)': median_val,
+            'logα_tau_ratio(Stats)': ratio
+        }
+
     def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95):
         """
         Compute entropy metrics and update code distribution EMA.
@@ -280,6 +297,10 @@ class LoggingCallback(pl.Callback):
         )
         outputs.update(entropy_dict)
 
+        log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
+        outputs.update(log_alpha_stats)
+
+
         # Visualize reconstructions if the time interval has been reached.
         if should_visualize:
             self.visualize_reconstructions(pl_module, x, logits, 'train')
@@ -341,6 +362,9 @@ class LoggingCallback(pl.Callback):
         self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
+
+        log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
+        outputs.update(log_alpha_stats)
 
         # Visualize reconstructions only for the randomly selected batch.
         if batch_idx == self.val_batch_to_visualize:
