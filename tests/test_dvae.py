@@ -252,12 +252,41 @@ def test_latenttransformer():
     assert out.shape == (batch, n_latent, d_model)
 
 # --------------------------
-# GumbelCodebook tests
+# GumbelCodebook tests - parameterized to test both shared and position-dependent heads.
 # --------------------------
 
-def test_gumbelcodebook_forward_backward():
+def _override_identity_mapping(model, d_model, N):
+    """
+    Override the model's positional_mapping with an identity tensor.
+
+    This function first deletes the registered child module (if any) so that we can directly
+    inject an identity tensor, making sure that:
+      torch.einsum("bnd,ndm->bnm", x, identity_tensor) == x
+    for any x of shape [B, N, d_model].
+    """
+    identity_tensor = torch.eye(d_model).unsqueeze(0).repeat(N, 1, 1)  # shape: (N, d_model, d_model)
+    device = next(model.parameters()).device
+    identity_tensor = identity_tensor.to(device)
+    # If positional_mapping is registered as a submodule, delete it.
+    if "positional_mapping" in model._modules:
+        del model._modules["positional_mapping"]
+    # Directly override the attribute on the instance.
+    model.__dict__["positional_mapping"] = identity_tensor
+
+@pytest.mark.parametrize("position_dependent", [False, True])
+def test_gumbelcodebook_forward_backward(position_dependent):
     batch, N, d_model, codebook_size = 2, 10, 32, 16
-    model = GumbelCodebook(d_model=d_model, codebook_size=codebook_size, use_exp_relaxed=False)
+    model = GumbelCodebook(
+        d_model=d_model,
+        codebook_size=codebook_size,
+        n_codes=N,
+        use_exp_relaxed=False,
+        position_dependent=position_dependent
+    )
+    # For non–position–dependent case, override the mapping with an identity tensor.
+    if not position_dependent:
+        _override_identity_mapping(model, d_model, N)
+        
     logits = torch.randn(batch, N, d_model, requires_grad=True)
     quantized, log_alpha, z = model(logits, tau=0.5)
     assert quantized.shape == (batch, N, d_model)
@@ -266,9 +295,19 @@ def test_gumbelcodebook_forward_backward():
     quantized.sum().backward()
     assert logits.grad is not None
 
-def test_gumbelcodebook_inference():
+@pytest.mark.parametrize("position_dependent", [False, True])
+def test_gumbelcodebook_inference(position_dependent):
     batch, N, d_model, codebook_size = 2, 10, 32, 16
-    model = GumbelCodebook(d_model=d_model, codebook_size=codebook_size, use_exp_relaxed=False)
+    model = GumbelCodebook(
+        d_model=d_model,
+        codebook_size=codebook_size,
+        n_codes=N,
+        use_exp_relaxed=False,
+        position_dependent=position_dependent
+    )
+    if not position_dependent:
+        _override_identity_mapping(model, d_model, N)
+        
     logits = torch.randn(batch, N, d_model)
     quantized, log_alpha, hard_one_hot = model.inference(logits)
     assert quantized.shape == (batch, N, d_model)
@@ -277,123 +316,109 @@ def test_gumbelcodebook_inference():
     one_hot_sum = hard_one_hot.sum(dim=-1)
     assert torch.allclose(one_hot_sum, torch.ones_like(one_hot_sum))
 
-def test_gumbelcodebook_inference_efficiency():
-    """Test that the inference method correctly creates one-hot encodings directly on device."""
+@pytest.mark.parametrize("position_dependent", [False, True])
+def test_gumbelcodebook_inference_efficiency(position_dependent):
+    """
+    Test that the inference method correctly produces one-hot encodings on device.
+    """
     batch, N, d_model, codebook_size = 2, 3, 32, 4
-    model = GumbelCodebook(d_model=d_model, codebook_size=codebook_size, use_exp_relaxed=False)
+    model = GumbelCodebook(
+        d_model=d_model,
+        codebook_size=codebook_size,
+        n_codes=N,
+        use_exp_relaxed=False,
+        position_dependent=position_dependent
+    )
+    if not position_dependent:
+        _override_identity_mapping(model, d_model, N)
+        
+    # Select device based on the head's type.
+    device = model.head.device if position_dependent else model.head.weight.device
+    logits = torch.randn(batch, N, d_model, device=device)
     
-    # Create random input logits
-    logits = torch.randn(batch, N, d_model, device=model.head.weight.device)
-    
-    # First, get the log_alpha that would be produced by the head
     with torch.no_grad():
-        log_alpha = model.head(logits)
-        # Find the expected argmax indices
+        if model.position_dependent:
+            log_alpha = torch.einsum("bnd,ndc->bnc", logits, model.head)
+        else:
+            log_alpha = model.head(logits)
         expected_indices = torch.argmax(log_alpha, dim=-1)
     
-    # Now call the inference method
     quantized, returned_log_alpha, hard_one_hot = model.inference(logits)
-    
-    # Verify log_alpha is consistent
     assert torch.allclose(returned_log_alpha, log_alpha)
-    
-    # Check that each position has exactly one 1.0 value
+    # Each position should have exactly one 1.0 value.
     assert torch.all(hard_one_hot.sum(dim=-1) == 1.0)
-    
-    # Check that the 1.0 values are in the expected positions based on argmax
     for b in range(batch):
         for n in range(N):
             expected_idx = expected_indices[b, n].item()
             assert hard_one_hot[b, n, expected_idx] == 1.0
-            # All other values should be 0
             zero_mask = torch.ones(codebook_size, dtype=torch.bool, device=hard_one_hot.device)
             zero_mask[expected_idx] = False
             assert torch.all(hard_one_hot[b, n, zero_mask] == 0.0)
-    
-    # Verify the shape of the quantized output
     assert quantized.shape == (batch, N, d_model)
 
-def test_gumbelcodebook_training_vs_eval_mode():
-    """Test that GumbelCodebook correctly switches between training and evaluation behavior."""
+@pytest.mark.parametrize("position_dependent", [False, True])
+def test_gumbelcodebook_training_vs_eval_mode(position_dependent):
+    """
+    Test that GumbelCodebook correctly switches between training and evaluation behaviors.
+    """
     batch, N, d_model, codebook_size = 2, 3, 32, 4
-    tau = torch.tensor(0.5)  # Temperature for Gumbel-Softmax
-    
-    # Set a fixed seed for reproducibility
+    tau = torch.tensor(0.5)  # Temperature
     torch.manual_seed(42)
-    
-    # Create a model with sampling enabled
-    model = GumbelCodebook(d_model=d_model, codebook_size=codebook_size, use_exp_relaxed=False, sampling=True)
-    
-    # Create random input logits
+    model = GumbelCodebook(
+        d_model=d_model,
+        codebook_size=codebook_size,
+        n_codes=N,
+        use_exp_relaxed=False,
+        position_dependent=position_dependent,
+        sampling=True
+    )
+    if not position_dependent:
+        _override_identity_mapping(model, d_model, N)
+        
     logits = torch.randn(batch, N, d_model)
     
-    # First test in training mode
+    # Training mode: with sampling enabled, we expect soft assignments.
     model.train()
     with torch.no_grad():
-        # In training mode with sampling=True, should use Gumbel-Softmax sampling
         _, log_alpha_train, z_train = model(logits, tau)
-        
-        # Check that z_train is not one-hot (should be soft due to sampling)
-        # We'll check if any values are strictly between 0 and 1
         has_soft_values = ((z_train > 0) & (z_train < 1)).any()
         assert has_soft_values, "Expected soft assignments in training mode with sampling"
     
-    # Now test in evaluation mode
+    # Evaluation mode: hard (one-hot) assignments.
     model.eval()
     with torch.no_grad():
-        # In eval mode, should use hard argmax regardless of sampling setting
         _, log_alpha_eval, z_eval = model(logits, tau)
-        
-        # Check that z_eval is one-hot (should be hard due to eval mode)
-        # Each position should have exactly one 1.0 value
         assert torch.all(z_eval.sum(dim=-1) == 1.0), "Expected exactly one 1.0 per position"
-        
-        # Each value should be either 0.0 or 1.0
         assert torch.all((z_eval == 0) | (z_eval == 1)), "Expected only 0.0 or 1.0 values in eval mode"
-        
-        # The argmax positions should match between log_alpha and z_eval
         argmax_log_alpha = torch.argmax(log_alpha_eval, dim=-1)
         argmax_z = torch.argmax(z_eval, dim=-1)
-        assert torch.all(argmax_log_alpha == argmax_z), "Argmax positions should match"
+        assert torch.all(argmax_log_alpha == argmax_z), "Expected matching argmax positions"
     
-    # Test with sampling disabled (should use softmax even in training)
-    # Use the same model but change the sampling parameter
+    # With sampling disabled in training mode, the output should be softmax.
     model.sampling = False
     model.train()
     with torch.no_grad():
-        # In training mode with sampling=False, should use softmax
         _, log_alpha_no_sampling, z_no_sampling = model(logits, tau)
-        
-        # Check that z_no_sampling is not one-hot but softmax output
-        # Sum should be very close to 1.0 for each position
-        assert torch.allclose(z_no_sampling.sum(dim=-1), 
-                             torch.ones(batch, N, device=z_no_sampling.device),
-                             rtol=1e-5), "Expected softmax output to sum to 1.0"
-        
-        # Should match softmax of log_alpha / tau
+        assert torch.allclose(
+            z_no_sampling.sum(dim=-1),
+            torch.ones(batch, N, device=z_no_sampling.device),
+            rtol=1e-5
+        ), "Expected softmax output to sum to 1.0"
         expected_z = torch.softmax(log_alpha_no_sampling / tau, dim=-1)
         assert torch.allclose(z_no_sampling, expected_z, rtol=1e-5), "Expected softmax output"
     
-    # In eval mode, both sampling settings should behave the same (use hard assignments)
+    # In eval mode, both sampling settings produce hard one-hot assignments.
     model.eval()
     with torch.no_grad():
-        # Get results with sampling=False in eval mode
         _, log_alpha_eval_no_sampling, z_eval_no_sampling = model(logits, tau)
-        
-        # Now set sampling back to True
         model.sampling = True
-        # Get results with sampling=True in eval mode (using the same model and inputs)
         _, log_alpha_eval_sampling, z_eval_sampling = model(logits, tau)
-        
-        # Both should produce hard one-hot encodings
         assert torch.all((z_eval_no_sampling == 0) | (z_eval_no_sampling == 1)), \
-            "Expected only 0.0 or 1.0 values in eval mode with sampling=False"
+            "Expected binary values in eval mode with sampling disabled"
         assert torch.all((z_eval_sampling == 0) | (z_eval_sampling == 1)), \
-            "Expected only 0.0 or 1.0 values in eval mode with sampling=True"
-        
-        # Both should produce the same hard assignments since they're based on the same log_alpha
+            "Expected binary values in eval mode with sampling enabled"
         assert torch.all(torch.argmax(z_eval_sampling, dim=-1) == torch.argmax(z_eval_no_sampling, dim=-1)), \
-            "Both sampling settings should produce the same hard assignments in eval mode"
+            "Both sampling settings should give the same hard assignments in eval mode"
 
 # --------------------------
 # GridDVAE tests

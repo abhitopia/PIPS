@@ -129,8 +129,8 @@ at 1.0
 - [x] Make validation argmaxed (hard codes, no sampling or temperature)
 - [x] Compute Codebook Usage as EMA
 - [x] Add logits_tau monitoring and enable small initialisation.
+- [x] Add position dependent head and codebook in GumbelCodebook (using position_dependent flag)
 - [ ] Add logitlaplace loss ? (class LogitLaplace  in Karpathy's code)
-- [ ] Add different codebook for different positions??
 - [ ] Change figure size for codebook usage and reconstructions
 - [ ] Fix Monte Carlo KLD on compilation failure (unable to compile, seems some internal issue with torch)
 - [ ] Do I need to jointly model discrete and continuous codes?

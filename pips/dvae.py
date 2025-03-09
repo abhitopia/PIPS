@@ -481,25 +481,28 @@ class LatentTransformer(nn.Module):
 
 
 class GumbelCodebook(nn.Module):
-    def __init__(self, d_model, codebook_size, use_exp_relaxed=False, sampling: bool = True):
+    def __init__(self, d_model, codebook_size, n_codes, position_dependent: bool = False, use_exp_relaxed=False, sampling: bool = True):
         super().__init__()
-        self.head = nn.Linear(d_model, codebook_size, bias=False)
-        self.codebook = nn.Linear(codebook_size, d_model, bias=False)
+        self.position_dependent = position_dependent
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
         self.sampling = sampling
 
-    def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
-        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical.
+        # If position-dependent is enabled, create separate head and mapping for each latent position.
+        if self.position_dependent:
+            # Head: one per latent position.
+            self.head = nn.Parameter(torch.randn(n_codes, d_model, codebook_size))
+            # Unique positional mapping applied to quantized outputs.
+            self.positional_mapping = nn.Parameter(torch.randn(n_codes, d_model, d_model))
+        else:
+            # Shared head across all positions.
+            self.head = nn.Linear(d_model, codebook_size, bias=False)
+            self.positional_mapping = nn.Identity()
 
-        Args:
-            log_alpha (Tensor): Logits after projection.
-            tau (Tensor): Temperature parameter as a scalar tensor.
-            
-        Returns:
-            Tensor: The sampled soft assignment (if self.use_exp_relaxed is True,
-            the sample is exponentiated).
-        """
+        self.codebook = nn.Linear(codebook_size, d_model, bias=False)
+
+    def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
+        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical."""
         assert tau > 0.0, "Temperature must be greater than 0.0"
         # tau is already a tensor, so we simply use it directly.
         if self.use_exp_relaxed:
@@ -524,13 +527,15 @@ class GumbelCodebook(nn.Module):
                 log_alpha (Tensor): The logits after projecting through the head.
                 z (Tensor): The soft assignment code (either sampled or computed deterministically via softmax).
         """
-
-
         if not self.training:
             return self.inference(logits)
 
-        # Project to codebook space.
-        log_alpha = self.head(logits)  # [B, N, C]
+        # If using a position-dependent head, compute logits using a per-position projection.
+        if self.position_dependent:
+            # Assume logits shape is [B, N, d_model] and head is [N, d_model, codebook_size].
+            log_alpha = torch.einsum("bnd,ndc->bnc", logits, self.head)  # [B, N, codebook_size]
+        else:
+            log_alpha = self.head(logits)  # [B, N, codebook_size]
 
         if self.sampling:
             # Sample using the (Gumbel-Softmax) distribution.
@@ -539,17 +544,34 @@ class GumbelCodebook(nn.Module):
             # Apply softmax with temperature scaling.
             z = torch.softmax(log_alpha / tau, dim=-1)
 
-        quantized = self.codebook(z)
-            
+        quantized = self.codebook(z)  # [B, N, d_model]
+
+        if self.positional_mapping is not None:
+            # Apply a unique mapping for each latent position via batched matrix multiplication.
+            quantized = torch.einsum("bnd,ndm->bnm", quantized, self.positional_mapping)
+
         return quantized, log_alpha, z
-    
 
     def inference(self, logits):
+
+        """
+        Inference pass through the Gumbel-Softmax codebook.
+        This method returns a hard one-hot encoding based on the argmax of the logits.
+        
+        Args:
+            logits (Tensor): Input tensor of shape [B, N, d_model].
+            
+        Returns:
+            Tuple[Tensor, Tensor, Tensor]: (quantized, log_alpha, hard_one_hot)
+        """
         # This is used to get the hard assignments from the logits
 
         # Project to codebook space: [B, N, C]
-        log_alpha = self.head(logits)
-        
+        if self.position_dependent:
+            log_alpha = torch.einsum("bnd,ndc->bnc", logits, self.head)
+        else:
+            log_alpha = self.head(logits)
+                
         # Take hard assignments: [B, N]
         hard_idx = torch.argmax(log_alpha, dim=-1)
         
@@ -559,6 +581,9 @@ class GumbelCodebook(nn.Module):
         
         # Get quantized output via the codebook
         quantized = self.codebook(hard_one_hot)
+
+        if self.positional_mapping is not None:
+            quantized = torch.einsum("bnd,ndm->bnm", quantized, self.positional_mapping)
         
         return quantized, log_alpha, hard_one_hot
 
@@ -574,6 +599,7 @@ class GridDVAEConfig(Config):
         n_grid_layer (int): Number of base transformer layers
         n_latent_layer (int): Number of latent transformer layers
         n_codes (int): Number of discrete codes (must be power of 2)
+        pos_dependent_codebook (bool): Whether to use position-dependent codebook (default: True)
         codebook_size (int): Size of codebook (default: 512)
         rope_base_height (int): Base for geometric progression in angle computation for height (default: 10007)
         rope_base_width (int): Base for geometric progression in angle computation for width (default: 5003)
@@ -593,6 +619,7 @@ class GridDVAEConfig(Config):
     n_grid_layer: int
     n_latent_layer: int
     n_codes: int
+    pos_dependent_codebook: bool = True
     codebook_size: int = 512
     rope_base_height: int = 10007  # ~10k, prime
     rope_base_width: int = 5003    # ~5k, prime
@@ -652,6 +679,7 @@ class GridDVAEConfig(Config):
             'n_grid_layer': self.n_grid_layer,
             'n_latent_layer': self.n_latent_layer,
             'n_codes': self.n_codes,
+            'pos_dependent_codebook': self.pos_dependent_codebook,
             'codebook_size': self.codebook_size,
             'rope_base_height': self.rope_base_height,
             'rope_base_width': self.rope_base_width,
@@ -764,9 +792,11 @@ class GridDVAE(nn.Module):
             rope=rope_1d
         )
 
-        self.codebook = GumbelCodebook(config.n_dim, 
-                                       config.codebook_size,
+        self.codebook = GumbelCodebook(d_model=config.n_dim, 
+                                       codebook_size=config.codebook_size,
+                                       n_codes=config.n_codes,
                                        use_exp_relaxed=config.use_exp_relaxed,
+                                       position_dependent=config.pos_dependent_codebook,
                                        sampling=config.sampling)
 
         self.latent_decoder = LatentTransformer(

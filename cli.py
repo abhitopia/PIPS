@@ -103,6 +103,7 @@ def new(
     n_grid_layer: int = typer.Option(4, "--n-grid-layer", "-gl", help="Number of grid transformer layers"),
     n_latent_layer: int = typer.Option(4, "--n-latent-layer", "-ll", help="Number of latent transformer layers"),
     n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
+    pos_dep: bool = typer.Option(True, "--no-pos-dep", help="Use position-dependent codebook and head", is_flag=True, flag_value=False),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     gamma: float = typer.Option(2.0, "--gamma", "--g", help="Focal loss gamma parameter (default: 2.0)"),
@@ -182,6 +183,7 @@ def new(
         n_latent_layer=n_latent_layer,
         n_codes=n_codes,
         codebook_size=codebook_size,
+        pos_dependent_codebook=pos_dep,
         dropout=dropout,
         gamma=gamma,
         n_vocab=16,  # Fixed for grid world
@@ -190,7 +192,7 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        sampling=not no_sample
+        sampling=not no_sample,
     )
     
     config = ExperimentConfig(
