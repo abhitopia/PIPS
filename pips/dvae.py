@@ -630,7 +630,7 @@ class GridDVAEConfig(Config):
     padding_idx: int | None = None
     mask_idx: int | None = None
     pad_weight: float = 0.01,
-    sampling: bool = True,
+    sampling: bool = False,
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
@@ -903,6 +903,43 @@ class GridDVAE(nn.Module):
         return x
     
 
+    def entropy_loss(self, log_alpha: Tensor, reduction: str = "mean") -> Tensor:
+        """
+        Compute the entropy of the latent distribution.
+        
+        Args:
+            log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
+                where B is batch size, N is number of codes, C is codebook size.
+            reduction (str): Reduction method, one of 'sum', 'mean', or 'batchmean'.
+                'sum': Sum over batch and latent dimensions.
+                'mean': Average over batch and latent dimensions.
+                'batchmean': Sum over latent dimensions, then average over batch.
+                
+        Returns:
+            Tensor: Entropy reduced according to the specified method.
+        """
+        # Compute log probabilities directly using log_softmax
+        log_probs = F.log_softmax(log_alpha, dim=-1)  # [B, N, C]
+        
+        # Get probabilities by exponentiating log probabilities
+        probs = torch.exp(log_probs)  # [B, N, C]
+        
+        # Compute entropy: -sum(p * log(p))
+        entropy_per_latent = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
+        
+        # Apply reduction
+        B, N, _ = log_alpha.shape
+        
+        if reduction == "sum":
+            return entropy_per_latent.sum()
+        elif reduction == "mean":
+            return entropy_per_latent.mean()
+        elif reduction == "batchmean":
+            # Sum over latent dimensions, then average over batch
+            return entropy_per_latent.sum(dim=1).mean()
+        else:
+            raise ValueError(f"Invalid reduction: {reduction}")
+
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
@@ -919,15 +956,20 @@ class GridDVAE(nn.Module):
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
     
+        # Calculate entropy loss
+        latent_entropy = self.entropy_loss(log_alpha, reduction="mean")
+
         decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
     
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
     
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
+             "entropy_loss": latent_entropy,   # Add entropy to losses dictionary
              **kld_losses.to_dict()
         }
         return decoded_logits, log_alpha, losses, q_z_marg_updated
+    
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 1.0, gamma: float = 0.0) -> Tensor:
         """

@@ -96,8 +96,8 @@
 
 ## Version 3 (Make the logalpha peaky)
 - [x] Visualise with and without tau distribution
+- [x] Add entropy penalty and corresponding coefficient and schedulers
 - [ ] Create a MNIST example (properly this time)
-- [ ] Add entropy penalty and corresponding coefficient and schedulers
 
 
 # Fix KLD Losses

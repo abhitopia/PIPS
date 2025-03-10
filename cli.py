@@ -116,7 +116,7 @@ def new(
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
     use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
-    no_sample: bool = typer.Option(False, "--no-sample", help="Do not sample (use Gumbel Noise) using Gumbel-Softmax", is_flag=True, flag_value=True),
+    sample: bool = typer.Option(False, "--sample", help="Enable sampling using Gumbel-Softmax", is_flag=True, flag_value=True, show_default=True),
     init_mode: InitMode = typer.Option(InitMode.NORMAL, "--init-mode", help="Initialization mode for model weights", case_sensitive=False),
     
     # Training parameters
@@ -142,7 +142,8 @@ def new(
     
     # Beta values for loss components
     beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss. Stays constant."),
-    beta_kl: float = typer.Option(1.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
+    beta_entropy: float = typer.Option(0.0, "--beta-entropy", "--bent", help="Beta for entropy loss"),
+    beta_kl: float = typer.Option(0.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
     beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
     beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
@@ -199,7 +200,7 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        sampling=not no_sample,
+        sampling=sample,
         init_mode=init_mode.value,
     )
     
@@ -212,12 +213,14 @@ def new(
         tau_start=tau_start,
         tau=tau,
         beta_ce_start=beta_ce,
+        beta_entropy_start=0.0,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
         beta_dwkl_start=0.0,
         beta_kl_start=0.0,
         mask_pct_start=0.0,
         beta_ce=beta_ce,
+        beta_entropy=beta_entropy,
         beta_mi=beta_mi,
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,

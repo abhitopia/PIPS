@@ -503,6 +503,7 @@ class ExperimentConfig:
     tau: float = 0.0625 # 1/16 as per Dalle-E paper
     beta_ce_start: float = 1.0  # Default to 1.0 to maintain original behavior
     beta_ce: float = 1.0  # Default to 1.0 to maintain original behavior
+    beta_entropy_start: float = 0.0
     beta_mi_start: float = 0.0
     beta_tc_start: float = 0.0
     beta_dwkl_start: float = 0.0
@@ -510,11 +511,12 @@ class ExperimentConfig:
     mask_pct_start: float = 0.0
     
     # Final values
+    beta_kl: float = 1.0
+    beta_entropy: float = 0.0
     beta_mi: float = 0.0
-    beta_tc: float = 6.0
+    beta_tc: float = 0.0
     beta_dwkl: float = 0.0
-    beta_kl: float = 2.0
-    max_mask_pct: float = 0.5
+    max_mask_pct: float = 0.0
 
     
     # Schedule types
@@ -707,6 +709,14 @@ class DVAETrainingModule(pl.LightningModule):
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
+
+        # Add beta_entropy schedule with shared beta warmup.
+        beta_entropy_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_entropy_start,
+            target_value=cfg.beta_entropy,
+            warmup_steps=cfg.warmup_steps_beta,
+            schedule_type=cfg.beta_schedule_type
+        )
         
         # Beta schedules with shared beta warmup.
         beta_mi_schedule = Schedule.get_schedule(
@@ -748,6 +758,7 @@ class DVAETrainingModule(pl.LightningModule):
         return {
             'tau': torch.tensor(tau_schedule(step), device=device, dtype=torch.float32),
             'beta(CE)': torch.tensor(beta_ce_schedule(step), device=device, dtype=torch.float32),
+            'beta(Entropy)': torch.tensor(beta_entropy_schedule(step), device=device, dtype=torch.float32),
             'beta(MI)': torch.tensor(beta_mi_schedule(step), device=device, dtype=torch.float32),
             'beta(TC)': torch.tensor(beta_tc_schedule(step), device=device, dtype=torch.float32),
             'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
@@ -755,7 +766,7 @@ class DVAETrainingModule(pl.LightningModule):
             'max_pct(MASK)': torch.tensor(max_mask_pct_schedule(step), device=device, dtype=torch.float32)
         }
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), beta_entropy: Tensor = torch.tensor(0.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
         # All scheduled parameters are required as tensor arguments.
         
         # Forward pass with provided scheduled parameters.
@@ -787,7 +798,8 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(MI)': losses['mi_loss'],
             'loss(DWKL)': losses['dwkl_loss'],
             'loss(TC)': maybe_relu(losses['tc_loss']),
-            'loss(KL)': losses['kl_loss']
+            'loss(KL)': losses['kl_loss'],
+            'loss(Entropy)': losses['entropy_loss']
         }
         
         # Compute weighted losses for total loss.
@@ -796,7 +808,8 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(MI)': raw_losses['loss(MI)'] * beta_mi,
             'loss(DWKL)': raw_losses['loss(DWKL)'] * beta_dwkl,
             'loss(TC)': raw_losses['loss(TC)'] * beta_tc,
-            'loss(KL)': raw_losses['loss(KL)'] * beta_kl
+            'loss(KL)': raw_losses['loss(KL)'] * beta_kl,
+            'loss(Entropy)': raw_losses['loss(Entropy)'] * beta_entropy
         }
         
         total_loss = sum(weighted_losses.values())
@@ -837,6 +850,7 @@ class DVAETrainingModule(pl.LightningModule):
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
+             beta_entropy=scheduled['beta(Entropy)'],
              mask_pct=mask_pct
         )
 
@@ -871,6 +885,7 @@ class DVAETrainingModule(pl.LightningModule):
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
+             beta_entropy=scheduled['beta(Entropy)'],
              mask_pct=mask_pct
         )
 
