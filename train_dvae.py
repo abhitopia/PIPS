@@ -134,42 +134,58 @@ class LoggingCallback(pl.Callback):
             for i, perp in enumerate(avg_per_code_perplexity):
                 output_dict[f'Codebook/perplexity_code_{i}'] = perp.detach()
             
-            # Combined heatmap visualization: EMA heatmap and first sample probability heatmap.
+            # Combined heatmap visualization: EMA heatmap, first sample and last sample probability heatmaps
             code_dist_data = updated_ema.float().cpu().numpy()
-            single_sample_probs = probs[0].float().cpu().detach().numpy()  # shape: [N, C]
+            first_sample_probs = probs[0].float().cpu().detach().numpy()  # shape: [N, C]
+            last_sample_probs = probs[-1].float().cpu().detach().numpy()  # Last sample in batch
+            
             if not hasattr(self, "combined_heatmap_fig") or self.combined_heatmap_fig is None:
                 self.combined_heatmap_fig = plt.figure(figsize=(30, 12), dpi=80)
-                self.ax1 = self.combined_heatmap_fig.add_subplot(1, 2, 1)
+                
+                # First subplot - EMA distribution
+                self.ax1 = self.combined_heatmap_fig.add_subplot(1, 3, 1)
                 self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis', vmin=0)
                 self.cbar1 = plt.colorbar(self.im1, ax=self.ax1)
                 self.ax1.set_xlabel('Codebook Index')
                 self.ax1.set_ylabel('Position')
                 self.ax1.set_title('Code Usage Distribution (EMA)')
 
-                self.ax2 = self.combined_heatmap_fig.add_subplot(1, 2, 2)
-                self.im2 = self.ax2.imshow(single_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+                # Second subplot - First sample
+                self.ax2 = self.combined_heatmap_fig.add_subplot(1, 3, 2)
+                self.im2 = self.ax2.imshow(first_sample_probs, aspect='auto', cmap='viridis', vmin=0)
                 self.cbar2 = plt.colorbar(self.im2, ax=self.ax2)
                 self.ax2.set_xlabel('Codebook Index')
                 self.ax2.set_ylabel('Position')
                 self.ax2.set_title('First Sample Probability Heatmap')
+                
+                # Third subplot - Last sample
+                self.ax3 = self.combined_heatmap_fig.add_subplot(1, 3, 3)
+                self.im3 = self.ax3.imshow(last_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+                self.cbar3 = plt.colorbar(self.im3, ax=self.ax3)
+                self.ax3.set_xlabel('Codebook Index')
+                self.ax3.set_ylabel('Position')
+                self.ax3.set_title('Last Sample Probability Heatmap')
             else:
-                # Update image data
+                # Update EMA heatmap
                 self.im1.set_data(code_dist_data)
-                # Update colormap scaling - keep min at 0, adjust max to data
                 self.im1.set_clim(vmin=0, vmax=code_dist_data.max())
                 self.ax1.relim()
                 self.ax1.autoscale_view()
-                # Update colorbar
                 self.cbar1.update_normal(self.im1)
 
-                # Update image data
-                self.im2.set_data(single_sample_probs)
-                # Update colormap scaling - keep min at 0, adjust max to data
-                self.im2.set_clim(vmin=0, vmax=single_sample_probs.max())
+                # Update first sample heatmap
+                self.im2.set_data(first_sample_probs)
+                self.im2.set_clim(vmin=0, vmax=first_sample_probs.max())
                 self.ax2.relim()
                 self.ax2.autoscale_view()
-                # Update colorbar
                 self.cbar2.update_normal(self.im2)
+                
+                # Update last sample heatmap
+                self.im3.set_data(last_sample_probs)
+                self.im3.set_clim(vmin=0, vmax=last_sample_probs.max())
+                self.ax3.relim()
+                self.ax3.autoscale_view()
+                self.cbar3.update_normal(self.im3)
 
             plt.tight_layout()
             output_dict['Codebook/combined_heatmap'] = self.combined_heatmap_fig
