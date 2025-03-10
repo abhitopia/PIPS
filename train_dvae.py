@@ -140,36 +140,28 @@ class LoggingCallback(pl.Callback):
             if not hasattr(self, "combined_heatmap_fig") or self.combined_heatmap_fig is None:
                 self.combined_heatmap_fig = plt.figure(figsize=(30, 12), dpi=80)
                 self.ax1 = self.combined_heatmap_fig.add_subplot(1, 2, 1)
-                self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis')
+                self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis', vmin=0, vmax=1)
                 self.cbar1 = plt.colorbar(self.im1, ax=self.ax1)
                 self.ax1.set_xlabel('Codebook Index')
                 self.ax1.set_ylabel('Position')
                 self.ax1.set_title('Code Usage Distribution (EMA)')
 
                 self.ax2 = self.combined_heatmap_fig.add_subplot(1, 2, 2)
-                self.im2 = self.ax2.imshow(single_sample_probs, aspect='auto', cmap='viridis')
+                self.im2 = self.ax2.imshow(single_sample_probs, aspect='auto', cmap='viridis', vmin=0, vmax=1)
                 self.cbar2 = plt.colorbar(self.im2, ax=self.ax2)
                 self.ax2.set_xlabel('Codebook Index')
                 self.ax2.set_ylabel('Position')
                 self.ax2.set_title('First Sample Probability Heatmap')
             else:
-                # Update image data
+                # Update image data without changing the scale
                 self.im1.set_data(code_dist_data)
-                # Update colormap scaling
-                self.im1.set_clim(vmin=code_dist_data.min(), vmax=code_dist_data.max())
                 self.ax1.relim()
                 self.ax1.autoscale_view()
-                # Update colorbar
-                self.cbar1.update_normal(self.im1)
 
-                # Update image data
+                # Update image data without changing the scale
                 self.im2.set_data(single_sample_probs)
-                # Update colormap scaling
-                self.im2.set_clim(vmin=single_sample_probs.min(), vmax=single_sample_probs.max())
                 self.ax2.relim()
                 self.ax2.autoscale_view()
-                # Update colorbar
-                self.cbar2.update_normal(self.im2)
 
             plt.tight_layout()
             output_dict['Codebook/combined_heatmap'] = self.combined_heatmap_fig
