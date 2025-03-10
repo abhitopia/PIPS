@@ -634,7 +634,7 @@ class GridDVAEConfig(Config):
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
-    init_mode: str = "xavier"
+    init_mode: str = "normal"
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -877,9 +877,6 @@ class GridDVAE(nn.Module):
                     torch.nn.init.xavier_normal_(param)
                 else:
                     torch.nn.init.normal_(param, mean=0.0, std=0.02)
-            else:
-                # For biases or vector parameters, initialize to zeros.
-                torch.nn.init.zeros_(param)
             param._initialized = True
 
     def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
