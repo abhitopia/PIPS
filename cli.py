@@ -200,7 +200,7 @@ def new(
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
         sampling=not no_sample,
-        init_mode=init_mode,
+        init_mode=init_mode.value,
     )
     
     config = ExperimentConfig(
