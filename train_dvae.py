@@ -145,6 +145,11 @@ class LoggingCallback(pl.Callback):
                 # First subplot - EMA distribution
                 self.ax1 = self.combined_heatmap_fig.add_subplot(1, 3, 1)
                 self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis', vmin=0)
+                # Add grid lines for each cell:
+                n_rows, n_cols = code_dist_data.shape
+                self.ax1.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+                self.ax1.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+                self.ax1.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
                 self.cbar1 = plt.colorbar(self.im1, ax=self.ax1)
                 self.ax1.set_xlabel('Codebook Index')
                 self.ax1.set_ylabel('Position')
@@ -153,6 +158,10 @@ class LoggingCallback(pl.Callback):
                 # Second subplot - First sample
                 self.ax2 = self.combined_heatmap_fig.add_subplot(1, 3, 2)
                 self.im2 = self.ax2.imshow(first_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+                n2_rows, n2_cols = first_sample_probs.shape
+                self.ax2.set_xticks(np.arange(-0.5, n2_cols, 1), minor=True)
+                self.ax2.set_yticks(np.arange(-0.5, n2_rows, 1), minor=True)
+                self.ax2.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
                 self.cbar2 = plt.colorbar(self.im2, ax=self.ax2)
                 self.ax2.set_xlabel('Codebook Index')
                 self.ax2.set_ylabel('Position')
@@ -161,6 +170,10 @@ class LoggingCallback(pl.Callback):
                 # Third subplot - Last sample
                 self.ax3 = self.combined_heatmap_fig.add_subplot(1, 3, 3)
                 self.im3 = self.ax3.imshow(last_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+                n3_rows, n3_cols = last_sample_probs.shape
+                self.ax3.set_xticks(np.arange(-0.5, n3_cols, 1), minor=True)
+                self.ax3.set_yticks(np.arange(-0.5, n3_rows, 1), minor=True)
+                self.ax3.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
                 self.cbar3 = plt.colorbar(self.im3, ax=self.ax3)
                 self.ax3.set_xlabel('Codebook Index')
                 self.ax3.set_ylabel('Position')
