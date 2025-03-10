@@ -378,7 +378,6 @@ class LoggingCallback(pl.Callback):
         self._log_metrics(pl_module, 'train', outputs, batch[0].size(0), on_step=True, on_epoch=False)
 
     def on_validation_epoch_start(self, trainer, pl_module):
-        self.codebook_usage_figure_logged = False
         # Randomly select a batch index to visualize during this validation epoch.
 
         val_dataloader = None
@@ -408,12 +407,16 @@ class LoggingCallback(pl.Callback):
         x = outputs.pop('input')
         logits = outputs.pop('logits')
 
+        # Visualize reconstructions only for the randomly selected batch.
+        if batch_idx == self.val_batch_to_visualize:
+            self.visualize_reconstructions(pl_module, x, logits, 'val')
+
         # Only log the codebook usage figure once per epoch.
         # Pass the current val EMA to compute_entropy and get the updated EMA back
         entropy_dict, self.val_code_distribution_ema = self.compute_entropy(
             log_alpha, 
             current_ema=self.val_code_distribution_ema,
-            add_codebook_usage=not self.codebook_usage_figure_logged,
+            add_codebook_usage=batch_idx == self.val_batch_to_visualize,
             ema_decay=self.ema_decay
         )
 
@@ -422,19 +425,14 @@ class LoggingCallback(pl.Callback):
         entropy_dict_tau, self.val_code_distribution_ema_tau = self.compute_entropy(
             log_alpha, 
             current_ema=self.val_code_distribution_ema_tau,
-            add_codebook_usage=not self.codebook_usage_figure_logged,
+            add_codebook_usage=batch_idx == self.val_batch_to_visualize,
             ema_decay=self.ema_decay,
             tau=outputs['tau']
         )
         outputs.update(entropy_dict_tau)
-        self.codebook_usage_figure_logged = True
 
         log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
         outputs.update(log_alpha_stats)
-
-        # Visualize reconstructions only for the randomly selected batch.
-        if batch_idx == self.val_batch_to_visualize:
-            self.visualize_reconstructions(pl_module, x, logits, 'val')
 
         # Calculate tokens per second for the validation batch.
         if self.val_batch_start_time is not None:
