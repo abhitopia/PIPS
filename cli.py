@@ -12,6 +12,7 @@ from pips.utils import generate_friendly_name
 from pips.misc.acceleration_config import AccelerationConfig
 import click
 from rich import print
+from enum import Enum
 
 
 # Initialize logger
@@ -40,6 +41,11 @@ app.add_typer(dvae_app, name="dvae")
 
 # Add to safe globals before any checkpoint loading
 add_safe_globals([ExperimentConfig, GridDVAEConfig])
+
+# Add this class definition somewhere before the CLI function
+class InitMode(str, Enum):
+    NORMAL = "normal"
+    XAVIER = "xavier"
 
 def get_common_options():
     """Returns common options used across commands."""
@@ -111,7 +117,7 @@ def new(
     use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
     use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
     no_sample: bool = typer.Option(False, "--no-sample", help="Do not sample (use Gumbel Noise) using Gumbel-Softmax", is_flag=True, flag_value=True),
-    init_mode: str = typer.Option("normal", "--init-mode", help="Initialization mode for model weights", case_sensitive=False, show_choices=True, choices=["normal", "xavier"]),
+    init_mode: InitMode = typer.Option(InitMode.NORMAL, "--init-mode", help="Initialization mode for model weights", case_sensitive=False),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -161,7 +167,6 @@ def new(
     device: str = get_common_options()["device"],
 
     # Misc options
-
     lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
