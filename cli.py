@@ -67,7 +67,7 @@ def get_common_options():
         "debug": typer.Option(False, "--debug", "-D", help="Enable debug mode with reduced dataset and steps"),
         # Modify val_check_interval help text to include info about negative values
         "val_check_interval": typer.Option(
-            5000, 
+            1000, 
             "--val-check-interval", 
             "--vci", 
             help="Number of steps between validation checks. Set to negative value to disable validation."
@@ -77,7 +77,7 @@ def get_common_options():
 
         # Add visualization interval option
         "viz_interval": typer.Option(
-            100, 
+            1000, 
             "--viz-interval", 
             "--vi",
             help="Number of steps between visualizations and gradient logging"
