@@ -634,7 +634,7 @@ class GridDVAEConfig(Config):
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
-    init_mode: str = "normal"
+    init_mode: str = "xavier"
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
