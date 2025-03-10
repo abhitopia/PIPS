@@ -273,4 +273,96 @@ def test_grid_dataset_default_length(mock_load_grid_loaders):
     # __len__ should return the full dataset length (10 samples).
     assert len(dataset) == 10
 
-# Add more tests as needed... 
+# Add more tests as needed...
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_min_samples_higher(mock_load_grid_loaders):
+    """
+    Test that when min_samples is higher than the actual dataset length,
+    __len__ returns min_samples.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset with min_samples set to 15 (more than available).
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=15)
+    # __len__ should return min_samples (15)
+    assert len(dataset) == 15
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_min_samples_lower(mock_load_grid_loaders):
+    """
+    Test that when min_samples is lower than the actual dataset length,
+    __len__ returns the actual dataset length.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset with min_samples set to 5 (less than available).
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=5)
+    # __len__ should return the full dataset length (10 samples).
+    assert len(dataset) == 10
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_min_and_max_samples(mock_load_grid_loaders):
+    """
+    Test the interaction between min_samples and max_samples.
+    """
+    # Create dummy data with 10 samples.
+    dummy_array = np.empty(10, dtype=combined_dtype)
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Case 1: min_samples < max_samples < actual length
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=5, max_samples=8)
+    assert len(dataset) == 8  # max_samples should take precedence
+
+    # Case 2: min_samples > max_samples > actual length
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=15, max_samples=12)
+    assert len(dataset) == 15  # min_samples should take precedence
+
+    # Case 3: actual length < min_samples < max_samples
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=12, max_samples=15)
+    assert len(dataset) == 12  # min_samples should be used
+
+@patch('pips.grid_dataset.load_grid_loaders')
+def test_grid_dataset_getitem_wrapping(mock_load_grid_loaders):
+    """
+    Test that __getitem__ correctly wraps around when accessing indices
+    beyond the actual data length.
+    """
+    # Create dummy data with 3 samples with distinct values
+    dummy_array = np.empty(3, dtype=combined_dtype)
+    for i in range(3):
+        dummy_array[i]['idx'] = i
+        # Create a 30x30 grid filled with -1 (padding value)
+        grid_data = np.full((30, 30), -1, dtype=np.int8)
+        # Fill a 5x5 section with the value i
+        grid_data[:5, :5] = np.full((5, 5), i, dtype=np.int8)
+        dummy_array[i]['grid'] = grid_data
+        dummy_array[i]['original_shape'] = (5, 5)
+        dummy_array[i]['program_id'] = f"prog_{i}"
+        dummy_array[i]['task_id'] = f"task_{i}"
+        dummy_array[i]['dataset'] = "dataset"
+        dummy_array[i]['color_perm'] = "color_perm"
+        dummy_array[i]['transform'] = "transform"
+        dummy_array[i]['is_test'] = False
+        dummy_array[i]['is_input'] = True
+    
+    mock_load_grid_loaders.return_value = dummy_array
+
+    # Create dataset with min_samples set to 10 (more than available).
+    dataset = GridDataset(dataset_type=DatasetType.TRAIN, min_samples=10)
+    
+    # Initialize the data
+    dataset._initialize_data()
+    
+    # Check that indices beyond the actual length wrap around
+    assert dataset[0].idx == 0
+    assert dataset[1].idx == 1
+    assert dataset[2].idx == 2
+    assert dataset[3].idx == 0  # Should wrap to first item
+    assert dataset[4].idx == 1  # Should wrap to second item
+    assert dataset[5].idx == 2  # Should wrap to third item
+    assert dataset[9].idx == 0  # Should wrap to first item again 

@@ -950,6 +950,7 @@ def create_dataloaders(
     max_grid_width: int,
     permute_train: bool,
     limit_training_samples: int | None,
+    min_training_samples: int | None,
     train_ds: DatasetType,
     val_ds: DatasetType,
     num_measure_samples: int = 10000,  # Number of samples to measure average information in bits
@@ -963,6 +964,9 @@ def create_dataloaders(
         max_grid_width: Maximum grid width.
         permute_train: If True, permute the training data.
         limit_training_samples: Maximum number of training samples to use. None means use all samples.
+        min_training_samples: Minimum number of training samples to use. None means use all samples.
+        train_ds: Training dataset type.
+        val_ds: Validation dataset type.
         num_measure_samples: Number of grid samples to use for measuring average compressed bits.
     """
     print("permute_train:", permute_train)
@@ -976,7 +980,7 @@ def create_dataloaders(
         max_width=max_grid_width
     )
 
-    train_dataset = GridDataset(dataset_type=train_ds, max_samples=limit_training_samples)
+    train_dataset = GridDataset(dataset_type=train_ds, max_samples=limit_training_samples, min_samples=min_training_samples)
 
     # Create validation dataset
     collate_fn_val = partial(
@@ -1198,6 +1202,7 @@ def train(
         max_grid_width=experiment_config.model_config.max_grid_width,
         permute_train=experiment_config.permute_train,
         limit_training_samples=experiment_config.limit_training_samples,
+        min_training_samples=val_check_interval * experiment_config.batch_size if not validation_disabled else None,
         train_ds=experiment_config.train_ds,
         val_ds=experiment_config.val_ds
     )

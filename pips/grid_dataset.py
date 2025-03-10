@@ -221,10 +221,12 @@ DATASET_LOADERS = {
 class GridDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
                  cache_dir=Path(__file__).resolve().parent.parent / '.cache', 
-                 max_samples: int = None):
+                 max_samples: int = None,
+                 min_samples: int = None):
         self.dataset_type = dataset_type
         self.cache_dir = cache_dir
         self.max_samples = max_samples  # New parameter to limit available samples
+        self.min_samples = min_samples  # New parameter to set minimum dataset length
         self.data = None
         
         # Initialize shared length if not present.
@@ -251,15 +253,26 @@ class GridDataset(Dataset):
             # print(f"Initialized data with {len(self.data)} grids for {self.dataset_type.name}")
 
     def __len__(self):
-        # If max_samples declared, return the minimum between the actual dataset size and max_samples.
+        actual_length = self._shared_length
+        
+        # Apply max_samples limit if specified
         if self.max_samples is not None:
-            return min(self._shared_length, self.max_samples)
-        return self._shared_length
+            actual_length = min(actual_length, self.max_samples)
+            
+        # Apply min_samples requirement if specified
+        if self.min_samples is not None:
+            actual_length = max(actual_length, self.min_samples)
+            
+        return actual_length
 
     def __getitem__(self, idx):
         # Initialize data if not already done
         if self.data is None:
             self._initialize_data()
+        
+        # If idx is beyond the actual data length, wrap around to reuse samples
+        if self.min_samples is not None and idx >= self._shared_length:
+            idx = idx % self._shared_length
             
         sample = self.data[idx]
         
