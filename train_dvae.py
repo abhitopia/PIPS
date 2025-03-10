@@ -56,9 +56,10 @@ class LoggingCallback(pl.Callback):
         
         # Initialize EMAs for codebook usage tracking
         self.train_code_distribution_ema = None
+        self.train_code_distribution_ema_tau = None
         self.val_code_distribution_ema = None
+        self.val_code_distribution_ema_tau = None
         self.ema_decay = ema_decay  # EMA decay factor (higher = slower adaptation)
-        self.combined_heatmap_fig = None
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
@@ -89,7 +90,7 @@ class LoggingCallback(pl.Callback):
             'logα_tau_ratio(Stats)': ratio
         }
 
-    def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95):
+    def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95, tau: Tensor = None):
         """
         Compute entropy metrics and update code distribution EMA.
         
@@ -99,6 +100,7 @@ class LoggingCallback(pl.Callback):
             eps: Small value for numerical stability
             add_codebook_usage: Whether to create and return visualizations
             ema_decay: EMA decay factor (higher = slower adaptation)
+            tau: Optional temperature parameter for scaling entropy calculations
             
         Returns:
             Tuple of (output_dict, updated_ema)
@@ -112,7 +114,10 @@ class LoggingCallback(pl.Callback):
         per_code_perplexity = torch.exp(per_code_entropy)  # [B, N]
 
         avg_perplexity = per_code_perplexity.mean()
-        output_dict['CodebookUsage/perplexity'] = avg_perplexity.detach()
+        
+        # Use a different key name if tau is provided
+        perplexity_key = 'CodebookUsage/perplexity_tau' if tau is not None else 'CodebookUsage/perplexity'
+        output_dict[perplexity_key] = avg_perplexity.detach()
         
         # Calculate distribution for each code position (for current batch)
         current_code_distribution = probs.mean(dim=0).detach()  # [N, C]
@@ -126,82 +131,67 @@ class LoggingCallback(pl.Callback):
             updated_ema = ema_decay * current_ema + (1 - ema_decay) * current_code_distribution
         
         if add_codebook_usage and updated_ema is not None:
-
             # Average across batch dimension
             avg_per_code_perplexity = per_code_perplexity.mean(dim=0)  # [N]
 
-            # Add per-code perplexity metrics
+            # Add per-code perplexity metrics with appropriate key names
+            code_perplexity_prefix = 'Codebook/perplexity_tau_code_' if tau is not None else 'Codebook/perplexity_code_'
             for i, perp in enumerate(avg_per_code_perplexity):
-                output_dict[f'Codebook/perplexity_code_{i}'] = perp.detach()
+                output_dict[f'{code_perplexity_prefix}{i}'] = perp.detach()
             
             # Combined heatmap visualization: EMA heatmap, first sample and last sample probability heatmaps
             code_dist_data = updated_ema.float().cpu().numpy()
             first_sample_probs = probs[0].float().cpu().detach().numpy()  # shape: [N, C]
             last_sample_probs = probs[-1].float().cpu().detach().numpy()  # Last sample in batch
             
-            if not hasattr(self, "combined_heatmap_fig") or self.combined_heatmap_fig is None:
-                self.combined_heatmap_fig = plt.figure(figsize=(30, 12), dpi=80)
-                
-                # First subplot - EMA distribution
-                self.ax1 = self.combined_heatmap_fig.add_subplot(1, 3, 1)
-                self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis', vmin=0)
-                # Add grid lines for each cell:
-                n_rows, n_cols = code_dist_data.shape
-                self.ax1.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
-                self.ax1.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
-                self.ax1.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-                self.cbar1 = plt.colorbar(self.im1, ax=self.ax1)
-                self.ax1.set_xlabel('Codebook Index')
-                self.ax1.set_ylabel('Position')
-                self.ax1.set_title('Code Usage Distribution (EMA)')
+            # Transpose the data to have codebook size on y-axis and positions on x-axis
+            code_dist_data = code_dist_data.T
+            first_sample_probs = first_sample_probs.T
+            last_sample_probs = last_sample_probs.T
+            
+            # Add tau information to title if provided
+            title_suffix = f" (τ={tau.item():.4f})" if tau is not None else ""
+            
+            # Always create a new figure (remove caching)
+            combined_heatmap_fig = plt.figure(figsize=(30, 12), dpi=80)
 
-                # Second subplot - First sample
-                self.ax2 = self.combined_heatmap_fig.add_subplot(1, 3, 2)
-                self.im2 = self.ax2.imshow(first_sample_probs, aspect='auto', cmap='viridis', vmin=0)
-                n2_rows, n2_cols = first_sample_probs.shape
-                self.ax2.set_xticks(np.arange(-0.5, n2_cols, 1), minor=True)
-                self.ax2.set_yticks(np.arange(-0.5, n2_rows, 1), minor=True)
-                self.ax2.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-                self.cbar2 = plt.colorbar(self.im2, ax=self.ax2)
-                self.ax2.set_xlabel('Codebook Index')
-                self.ax2.set_ylabel('Position')
-                self.ax2.set_title('First Sample Probability Heatmap')
-                
-                # Third subplot - Last sample
-                self.ax3 = self.combined_heatmap_fig.add_subplot(1, 3, 3)
-                self.im3 = self.ax3.imshow(last_sample_probs, aspect='auto', cmap='viridis', vmin=0)
-                n3_rows, n3_cols = last_sample_probs.shape
-                self.ax3.set_xticks(np.arange(-0.5, n3_cols, 1), minor=True)
-                self.ax3.set_yticks(np.arange(-0.5, n3_rows, 1), minor=True)
-                self.ax3.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-                self.cbar3 = plt.colorbar(self.im3, ax=self.ax3)
-                self.ax3.set_xlabel('Codebook Index')
-                self.ax3.set_ylabel('Position')
-                self.ax3.set_title('Last Sample Probability Heatmap')
-            else:
-                # Update EMA heatmap
-                self.im1.set_data(code_dist_data)
-                self.im1.set_clim(vmin=0, vmax=code_dist_data.max())
-                self.ax1.relim()
-                self.ax1.autoscale_view()
-                self.cbar1.update_normal(self.im1)
+            # First subplot - EMA distribution
+            ax1 = combined_heatmap_fig.add_subplot(1, 3, 1)
+            im1 = ax1.imshow(code_dist_data, aspect='auto', cmap='viridis', vmin=0)
+            n_rows, n_cols = code_dist_data.shape
+            ax1.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+            ax1.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+            ax1.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
+            plt.colorbar(im1 := ax1.images[0], ax=ax1)
+            ax1.set_xlabel('Position')
+            ax1.set_ylabel('Codebook Index')
+            ax1.set_title(f'Code Usage Distribution (EMA){title_suffix}')
 
-                # Update first sample heatmap
-                self.im2.set_data(first_sample_probs)
-                self.im2.set_clim(vmin=0, vmax=first_sample_probs.max())
-                self.ax2.relim()
-                self.ax2.autoscale_view()
-                self.cbar2.update_normal(self.im2)
-                
-                # Update last sample heatmap
-                self.im3.set_data(last_sample_probs)
-                self.im3.set_clim(vmin=0, vmax=last_sample_probs.max())
-                self.ax3.relim()
-                self.ax3.autoscale_view()
-                self.cbar3.update_normal(self.im3)
+            # Second subplot - First sample
+            ax2 = combined_heatmap_fig.add_subplot(1, 3, 2)
+            im2 = ax2.imshow(first_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+            ax2.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+            ax2.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+            ax2.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
+            plt.colorbar(im2 := ax2.images[0], ax=ax2)
+            ax2.set_xlabel('Position')
+            ax2.set_ylabel('Codebook Index')
+            ax2.set_title(f'First Sample Probability Heatmap{title_suffix}')
+            
+            # Third subplot - Last sample
+            ax3 = combined_heatmap_fig.add_subplot(1, 3, 3)
+            im3 = ax3.imshow(last_sample_probs, aspect='auto', cmap='viridis', vmin=0)
+            ax3.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
+            ax3.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
+            ax3.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
+            plt.colorbar(im3 := ax3.images[0], ax=ax3)
+            ax3.set_xlabel('Position')
+            ax3.set_ylabel('Codebook Index')
+            ax3.set_title(f'Last Sample Probability Heatmap{title_suffix}')
 
             plt.tight_layout()
-            output_dict['Codebook/combined_heatmap'] = self.combined_heatmap_fig
+            key = 'Codebook/latent_distribution_tau' if tau is not None else 'Codebook/latent_distribution'
+            output_dict[key] = combined_heatmap_fig
 
         return output_dict, updated_ema
 
@@ -290,7 +280,7 @@ class LoggingCallback(pl.Callback):
         custom_cmap = mcolors.ListedColormap(colors)
         
         # Create the figure with proper space for a colorbar.
-        fig = plt.figure(figsize=(n_samples * 3 + 1, 6))
+        fig = plt.figure(figsize=(n_samples * 3 + 1, 6), dpi=80)
         
         # Create a gridspec layout with space for the colorbar.
         gs = fig.add_gridspec(2, n_samples + 1, width_ratios=[1] * n_samples + [0.1])
@@ -356,9 +346,17 @@ class LoggingCallback(pl.Callback):
         )
         outputs.update(entropy_dict)
 
+        entropy_dict_tau, self.train_code_distribution_ema_tau = self.compute_entropy(
+            log_alpha, 
+            current_ema=self.train_code_distribution_ema_tau,
+            add_codebook_usage=should_visualize,
+            ema_decay=self.ema_decay,
+            tau=outputs['tau']
+        )
+        outputs.update(entropy_dict_tau)
+
         log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
         outputs.update(log_alpha_stats)
-
 
         # Visualize reconstructions if the time interval has been reached.
         if should_visualize:
@@ -418,9 +416,18 @@ class LoggingCallback(pl.Callback):
             add_codebook_usage=not self.codebook_usage_figure_logged,
             ema_decay=self.ema_decay
         )
-        self.codebook_usage_figure_logged = True
 
         outputs.update(entropy_dict)
+
+        entropy_dict_tau, self.val_code_distribution_ema_tau = self.compute_entropy(
+            log_alpha, 
+            current_ema=self.val_code_distribution_ema_tau,
+            add_codebook_usage=not self.codebook_usage_figure_logged,
+            ema_decay=self.ema_decay,
+            tau=outputs['tau']
+        )
+        outputs.update(entropy_dict_tau)
+        self.codebook_usage_figure_logged = True
 
         log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
         outputs.update(log_alpha_stats)
@@ -443,10 +450,10 @@ class LoggingCallback(pl.Callback):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
             # Handle the figure separately.
-            if key == 'Codebook/combined_heatmap':
+            if key == 'Codebook/latent_distribution' or key == 'Codebook/latent_distribution_tau':
                 if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
                     # Only log from rank 0
-                    log_key = 'CodebookUsage/Heatmap_{phase}'
+                    log_key = 'CodebookUsage/Distribution_{phase}' if key == 'Codebook/latent_distribution' else 'CodebookUsage/Distribution_tau_{phase}'
                     pl_module.logger.experiment.log({
                         log_key.format(phase=phase): wandb.Image(value)
                     })
@@ -981,7 +988,6 @@ def create_dataloaders(
     array_transform_bits = math.log2(8)  # 8 possible array transformations
     min_bits_required = max_two_std_info_bits + color_perm_bits + array_transform_bits
 
-    print("Max two std info bits:", max_two_std_info_bits)
     print("Color permutation bits:", color_perm_bits)
     print("Array transform bits:", array_transform_bits)
     print("Total augmentation bits:", color_perm_bits + array_transform_bits)

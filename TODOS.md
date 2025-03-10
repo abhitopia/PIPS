@@ -93,6 +93,13 @@
 - [ ] Adding padding token accuracy
 - [ ] Add padding xeight schedule
 
+
+## Version 3 (Make the logalpha peaky)
+- [x] Visualise with and without tau distribution
+- [ ] Create a MNIST example (properly this time)
+- [ ] Add entropy penalty and corresponding coefficient and schedulers
+
+
 # Fix KLD Losses
 - [x] Read the paper
 - [x] Use log_softmax for numerical stability
