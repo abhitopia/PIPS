@@ -33,6 +33,11 @@ import random
 from rich import print
 import math
 
+import matplotlib
+
+# This ensures that figures are rendered off‑screen and typically faster.
+matplotlib.use('Agg')
+
 class LoggingCallback(pl.Callback):
     
     def __init__(self, visualization_interval=50, save_to_disk=False, visualization_dir=None, grad_log_interval=100, num_grids_to_visualize=4, ema_decay: float = 0.95):
@@ -53,6 +58,10 @@ class LoggingCallback(pl.Callback):
         self.train_code_distribution_ema = None
         self.val_code_distribution_ema = None
         self.ema_decay = ema_decay  # EMA decay factor (higher = slower adaptation)
+
+        # Initialize figures once (set to None initially)
+        self.heatmap_fig = None
+        self.dist_fig = None
 
     def get_loss_string(self, outputs: Dict[str, torch.Tensor]) -> str:
         return ' | '.join([f"{l}: {v:.2e}" for l, v in outputs.items() if 'loss' in l or 'accuracy(TOKENS)' in l])
@@ -127,53 +136,48 @@ class LoggingCallback(pl.Callback):
             updated_ema = ema_decay * current_ema + (1 - ema_decay) * current_code_distribution
         
         if add_codebook_usage and updated_ema is not None:
-            # Use the EMA distribution for visualization
-            # Convert to float32 before converting to numpy to avoid BFloat16 error
             code_dist_data = updated_ema.float().cpu().numpy()
+            # (Re)use heatmap_fig if it exists.
+            if self.heatmap_fig is None:
+                self.heatmap_fig = plt.figure(figsize=(20, 30),  dpi=80)
+                self.ax1 = self.heatmap_fig.add_subplot(2, 1, 1)
+                self.im1 = self.ax1.imshow(code_dist_data, aspect='auto', cmap='viridis')
+                plt.colorbar(self.im1, ax=self.ax1)
+                self.ax1.set_xlabel('Codebook Index')
+                self.ax1.set_ylabel('Position')
+                self.ax1.set_title('Code Usage Distribution (EMA)')
+            else:
+                self.im1.set_data(code_dist_data)
+                self.ax1.relim()
+                self.ax1.autoscale_view()
             
-            # Create a figure with two subplots - one for EMA heatmap and one for single sample distributions
-            fig = plt.figure(figsize=(20, 30))
-            
-            # First subplot for EMA distribution heatmap (as before)
-            ax1 = fig.add_subplot(2, 1, 1)
-            im1 = ax1.imshow(code_dist_data, aspect='auto', cmap='viridis')
-            plt.colorbar(im1, ax=ax1)
-            ax1.set_xlabel('Codebook Index')
-            ax1.set_ylabel('Position')
-            ax1.set_title('Code Usage Distribution (EMA)')
-            
-            # Second subplot for single sample distribution across positions
-            # Take the first sample from the batch
-            single_sample_probs = probs[0].float().cpu().numpy()  # [N, C]
-            
-            # Create a grid of subplots for each position
+            # Similarly, reuse dist_fig for single sample distribution.
+            single_sample_probs = probs[0].float().cpu().numpy()
             n_positions = single_sample_probs.shape[0]
-            n_cols = min(4, n_positions)  # Maximum 4 columns
-            n_rows = (n_positions + n_cols - 1) // n_cols  # Ceiling division
-            
-            # Create a new figure for the distribution plots - make it more compact
-            dist_fig = plt.figure(figsize=(20, 3 * n_rows))  # Reduced height per row from 5 to 3
-            
-            # Plot distribution for each position
-            for i in range(n_positions):
-                ax = dist_fig.add_subplot(n_rows, n_cols, i + 1)
-                position_probs = single_sample_probs[i]  # Distribution for position i
-                ax.bar(range(len(position_probs)), position_probs)
-                ax.set_xlabel('Codebook Index')
-                ax.set_ylabel('Probability')
-                ax.set_title(f'Position {i} Distribution')
-                # Set y-axis to start from 0 and go to a reasonable max
-                # Use a tighter y-limit to compress the plot vertically
-                max_prob = position_probs.max()
-                ax.set_ylim(0, min(1.0, max_prob * 1.2))  # Tighter upper bound
-                # Add grid for better readability
-                ax.grid(True, linestyle='--', alpha=0.7)
+            n_cols = min(4, n_positions)
+            n_rows = (n_positions + n_cols - 1) // n_cols
+            if self.dist_fig is None:
+                self.dist_fig = plt.figure(figsize=(20, 3 * n_rows), dpi=80)
+                self.dist_axes = []
+                for i in range(n_positions):
+                    ax = self.dist_fig.add_subplot(n_rows, n_cols, i + 1)
+                    bar_container = ax.bar(range(len(single_sample_probs[i])), single_sample_probs[i])
+                    ax.set_xlabel('Codebook Index')
+                    ax.set_ylabel('Probability')
+                    ax.set_title(f'Position {i} Distribution')
+                    ax.grid(True, linestyle='--', alpha=0.7)
+                    self.dist_axes.append((ax, bar_container))
+            else:
+                for i, (ax, bar_container) in enumerate(self.dist_axes):
+                    # Update bar heights if the number of positions haven't changed.
+                    for rect, new_val in zip(bar_container, single_sample_probs[i]):
+                        rect.set_height(new_val)
+                    ax.relim()
+                    ax.autoscale_view()
             
             plt.tight_layout()
-            
-            # Add both figures to output_dict
-            output_dict['Codebook/heatmap'] = fig
-            output_dict['Codebook/figure'] = dist_fig
+            output_dict['Codebook/heatmap'] = self.heatmap_fig
+            output_dict['Codebook/figure'] = self.dist_fig
 
         return output_dict, updated_ema
 
