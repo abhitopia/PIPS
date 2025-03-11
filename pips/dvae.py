@@ -498,36 +498,34 @@ class AttnCodebook(nn.Module):
         - codebook_keys: [d_model, codebook_size]
         - codebook_values: [codebook_size, d_model]
     """
-    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True):
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
         self.sampling = sampling
 
-        # Learned codebook values: shape [codebook_size, d_model]
-        self.codebook_values = nn.Parameter(torch.randn(self.codebook_size, self.d_model))
-        # Learned codebook keys: shape [d_model, codebook_size]
-        self.codebook_keys = nn.Parameter(torch.randn(self.d_model, self.codebook_size))
+
+        self.norm_context = RMSNorm(dim=d_model)
+        self.norm_queries = RMSNorm(dim=d_model)
+
+        # Shared codebook embeddings: shape [codebook_size, d_model]
+        self.codebook = nn.Parameter(torch.randn(codebook_size, d_model))
+
+
+        ## Attention Stuff
+        # Projection layers to generate keys and values from the codebook.
+        # These layers project the codebook from [codebook_size, d_model] to the same shape.
+        self.key_proj = nn.Linear(d_model, d_model, bias=False)
+        self.value_proj = nn.Linear(d_model, d_model, bias=False)
+        self.query_proj = nn.Linear(d_model, d_model, bias=False)
         self.scale = torch.sqrt(torch.tensor(self.d_model))
-        
-        # Projection layer for the latent encoder queries.
-        # Projects from [B, N, d_model] to [B, N, d_model]
-        self.query_proj = nn.Linear(d_model, d_model)
-        
+        self.c_proj = nn.Linear(self.d_model, self.d_model, bias=False)
 
-    def get_log_alpha(self, queries: Tensor) -> Tensor:
-        B, N, _ = queries.shape
-        
-        # Project queries: [B, N, d_model]
-        q = self.query_proj(queries)
-        
-        # Compute scaled dot-product attention.
-        attn_logits = torch.matmul(q, self.codebook_keys)
-        attn_logits = attn_logits / self.scale # [B, N, C]
+        ## Feedforward Stuff
+        self.ff = SwiGLUFFN(dim=self.d_model, hidden_dim=dim_feedforward if dim_feedforward is not None else 4*self.d_model)
+        self.norm_ff = RMSNorm(dim=d_model)
 
-        return attn_logits
-    
 
     def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
         """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical."""
@@ -540,10 +538,19 @@ class AttnCodebook(nn.Module):
             return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
     
 
-    def forward(self, latents: Tensor, tau: Tensor) -> Tensor:
-
-        log_alpha = self.get_log_alpha(latents)
-
+    def single_head_attention(self, queries: Tensor, keys: Tensor, values: Tensor, tau: Tensor) -> Tensor:
+        """
+        Single-head attention pass.
+        """
+        # Project queries: [B, N, d_model]
+        q = self.query_proj(queries) # [B, N, d_model]
+        k = self.key_proj(keys) # [C, d_model]
+        v = self.value_proj(values) # [C, d_model]
+        
+        # Compute scaled dot-product attention.
+        log_alpha = torch.matmul(q, k.T) # [B, N, C]
+        log_alpha = log_alpha / self.scale # [B, N, C]
+        
         if self.sampling:
             # Sample using the (Gumbel-Softmax) distribution.
             z = self.sample(log_alpha, tau)  # [B, N, C]
@@ -551,11 +558,46 @@ class AttnCodebook(nn.Module):
             # Apply softmax with temperature scaling.
             z = torch.softmax(log_alpha / tau, dim=-1)
 
-        quantized = torch.matmul(z, self.codebook_values)
+        attn_output = torch.matmul(z, v) # [B, N, d_model]
+        y = self.c_proj(attn_output) # [B, N, d_model]
 
-        return quantized, log_alpha, z
+        return y, log_alpha, z
+    
+
+    def forward(self, latents: Tensor, tau: Tensor, residual_scaling: Tensor) -> Tensor:
+        """
+        Forward pass through the codebook.
+
+        Args:
+            latents (Tensor): The input latents.
+            tau (Tensor): The temperature for the Gumbel-Softmax distribution.
+            residual_scaling (Tensor): The scaling factor for the residual connection.
 
 
+        Returns:
+            Tuple[Tensor, Tensor, Tensor]: A tuple of (codebook_output, log_alpha, z), where:
+                codebook_output (Tensor): The output of the codebook.
+                log_alpha (Tensor): The unnormalized logits used for distribution over the codebook.
+                z (Tensor): The soft assignment code (either sampled or computed deterministically via softmax).
+        """
+
+        normed_context = self.norm_context(self.codebook) # [C, d_model]
+        normed_queries = self.norm_queries(latents) # [B, N, d_model]
+
+        attn_output, log_alpha, z = self.single_head_attention(
+                                                            queries=normed_queries, 
+                                                            keys=normed_context, 
+                                                            values=normed_context, 
+                                                            tau=tau)
+
+        # Notice that this mixes the latents with the codebook embeddings.
+        # But this also means that attn_output is not a function of log_alpha only.
+        # As such, we add a residual scaling factor to the residual connection.
+        attn_output = residual_scaling * latents + attn_output # Residual connection
+
+        codebook_output = attn_output + self.ff(self.norm_ff(attn_output)) # Residual connection
+
+        return codebook_output, log_alpha, z
 
 
 class GumbelCodebook(nn.Module):
@@ -588,6 +630,7 @@ class GumbelCodebook(nn.Module):
             return ExpRelaxedCategorical(tau, logits=log_alpha).rsample().exp()
         else:
             return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
+        
 
     def forward(self, logits: Tensor, tau: Tensor) -> Tuple[Tensor, Tensor, Tensor]:
         """
@@ -1035,7 +1078,8 @@ class GridDVAE(nn.Module):
     
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
     
-        quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau)
+        residual_scaling = torch.tensor(1.0, device=x.device, dtype=x.dtype)
+        quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling)
             
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
