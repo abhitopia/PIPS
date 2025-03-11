@@ -97,6 +97,8 @@
 ## Version 3 (Make the logalpha peaky)
 - [x] Visualise with and without tau distribution
 - [x] Add entropy penalty and corresponding coefficient and schedulers
+- Model doesn't train even without any entropy penalty or temperature.
+- [x] Add Option to skip codebook altogether
 - [ ] Create a MNIST example (properly this time)
 
 

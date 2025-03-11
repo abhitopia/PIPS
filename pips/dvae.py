@@ -635,6 +635,7 @@ class GridDVAEConfig(Config):
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
     init_mode: str = "normal"
+    skip_codebook: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -696,7 +697,8 @@ class GridDVAEConfig(Config):
             'use_exp_relaxed': self.use_exp_relaxed,
             'use_monte_carlo_kld': self.use_monte_carlo_kld,
             'gamma': self.gamma,
-            'init_mode': self.init_mode
+            'init_mode': self.init_mode,
+            'skip_codebook': self.skip_codebook
         }
         
         # Add computed attributes if they exist
@@ -750,6 +752,7 @@ class GridDVAE(nn.Module):
         self.config = config
         self.use_monte_carlo_kld = config.use_monte_carlo_kld
         self.use_exp_relaxed = config.use_exp_relaxed
+        self.skip_codebook = config.skip_codebook
         self.gamma = config.gamma
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
@@ -791,7 +794,7 @@ class GridDVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=True,
+            out_norm=True if not config.skip_codebook else False,
             rope=rope_1d
         )
 
@@ -959,7 +962,11 @@ class GridDVAE(nn.Module):
         # Calculate entropy loss
         latent_entropy = self.entropy_loss(log_alpha, reduction="mean")
 
-        decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
+        if self.skip_codebook:
+            decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
+        else:
+            decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
+
     
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
     
