@@ -480,6 +480,84 @@ class LatentTransformer(nn.Module):
         return latents, loop_kv_caches
 
 
+
+class AttnCodebook(nn.Module):
+    """
+    A single-head attention-based codebook module.
+    
+    The latent encoder outputs are treated as queries, and the codebook consists
+    of learned keys and values. This allows the module to compute an attention 
+    weighted sum over the codebook entries.
+    
+    Args:
+        d_model (int): The model dimension.
+        codebook_size (int): The number of codebook entries.
+    
+    Shapes:
+        - queries: [B, N, d_model] where B=batch size, N=number of tokens.
+        - codebook_keys: [d_model, codebook_size]
+        - codebook_values: [codebook_size, d_model]
+    """
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True):
+        super().__init__()
+        self.d_model = d_model
+        self.codebook_size = codebook_size
+        self.use_exp_relaxed = use_exp_relaxed
+        self.sampling = sampling
+
+        # Learned codebook values: shape [codebook_size, d_model]
+        self.codebook_values = nn.Parameter(torch.randn(self.codebook_size, self.d_model))
+        # Learned codebook keys: shape [d_model, codebook_size]
+        self.codebook_keys = nn.Parameter(torch.randn(self.d_model, self.codebook_size))
+        self.scale = torch.sqrt(torch.tensor(self.d_model))
+        
+        # Projection layer for the latent encoder queries.
+        # Projects from [B, N, d_model] to [B, N, d_model]
+        self.query_proj = nn.Linear(d_model, d_model)
+        
+
+    def get_log_alpha(self, queries: Tensor) -> Tensor:
+        B, N, _ = queries.shape
+        
+        # Project queries: [B, N, d_model]
+        q = self.query_proj(queries)
+        
+        # Compute scaled dot-product attention.
+        attn_logits = torch.matmul(q, self.codebook_keys)
+        attn_logits = attn_logits / self.scale # [B, N, C]
+
+        return attn_logits
+    
+
+    def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
+        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical."""
+        assert tau > 0.0, "Temperature must be greater than 0.0"
+        # tau is already a tensor, so we simply use it directly.
+        if self.use_exp_relaxed:
+            # We need to exponentiate the sample to get the correct sample from the distribution.
+            return ExpRelaxedCategorical(tau, logits=log_alpha).rsample().exp()
+        else:
+            return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
+    
+
+    def forward(self, latents: Tensor, tau: Tensor) -> Tensor:
+
+        log_alpha = self.get_log_alpha(latents)
+
+        if self.sampling:
+            # Sample using the (Gumbel-Softmax) distribution.
+            z = self.sample(log_alpha, tau)  # [B, N, C]
+        else:
+            # Apply softmax with temperature scaling.
+            z = torch.softmax(log_alpha / tau, dim=-1)
+
+        quantized = torch.matmul(z, self.codebook_values)
+
+        return quantized, log_alpha, z
+
+
+
+
 class GumbelCodebook(nn.Module):
     def __init__(self, d_model, codebook_size, n_codes, position_dependent: bool = False, use_exp_relaxed=False, sampling: bool = True):
         super().__init__()
@@ -794,16 +872,22 @@ class GridDVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=True if not config.skip_codebook else False,
+            out_norm=False,
             rope=rope_1d
         )
 
-        self.codebook = GumbelCodebook(d_model=config.n_dim, 
-                                       codebook_size=config.codebook_size,
-                                       n_codes=config.n_codes,
-                                       use_exp_relaxed=config.use_exp_relaxed,
-                                       position_dependent=config.pos_dependent_codebook,
-                                       sampling=config.sampling)
+        # self.codebook = GumbelCodebook(d_model=config.n_dim, 
+        #                                codebook_size=config.codebook_size,
+        #                                n_codes=config.n_codes,
+        #                                use_exp_relaxed=config.use_exp_relaxed,
+        #                                position_dependent=config.pos_dependent_codebook,
+        #                                sampling=config.sampling)
+        
+
+        self.codebook = AttnCodebook(d_model=config.n_dim, 
+                                    codebook_size=config.codebook_size,
+                                    use_exp_relaxed=config.use_exp_relaxed,
+                                    sampling=config.sampling)
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
