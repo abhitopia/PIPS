@@ -101,6 +101,7 @@
 - [x] Add Option to skip codebook altogether
 - [x] bias=True for value project in codebook
 - [x] Add positional encoding to the codebook
+- [ ] Normalise the keys and queries so network doesn't fight back the decrease in temperature
 - [ ] Create a MNIST example (properly this time)
 
 
