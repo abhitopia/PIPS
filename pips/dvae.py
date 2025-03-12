@@ -512,12 +512,11 @@ class AttnCodebook(nn.Module):
         # Shared codebook embeddings: shape [codebook_size, d_model]
         self.codebook = nn.Parameter(torch.randn(codebook_size, d_model))
 
-
         ## Attention Stuff
         # Projection layers to generate keys and values from the codebook.
         # These layers project the codebook from [codebook_size, d_model] to the same shape.
         self.key_proj = nn.Linear(d_model, d_model, bias=False)
-        self.value_proj = nn.Linear(d_model, d_model, bias=False)
+        self.value_proj = nn.Linear(d_model, d_model, bias=True)
         self.query_proj = nn.Linear(d_model, d_model, bias=False)
         self.scale = torch.sqrt(torch.tensor(self.d_model))
         self.c_proj = nn.Linear(self.d_model, self.d_model, bias=False)

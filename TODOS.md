@@ -99,6 +99,7 @@
 - [x] Add entropy penalty and corresponding coefficient and schedulers
 - Model doesn't train even without any entropy penalty or temperature.
 - [x] Add Option to skip codebook altogether
+- [x] bias=True for value project in codebook
 - [ ] Create a MNIST example (properly this time)
 
 
