@@ -498,13 +498,13 @@ class AttnCodebook(nn.Module):
         - codebook_keys: [d_model, codebook_size]
         - codebook_values: [codebook_size, d_model]
     """
-    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None):
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None, rope=None):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
         self.sampling = sampling
-
+        self.rope = rope
 
         self.norm_context = RMSNorm(dim=d_model)
         self.norm_queries = RMSNorm(dim=d_model)
@@ -537,17 +537,22 @@ class AttnCodebook(nn.Module):
             return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
     
 
-    def single_head_attention(self, queries: Tensor, keys: Tensor, values: Tensor, tau: Tensor) -> Tensor:
+    def single_head_attention(self, queries: Tensor, keys: Tensor, values: Tensor, tau: Tensor, positions: Tensor) -> Tensor:
         """
         Single-head attention pass.
         """
         # Project queries: [B, N, d_model]
-        q = self.query_proj(queries) # [B, N, d_model]
-        k = self.key_proj(keys) # [C, d_model]
-        v = self.value_proj(values) # [C, d_model]
-        
+        q = self.query_proj(queries).unsqueeze(1) # [B, 1, N, d_model]
+        k = self.key_proj(keys).unsqueeze(0).expand(q.size(0), -1, -1).unsqueeze(1) # [B, 1, C, d_model]
+        v = self.value_proj(values).unsqueeze(0).expand(q.size(0), -1, -1) # [B, C, d_model]
+
+        qT = q.size(2)
+        kT = k.size(2)
+
+        q = self.rope(q, positions[:, :qT].unsqueeze(1)).squeeze(1)
+        k = self.rope(k, positions[:, :kT].unsqueeze(1)).squeeze(1)
         # Compute scaled dot-product attention.
-        log_alpha = torch.matmul(q, k.T) # [B, N, C]
+        log_alpha = torch.matmul(q, k.mT) # [B, N, C]
         log_alpha = log_alpha / self.scale # [B, N, C]
         
         if self.sampling:
@@ -563,7 +568,7 @@ class AttnCodebook(nn.Module):
         return y, log_alpha, z
     
 
-    def forward(self, latents: Tensor, tau: Tensor, residual_scaling: Tensor) -> Tensor:
+    def forward(self, latents: Tensor, tau: Tensor, residual_scaling: Tensor, positions: Tensor) -> Tensor:
         """
         Forward pass through the codebook.
 
@@ -571,7 +576,7 @@ class AttnCodebook(nn.Module):
             latents (Tensor): The input latents.
             tau (Tensor): The temperature for the Gumbel-Softmax distribution.
             residual_scaling (Tensor): The scaling factor for the residual connection.
-
+            positions (Tensor): The positions of the latents.
 
         Returns:
             Tuple[Tensor, Tensor, Tensor]: A tuple of (codebook_output, log_alpha, z), where:
@@ -587,7 +592,8 @@ class AttnCodebook(nn.Module):
                                                             queries=normed_queries, 
                                                             keys=normed_context, 
                                                             values=normed_context, 
-                                                            tau=tau)
+                                                            tau=tau,
+                                                            positions=positions)
 
         # Notice that this mixes the latents with the codebook embeddings.
         # But this also means that attn_output is not a function of log_alpha only.
@@ -898,6 +904,12 @@ class GridDVAE(nn.Module):
             base=config.rope_base_height
         )
 
+        rope_codebook = RotaryPositionalEmbeddings(
+            dim=config.n_dim // 1,
+            max_seq_len=config.n_pos,
+            base=config.rope_base_height
+        )
+
         
         self.grid_encoder = Transformer(
             d_model=config.n_dim,
@@ -927,6 +939,7 @@ class GridDVAE(nn.Module):
         self.codebook = AttnCodebook(d_model=config.n_dim, 
                                     codebook_size=config.codebook_size,
                                     use_exp_relaxed=config.use_exp_relaxed,
+                                    rope=rope_codebook,
                                     sampling=config.sampling)
 
         self.latent_decoder = LatentTransformer(
@@ -1075,7 +1088,7 @@ class GridDVAE(nn.Module):
     
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
     
-        quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling)
+        quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices)
             
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)

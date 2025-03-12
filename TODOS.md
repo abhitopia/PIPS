@@ -100,6 +100,7 @@
 - Model doesn't train even without any entropy penalty or temperature.
 - [x] Add Option to skip codebook altogether
 - [x] bias=True for value project in codebook
+- [x] Add positional encoding to the codebook
 - [ ] Create a MNIST example (properly this time)
 
 
