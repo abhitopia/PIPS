@@ -107,7 +107,7 @@ class LoggingCallback(pl.Callback):
         """
         output_dict = {}
         # Calculate per-code perplexity
-        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
+        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1) if tau is None else F.log_softmax(log_alpha / tau, dim=-1)
         probs = normalized_log_alpha.exp()
 
         per_code_entropy = -(probs * normalized_log_alpha).sum(dim=-1)  # [B, N]
