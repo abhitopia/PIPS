@@ -109,7 +109,6 @@ def new(
     n_grid_layer: int = typer.Option(4, "--n-grid-layer", "-gl", help="Number of grid transformer layers"),
     n_latent_layer: int = typer.Option(4, "--n-latent-layer", "-ll", help="Number of latent transformer layers"),
     n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
-    pos_dep: bool = typer.Option(True, "--no-pos-dep", help="Use position-dependent codebook and head", is_flag=True, flag_value=False),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     gamma: float = typer.Option(2.0, "--gamma", "--g", help="Focal loss gamma parameter (default: 2.0)"),
@@ -135,12 +134,15 @@ def new(
     warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
     warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
     warmup_steps_mask_pct: int = typer.Option(50_000, "--warmup-steps-mask-pct", "--wsm", help="Mask percentage warmup steps"),
+    warmup_steps_residual: int = typer.Option(5_000, "--warmup-steps-residual", "--wsr", help="Residual scaling warmup steps"),
 
     # Regularization parameters
     tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
     tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
-    
+    residual_scaling_start: float = typer.Option(1.0, "--residual-scaling-start", "--rss", help="Residual scaling start value"),
+    residual_scaling: float = typer.Option(0.0, "--residual-scaling", "--rs", help="Residual scaling factor"),
+
     # Beta values for loss components
     beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss. Stays constant."),
     beta_entropy: float = typer.Option(0.0, "--beta-entropy", "--bent", help="Beta for entropy loss"),
@@ -192,7 +194,6 @@ def new(
         n_latent_layer=n_latent_layer,
         n_codes=n_codes,
         codebook_size=codebook_size,
-        pos_dependent_codebook=pos_dep,
         dropout=dropout,
         gamma=gamma,
         n_vocab=16,  # Fixed for grid world
@@ -227,6 +228,8 @@ def new(
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,
         beta_kl=beta_kl,
+        residual_scaling_start=residual_scaling_start,
+        residual_scaling=residual_scaling,
 
         # Learning rate and other warmup / decay steps
         warmup_steps_lr=warmup_steps_lr,
@@ -234,6 +237,7 @@ def new(
         warmup_steps_tau=warmup_steps_tau,
         warmup_steps_beta=warmup_steps_beta,
         warmup_steps_mask_pct=warmup_steps_mask_pct,
+        warmup_steps_residual_scaling=warmup_steps_residual,
         batch_size=batch_size,
 
         # Dataset options

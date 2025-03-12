@@ -740,7 +740,6 @@ class GridDVAEConfig(Config):
     n_grid_layer: int
     n_latent_layer: int
     n_codes: int
-    pos_dependent_codebook: bool = True
     codebook_size: int = 512
     rope_base_height: int = 10007  # ~10k, prime
     rope_base_width: int = 5003    # ~5k, prime
@@ -803,7 +802,6 @@ class GridDVAEConfig(Config):
             'n_grid_layer': self.n_grid_layer,
             'n_latent_layer': self.n_latent_layer,
             'n_codes': self.n_codes,
-            'pos_dependent_codebook': self.pos_dependent_codebook,
             'codebook_size': self.codebook_size,
             'rope_base_height': self.rope_base_height,
             'rope_base_width': self.rope_base_width,
@@ -923,7 +921,7 @@ class GridDVAE(nn.Module):
         #                                codebook_size=config.codebook_size,
         #                                n_codes=config.n_codes,
         #                                use_exp_relaxed=config.use_exp_relaxed,
-        #                                position_dependent=config.pos_dependent_codebook,
+        #                                position_dependent=False,
         #                                sampling=config.sampling)
         
 
@@ -1070,7 +1068,7 @@ class GridDVAE(nn.Module):
         else:
             raise ValueError(f"Invalid reduction: {reduction}")
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
@@ -1078,7 +1076,6 @@ class GridDVAE(nn.Module):
     
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
     
-        residual_scaling = torch.tensor(1.0, device=x.device, dtype=x.dtype)
         quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling)
             
         if self.use_monte_carlo_kld:

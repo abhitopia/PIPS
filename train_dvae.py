@@ -466,7 +466,7 @@ class LoggingCallback(pl.Callback):
                 category = key.split('(')[-1].split(')')[0]  # Extract category.
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['tau', 'mask_pct', 'max_mask_pct']:
+            elif key in ['tau', 'mask_pct', 'max_mask_pct', 'residual_scaling']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'.
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
@@ -507,7 +507,8 @@ class ExperimentConfig:
     beta_dwkl_start: float = 0.0
     beta_kl_start: float = 0.0
     mask_pct_start: float = 0.0
-    
+    residual_scaling_start: float = 1.0
+
     # Final values
     beta_kl: float = 1.0
     beta_entropy: float = 0.0
@@ -515,19 +516,21 @@ class ExperimentConfig:
     beta_tc: float = 0.0
     beta_dwkl: float = 0.0
     max_mask_pct: float = 0.0
+    residual_scaling: float = 0.0
 
     
     # Schedule types
     tau_schedule_type: str = 'cosine'
     beta_schedule_type: str = 'cosine'
     mask_schedule_type: str = 'cosine'
-    
+    residual_scaling_schedule_type: str = 'cosine'
     # Replace single warmup_steps with separate warmups
     warmup_steps_lr: int = 10_000
     decay_steps_lr: int | None = None
     warmup_steps_tau: int = 150_000
     warmup_steps_beta: int = 10_000
     warmup_steps_mask_pct: int = 50_000
+    warmup_steps_residual_scaling: int = 5_000
 
     # Training parameters
     batch_size: int = 64
@@ -561,6 +564,7 @@ class ExperimentConfig:
         self.warmup_steps_beta = min(self.warmup_steps_beta, self.max_steps)
         self.warmup_steps_mask_pct = min(self.warmup_steps_mask_pct, self.max_steps)
         self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
+        self.warmup_steps_residual_scaling = min(self.warmup_steps_residual_scaling, self.max_steps)
 
         if self.decay_steps_lr is None:
             self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
@@ -692,6 +696,15 @@ class DVAETrainingModule(pl.LightningModule):
         """
         cfg = self.experiment_config
 
+
+        # Residual scaling schedule with its own warmup.
+        residual_scaling_schedule = Schedule.get_schedule(
+            initial_value=cfg.residual_scaling_start,
+            target_value=cfg.residual_scaling,
+            warmup_steps=cfg.warmup_steps_residual_scaling,
+            schedule_type=cfg.residual_scaling_schedule_type
+        )
+
         # Temperature schedule with its own warmup.
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.tau_start,
@@ -761,18 +774,19 @@ class DVAETrainingModule(pl.LightningModule):
             'beta(TC)': torch.tensor(beta_tc_schedule(step), device=device, dtype=torch.float32),
             'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
             'beta(KL)': torch.tensor(beta_kl_schedule(step), device=device, dtype=torch.float32),
-            'max_pct(MASK)': torch.tensor(max_mask_pct_schedule(step), device=device, dtype=torch.float32)
+            'max_pct(MASK)': torch.tensor(max_mask_pct_schedule(step), device=device, dtype=torch.float32),
+            'residual_scaling': torch.tensor(residual_scaling_schedule(step), device=device, dtype=torch.float32)
         }
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), beta_entropy: Tensor = torch.tensor(0.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
-        # All scheduled parameters are required as tensor arguments.
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), residual_scaling: Tensor = torch.tensor(0.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), beta_entropy: Tensor = torch.tensor(0.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
         
         # Forward pass with provided scheduled parameters.
         logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
             x, 
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
-            tau=tau
+            tau=tau,
+            residual_scaling=residual_scaling
         )
         
         # Calculate token accuracy excluding padding tokens.
@@ -849,7 +863,8 @@ class DVAETrainingModule(pl.LightningModule):
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
              beta_entropy=scheduled['beta(Entropy)'],
-             mask_pct=mask_pct
+             mask_pct=mask_pct,
+             residual_scaling=scheduled['residual_scaling']
         )
 
         output_dict['percent(MASK)'] = mask_pct
@@ -884,7 +899,8 @@ class DVAETrainingModule(pl.LightningModule):
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
              beta_entropy=scheduled['beta(Entropy)'],
-             mask_pct=mask_pct
+             mask_pct=mask_pct,
+             residual_scaling=scheduled['residual_scaling']
         )
 
         output_dict.update(scheduled)
