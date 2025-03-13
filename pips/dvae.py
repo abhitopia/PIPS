@@ -480,7 +480,6 @@ class LatentTransformer(nn.Module):
         return latents, loop_kv_caches
 
 
-
 class AttnCodebook(nn.Module):
     """
     A single-head attention-based codebook module.
@@ -498,13 +497,14 @@ class AttnCodebook(nn.Module):
         - codebook_keys: [d_model, codebook_size]
         - codebook_values: [codebook_size, d_model]
     """
-    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None, rope=None):
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None, rope=None, normalise_kq: bool = False):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
         self.sampling = sampling
         self.rope = rope
+        self.normalise_kq = normalise_kq
 
         self.norm_context = RMSNorm(dim=d_model)
         self.norm_queries = RMSNorm(dim=d_model)
@@ -551,6 +551,13 @@ class AttnCodebook(nn.Module):
 
         q = self.rope(q, positions[:, :qT].unsqueeze(1)).squeeze(1)
         k = self.rope(k, positions[:, :kT].unsqueeze(1)).squeeze(1)
+
+
+        if self.normalise_kq:
+            ## Normalise the keys and queries so network doesn't fight back the decrease in temperature
+            q = q / torch.norm(q, dim=-1, keepdim=True)
+            k = k / torch.norm(k, dim=-1, keepdim=True)
+
         # Compute scaled dot-product attention.
         log_alpha = torch.matmul(q, k.mT) # [B, N, C]
         log_alpha = log_alpha / self.scale # [B, N, C]
@@ -761,6 +768,7 @@ class GridDVAEConfig(Config):
     gamma: float = 2.0
     init_mode: str = "normal"
     skip_codebook: bool = False
+    normalise_kq: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -822,7 +830,8 @@ class GridDVAEConfig(Config):
             'use_monte_carlo_kld': self.use_monte_carlo_kld,
             'gamma': self.gamma,
             'init_mode': self.init_mode,
-            'skip_codebook': self.skip_codebook
+            'skip_codebook': self.skip_codebook,
+            'normalise_kq': self.normalise_kq
         }
         
         # Add computed attributes if they exist
@@ -940,7 +949,8 @@ class GridDVAE(nn.Module):
                                     codebook_size=config.codebook_size,
                                     use_exp_relaxed=config.use_exp_relaxed,
                                     rope=rope_codebook,
-                                    sampling=config.sampling)
+                                    sampling=config.sampling,
+                                    normalise_kq=config.normalise_kq)
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,

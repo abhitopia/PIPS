@@ -118,6 +118,7 @@ def new(
     sample: bool = typer.Option(False, "--sample", help="Enable sampling using Gumbel-Softmax", is_flag=True, flag_value=True, show_default=True),
     init_mode: InitMode = typer.Option(InitMode.NORMAL, "--init-mode", help="Initialization mode for model weights", case_sensitive=False),
     skip_codebook: bool = typer.Option(False, "--skip-codebook", help="Skip the codebook", is_flag=True, flag_value=True),
+    normalise_kq: bool = typer.Option(False, "--normalise-kq", "--nkq", help="Normalise the keys and queries", is_flag=True, flag_value=True),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
@@ -205,6 +206,7 @@ def new(
         sampling=sample,
         init_mode=init_mode.value,
         skip_codebook=skip_codebook,
+        normalise_kq=normalise_kq,
     )
     
     config = ExperimentConfig(
