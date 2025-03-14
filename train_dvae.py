@@ -1168,7 +1168,8 @@ def load_model_weights(
         )
         
         # Load just the model weights
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        model.configure_model()  # Need to load the model first
         model.load_state_dict(checkpoint['state_dict'], strict=True)
         print(f"Loaded model weights from {checkpoint_path}")
         
