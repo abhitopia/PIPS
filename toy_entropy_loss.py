@@ -240,25 +240,29 @@ class DiscreteVAE(nn.Module):
         
         return recon, log_alpha, z, latent, quantized
 
-def entropy_loss(log_alpha, reduction="mean"):
+def entropy_loss(log_alpha, tau, reduction="mean"):
     """
-    Compute the entropy of the latent distribution.
+    Compute the entropy of the latent distribution, accounting for temperature.
     
     Args:
-        log_alpha: Logits for the latent distribution, shape [B, codebook_size]
+        log_alpha: Logits for the latent distribution, shape [B, N, codebook_size]
+        tau: Temperature parameter for scaling logits
         reduction: Reduction method ('sum', 'mean', or 'batchmean')
                 
     Returns:
         Entropy reduced according to the specified method
     """
+    # Apply temperature to logits
+    scaled_log_alpha = log_alpha / tau
+    
     # Compute log probabilities using log_softmax
-    log_probs = F.log_softmax(log_alpha, dim=-1)
+    log_probs = F.log_softmax(scaled_log_alpha, dim=-1)
     
     # Get probabilities by exponentiating log probabilities
     probs = torch.exp(log_probs)
     
     # Compute entropy: -sum(p * log(p))
-    entropy_per_sample = -torch.sum(probs * log_probs, dim=-1)  # [B]
+    entropy_per_sample = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
     
     # Apply reduction
     if reduction == "sum":
@@ -272,17 +276,21 @@ def entropy_loss(log_alpha, reduction="mean"):
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
 
-def compute_perplexity(probs):
+def compute_perplexity(log_alpha, tau):
     """
-    Compute perplexity of probability distributions.
+    Compute perplexity of probability distributions, accounting for temperature.
     Perplexity = 2^(entropy), measures how uniform the distribution is.
     
     Args:
-        probs: Probability distributions [B, N, codebook_size]
+        log_alpha: Logits for the latent distribution [B, N, codebook_size]
+        tau: Temperature parameter for scaling logits
         
     Returns:
         Perplexity per sample [B, N]
     """
+    # Apply temperature to logits and compute probabilities
+    probs = F.softmax(log_alpha / tau, dim=-1)
+    
     # Compute entropy: -sum(p * log(p))
     log_probs = torch.log2(probs + 1e-10)  # Add small epsilon to avoid log(0)
     entropy = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
@@ -292,16 +300,19 @@ def compute_perplexity(probs):
     
     return perplexity
 
-def compute_peakiness(probs):
+def compute_peakiness(log_alpha, tau):
     """
-    Compute peakiness (max probability) of distributions.
+    Compute peakiness (max probability) of distributions, accounting for temperature.
     
     Args:
-        probs: Probability distributions [B, N, codebook_size]
+        log_alpha: Logits for the latent distribution [B, N, codebook_size]
+        tau: Temperature parameter for scaling logits
         
     Returns:
         Peakiness per sample [B, N]
     """
+    # Apply temperature to logits and compute probabilities
+    probs = F.softmax(log_alpha / tau, dim=-1)
     return probs.max(dim=-1)[0]  # [B, N]
 
 def visualize_reconstructions(original, recon, n_samples=8, save_path=None):
@@ -339,16 +350,20 @@ def visualize_reconstructions(original, recon, n_samples=8, save_path=None):
     else:
         plt.show()
 
-def visualize_code_distributions(probs, avg_peakiness=None, avg_perplexity=None, save_path=None):
+def visualize_code_distributions(log_alpha, tau, avg_peakiness=None, avg_perplexity=None, save_path=None):
     """
-    Visualize probability distributions for each code position.
+    Visualize probability distributions for each code position, accounting for temperature.
     
     Args:
-        probs: Probability distributions [B, N, codebook_size]
+        log_alpha: Logits for the latent distribution [B, N, codebook_size]
+        tau: Temperature parameter for scaling logits
         avg_peakiness: Average peakiness for each code position [N] (optional)
         avg_perplexity: Average perplexity for each code position [N] (optional)
         save_path: Path to save the figure (optional)
     """
+    # Apply temperature to logits and compute probabilities
+    probs = F.softmax(log_alpha / tau, dim=-1)
+    
     n_samples = min(2, probs.size(0))  # Show at most 2 samples
     n_codes = probs.size(1)  # Show all codes
     
@@ -530,14 +545,17 @@ def run_experiment(args):
             temperature = temp_schedule(global_step)
             entropy_weight = entropy_schedule(global_step)
             
+            # Convert temperature to tensor
+            temp_tensor = torch.tensor(temperature)
+            
             optimizer.zero_grad()
             
             # Forward pass
-            recon, log_alpha, z, _, _ = model(data, torch.tensor(temperature))
+            recon, log_alpha, z, _, _ = model(data, temp_tensor)
             
             # Compute losses - using mean reconstruction loss
             recon_loss = F.binary_cross_entropy(recon, data, reduction='mean')
-            ent_loss = entropy_loss(log_alpha, reduction="mean")
+            ent_loss = entropy_loss(log_alpha, temp_tensor, reduction="mean")
             
             # Total loss - ADDING entropy loss to encourage discrete selection
             loss = recon_loss + entropy_weight * ent_loss
@@ -546,12 +564,9 @@ def run_experiment(args):
             loss.backward()
             optimizer.step()
             
-            # Compute probabilities, peakiness, and perplexity
-            probs = torch.softmax(log_alpha, dim=-1)  # [B, N, codebook_size]
-            
             # Calculate peakiness and perplexity for each code position
-            batch_peakiness = compute_peakiness(probs).detach().cpu().numpy()  # [B, N]
-            batch_perplexity = compute_perplexity(probs).detach().cpu().numpy()  # [B, N]
+            batch_peakiness = compute_peakiness(log_alpha, temp_tensor).detach().cpu().numpy()  # [B, N]
+            batch_perplexity = compute_perplexity(log_alpha, temp_tensor).detach().cpu().numpy()  # [B, N]
             
             # Average over batch dimension for each code position
             avg_batch_peakiness = np.mean(batch_peakiness, axis=0)  # [N]
@@ -623,7 +638,8 @@ def run_experiment(args):
                 
                 # Visualize code distributions with average metrics
                 visualize_code_distributions(
-                    probs[:2],  # Only show 2 samples max
+                    log_alpha[:2],  # Only show 2 samples max
+                    temp_tensor,
                     avg_peakiness=avg_code_peakiness,
                     avg_perplexity=avg_code_perplexity,
                     save_path=dist_dir / f"dist_step{global_step}.png"
@@ -637,7 +653,7 @@ def run_experiment(args):
                 with torch.no_grad():
                     for i, (data, _) in enumerate(test_loader):
                         # Forward pass
-                        recon, log_alpha, z, _, _ = model(data, torch.tensor(temperature))
+                        recon, log_alpha, z, _, _ = model(data, temp_tensor)
                         
                         # Compute reconstruction loss - using mean
                         recon_loss = F.binary_cross_entropy(recon, data, reduction='mean')
@@ -645,7 +661,7 @@ def run_experiment(args):
                         
                         # Store some samples for visualization
                         if i == 0:
-                            test_samples = (data[:8], recon[:8], torch.softmax(log_alpha[:8], dim=-1))
+                            test_samples = (data[:8], recon[:8], log_alpha[:8])
                 
                 test_recon_loss /= len(test_loader)
                 print(f"Test Reconstruction Loss: {test_recon_loss:.4f}")
@@ -660,6 +676,7 @@ def run_experiment(args):
                 # Visualize test code distributions with average metrics
                 visualize_code_distributions(
                     test_samples[2][:2],  # Only show 2 samples max
+                    temp_tensor,
                     avg_peakiness=avg_code_peakiness,
                     avg_perplexity=avg_code_perplexity,
                     save_path=dist_dir / f"test_dist_step{global_step}.png"
