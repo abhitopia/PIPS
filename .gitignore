@@ -175,3 +175,6 @@ experiments/
 runs/
 
 .data/
+
+
+mnist_discrete_vae/
