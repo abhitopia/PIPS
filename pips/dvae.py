@@ -1087,6 +1087,35 @@ class GridDVAE(nn.Module):
         else:
             raise ValueError(f"Invalid reduction: {reduction}")
 
+    def diversity_loss(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0)) -> Tensor:
+        """
+        Compute diversity loss to encourage different samples to use different parts of the codebook.
+        
+        This loss encourages the average distribution over the batch to be uniform (high entropy),
+        while individual samples can still have low entropy (deterministic) distributions.
+        
+        Args:
+            log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
+                where B is batch size, N is number of codes, C is codebook size.
+            tau (Tensor): Temperature parameter used for scaling the distribution.
+                
+        Returns:
+            Tensor: Diversity loss
+        """
+        # Apply temperature scaling to logits and get probabilities
+        probs = F.softmax(log_alpha / tau, dim=-1)  # [B, N, C]
+        
+        # Average the probabilities across the batch dimension
+        avg_probs = probs.mean(dim=0)  # [N, C]
+        
+        # Compute negative entropy of the average distribution
+        # We want this to be high entropy (uniform), so we minimize negative entropy
+        log_avg_probs = torch.log(avg_probs + 1e-10)  # Add small epsilon to avoid log(0)
+        neg_entropy = torch.sum(avg_probs * log_avg_probs, dim=-1)  # [N]
+        
+        # Average over all latent positions
+        return neg_entropy.mean()
+
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
@@ -1103,8 +1132,11 @@ class GridDVAE(nn.Module):
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
     
-        # Calculate entropy loss
-        latent_entropy = self.entropy_loss(log_alpha, reduction="mean")
+        # Calculate entropy loss (encourages deterministic codes per sample)
+        latent_entropy = self.entropy_loss(log_alpha, tau=tau, reduction="mean")
+        
+        # Calculate diversity loss (encourages different samples to use different codes)
+        diversity = self.diversity_loss(log_alpha, tau=tau)
 
         if self.skip_codebook:
             decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
@@ -1117,6 +1149,7 @@ class GridDVAE(nn.Module):
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
              "entropy_loss": latent_entropy,   # Add entropy to losses dictionary
+             "diversity_loss": diversity,      # Add diversity loss
              **kld_losses.to_dict()
         }
         return decoded_logits, log_alpha, losses, q_z_marg_updated

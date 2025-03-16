@@ -147,6 +147,7 @@ def new(
     # Beta values for loss components
     beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss. Stays constant."),
     beta_entropy: float = typer.Option(0.0, "--beta-entropy", "--bent", help="Beta for entropy loss"),
+    beta_diversity: float = typer.Option(0.0, "--beta-diversity", "--bdv", help="Beta for diversity loss (kept constant)"),
     beta_kl: float = typer.Option(0.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
     beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
     beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
@@ -218,6 +219,7 @@ def new(
         tau_start=tau_start,
         tau=tau,
         beta_ce_start=beta_ce,
+        beta_diversity_start=beta_diversity,
         beta_entropy_start=0.0,
         beta_mi_start=0.0,
         beta_tc_start=0.0,
@@ -226,6 +228,7 @@ def new(
         mask_pct_start=0.0,
         beta_ce=beta_ce,
         beta_entropy=beta_entropy,
+        beta_diversity=beta_diversity,
         beta_mi=beta_mi,
         beta_tc=beta_tc,
         beta_dwkl=beta_dwkl,

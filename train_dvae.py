@@ -484,6 +484,7 @@ class ExperimentConfig:
     beta_ce_start: float = 1.0  # Default to 1.0 to maintain original behavior
     beta_ce: float = 1.0  # Default to 1.0 to maintain original behavior
     beta_entropy_start: float = 0.0
+    beta_diversity_start: float = 0.0
     beta_mi_start: float = 0.0
     beta_tc_start: float = 0.0
     beta_dwkl_start: float = 0.0
@@ -494,6 +495,7 @@ class ExperimentConfig:
     # Final values
     beta_kl: float = 1.0
     beta_entropy: float = 0.0
+    beta_diversity: float = 0.0
     beta_mi: float = 0.0
     beta_tc: float = 0.0
     beta_dwkl: float = 0.0
@@ -710,6 +712,14 @@ class DVAETrainingModule(pl.LightningModule):
             warmup_steps=cfg.warmup_steps_beta,
             schedule_type=cfg.beta_schedule_type
         )
+
+        # Add beta_diversity schedule with shared beta warmup.
+        beta_diversity_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_diversity_start,
+            target_value=cfg.beta_diversity,
+            warmup_steps=cfg.warmup_steps_beta,
+            schedule_type=cfg.beta_schedule_type
+        )
         
         # Beta schedules with shared beta warmup.
         beta_mi_schedule = Schedule.get_schedule(
@@ -752,6 +762,7 @@ class DVAETrainingModule(pl.LightningModule):
             'tau': torch.tensor(tau_schedule(step), device=device, dtype=torch.float32),
             'beta(CE)': torch.tensor(beta_ce_schedule(step), device=device, dtype=torch.float32),
             'beta(Entropy)': torch.tensor(beta_entropy_schedule(step), device=device, dtype=torch.float32),
+            'beta(Diversity)': torch.tensor(beta_diversity_schedule(step), device=device, dtype=torch.float32),
             'beta(MI)': torch.tensor(beta_mi_schedule(step), device=device, dtype=torch.float32),
             'beta(TC)': torch.tensor(beta_tc_schedule(step), device=device, dtype=torch.float32),
             'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
@@ -760,7 +771,18 @@ class DVAETrainingModule(pl.LightningModule):
             'residual_scaling': torch.tensor(residual_scaling_schedule(step), device=device, dtype=torch.float32)
         }
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), residual_scaling: Tensor = torch.tensor(0.0), beta_ce: Tensor = torch.tensor(1.0), beta_mi: Tensor = torch.tensor(0.0), beta_dwkl: Tensor = torch.tensor(0.0), beta_tc: Tensor = torch.tensor(0.0), beta_kl: Tensor = torch.tensor(1.0), beta_entropy: Tensor = torch.tensor(0.0), mask_pct: Tensor = torch.tensor(0.0), tc_relu: bool = False):
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, 
+                tau: Tensor = torch.tensor(1.0), 
+                beta_ce: Tensor = torch.tensor(1.0), 
+                beta_entropy: Tensor = torch.tensor(0.0), 
+                beta_diversity: Tensor = torch.tensor(0.0),
+                beta_mi: Tensor = torch.tensor(0.0), 
+                beta_dwkl: Tensor = torch.tensor(0.0), 
+                beta_tc: Tensor = torch.tensor(0.0), 
+                beta_kl: Tensor = torch.tensor(0.0), 
+                residual_scaling: Tensor = torch.tensor(0.0), 
+                mask_pct: Tensor = torch.tensor(0.0), 
+                tc_relu: bool = False):
         
         # Forward pass with provided scheduled parameters.
         logits, log_alpha, losses, updated_q_z_marg = self.model.forward(
@@ -793,7 +815,8 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(DWKL)': losses['dwkl_loss'],
             'loss(TC)': maybe_relu(losses['tc_loss']),
             'loss(KL)': losses['kl_loss'],
-            'loss(Entropy)': losses['entropy_loss']
+            'loss(Entropy)': losses['entropy_loss'],
+            'loss(Diversity)': losses['diversity_loss']
         }
         
         # Compute weighted losses for total loss.
@@ -803,7 +826,8 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(DWKL)': raw_losses['loss(DWKL)'] * beta_dwkl,
             'loss(TC)': raw_losses['loss(TC)'] * beta_tc,
             'loss(KL)': raw_losses['loss(KL)'] * beta_kl,
-            'loss(Entropy)': raw_losses['loss(Entropy)'] * beta_entropy
+            'loss(Entropy)': raw_losses['loss(Entropy)'] * beta_entropy,
+            'loss(Diversity)': raw_losses['loss(Diversity)'] * beta_diversity
         }
         
         total_loss = sum(weighted_losses.values())
@@ -846,7 +870,8 @@ class DVAETrainingModule(pl.LightningModule):
              beta_kl=scheduled['beta(KL)'],
              beta_entropy=scheduled['beta(Entropy)'],
              mask_pct=mask_pct,
-             residual_scaling=scheduled['residual_scaling']
+             residual_scaling=scheduled['residual_scaling'],
+             beta_diversity=scheduled['beta(Diversity)']
         )
 
         output_dict['percent(MASK)'] = mask_pct
@@ -876,13 +901,14 @@ class DVAETrainingModule(pl.LightningModule):
              tc_relu=self.experiment_config.tc_relu,
              tau=scheduled['tau'],
              beta_ce=scheduled['beta(CE)'],
+             beta_entropy=scheduled['beta(Entropy)'],
+             beta_diversity=scheduled['beta(Diversity)']
              beta_mi=scheduled['beta(MI)'],
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
-             beta_entropy=scheduled['beta(Entropy)'],
              mask_pct=mask_pct,
-             residual_scaling=scheduled['residual_scaling']
+             residual_scaling=scheduled['residual_scaling'],
         )
 
         output_dict.update(scheduled)
