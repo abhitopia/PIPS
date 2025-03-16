@@ -276,6 +276,49 @@ def entropy_loss(log_alpha, tau, reduction="mean"):
     else:
         raise ValueError(f"Invalid reduction: {reduction}")
 
+def codebook_diversity_loss(log_alpha, tau, reduction="mean"):
+    """
+    Compute a diversity loss that encourages different samples to use different codebook entries.
+    
+    Args:
+        log_alpha: Logits for the latent distribution, shape [B, N, codebook_size]
+        tau: Temperature parameter for scaling logits
+        reduction: Reduction method ('sum', 'mean', or 'batchmean')
+                
+    Returns:
+        Diversity loss reduced according to the specified method
+    """
+    # Apply temperature to logits
+    scaled_log_alpha = log_alpha / tau
+    
+    # Compute probabilities
+    probs = F.softmax(scaled_log_alpha, dim=-1)  # [B, N, codebook_size]
+    
+    # Average usage of each codebook entry across the batch
+    # This gives us the average probability of each codebook entry for each code position
+    batch_avg_probs = probs.mean(dim=0)  # [N, codebook_size]
+    
+    # Compute entropy of the batch-averaged distribution
+    # High entropy means different samples use different codebook entries
+    # Low entropy means all samples use the same codebook entries
+    log_batch_avg_probs = torch.log2(batch_avg_probs + 1e-10)
+    batch_entropy = -torch.sum(batch_avg_probs * log_batch_avg_probs, dim=-1)  # [N]
+    
+    # We want to maximize this entropy, so we negate it for minimization
+    diversity_loss = -batch_entropy  # [N]
+    
+    # Apply reduction
+    if reduction == "sum":
+        return diversity_loss.sum()
+    elif reduction == "mean":
+        return diversity_loss.mean()
+    elif reduction == "batchmean":
+        return diversity_loss.mean()
+    elif reduction == "none":
+        return diversity_loss
+    else:
+        raise ValueError(f"Invalid reduction: {reduction}")
+
 def compute_perplexity(log_alpha, tau):
     """
     Compute perplexity of probability distributions, accounting for temperature.
@@ -389,9 +432,26 @@ def visualize_code_distributions(log_alpha, tau, avg_peakiness=None, avg_perplex
             entropy = -torch.sum(probs[sample_idx, code_idx] * torch.log2(probs[sample_idx, code_idx] + 1e-10)).item()
             perplexity = 2.0 ** entropy
             
-            # Plot distribution
-            ax.bar(range(len(probs_to_plot)), probs_to_plot)
-            ax.set_ylim(0, max_prob * 1.05)  # Set y-axis limit to global max with 5% padding
+            # Get indices where probability is non-zero (or above a small threshold)
+            # This ensures we at least plot the highest probability even if it's very dominant
+            threshold = 1e-6
+            indices = np.where(probs_to_plot > threshold)[0]
+            
+            # If no indices meet the threshold, at least show the max value
+            if len(indices) == 0:
+                max_idx = np.argmax(probs_to_plot)
+                indices = np.array([max_idx])
+            
+            # Plot distribution - only for indices with non-negligible probability
+            x_positions = np.arange(len(probs_to_plot))
+            bars = ax.bar(x_positions, probs_to_plot)
+            
+            # Highlight the highest bar in a different color
+            max_idx = np.argmax(probs_to_plot)
+            bars[max_idx].set_color('red')
+            
+            # Set y-axis limit to global max with 5% padding
+            ax.set_ylim(0, max_prob * 1.05)
             
             # Add title with average metrics if provided
             if sample_idx == 0:
@@ -407,6 +467,14 @@ def visualize_code_distributions(log_alpha, tau, avg_peakiness=None, avg_perplex
             ax.text(0.5, 0.02, f"Peak: {peakiness:.3f}\nPerp: {perplexity:.2f}", 
                     transform=ax.transAxes, ha='center', va='bottom',
                     bbox=dict(facecolor='white', alpha=0.7))
+            
+            # Add text annotation for the max value
+            if peakiness > 0.5:  # Only annotate high peaks
+                ax.annotate(f"{peakiness:.3f}", 
+                           xy=(max_idx, peakiness),
+                           xytext=(max_idx, peakiness + max_prob * 0.05),
+                           ha='center',
+                           arrowprops=dict(arrowstyle='->'))
             
             if sample_idx == n_samples - 1:
                 ax.set_xlabel("Codebook Index")
@@ -440,6 +508,8 @@ def run_experiment(args):
     # Create a descriptive experiment name
     exp_name = f"dim{args.latent_dim}_codes{args.n_codes}_cb{args.codebook_size}"
     exp_name += f"_temp{args.min_temp}-{args.max_temp}_ent{args.min_entropy_weight}-{args.max_entropy_weight}"
+    if args.diversity_weight > 0:
+        exp_name += f"_div{args.diversity_weight}"
     if args.use_exp_relaxed:
         exp_name += "_exprelaxed"
     if args.sampling:
@@ -469,6 +539,7 @@ def run_experiment(args):
     # Load MNIST dataset
     transform = transforms.Compose([transforms.ToTensor()])
     
+    # Keep the directory to "./data" as it is already in the .gitignore
     train_dataset = datasets.MNIST('./.data', train=True, download=True, transform=transform)
     test_dataset = datasets.MNIST('./.data', train=False, download=True, transform=transform)
     
@@ -557,8 +628,15 @@ def run_experiment(args):
             recon_loss = F.binary_cross_entropy(recon, data, reduction='mean')
             ent_loss = entropy_loss(log_alpha, temp_tensor, reduction="mean")
             
-            # Total loss - ADDING entropy loss to encourage discrete selection
-            loss = recon_loss + entropy_weight * ent_loss
+            # Compute diversity loss if weight > 0
+            if args.diversity_weight > 0:
+                div_loss = codebook_diversity_loss(log_alpha, temp_tensor, reduction="mean")
+                # Total loss - ADDING entropy loss to encourage discrete selection and diversity loss
+                loss = recon_loss + entropy_weight * ent_loss + args.diversity_weight * div_loss
+            else:
+                div_loss = torch.tensor(0.0)
+                # Total loss - ADDING entropy loss to encourage discrete selection
+                loss = recon_loss + entropy_weight * ent_loss
             
             # Backward and optimize
             loss.backward()
@@ -588,6 +666,7 @@ def run_experiment(args):
                 'loss': loss.item(),
                 'recon': recon_loss.item(),
                 'entropy': ent_loss.item(),
+                'diversity': div_loss.item() if args.diversity_weight > 0 else 0.0,
                 'temp': temperature,
                 'ent_w': entropy_weight
             })
@@ -662,8 +741,13 @@ def run_experiment(args):
                         # Store some samples for visualization
                         if i == 0:
                             test_samples = (data[:8], recon[:8], log_alpha[:8])
+                        
+                        # Limit the number of test batches to 5 for faster evaluation
+                        if i >= 10:  # This means we process 5 batches (0-4)
+                            break
                 
-                test_recon_loss /= len(test_loader)
+                # Adjust the average calculation to account for the limited number of batches
+                test_recon_loss /= min(5, len(test_loader))
                 print(f"Test Reconstruction Loss: {test_recon_loss:.4f}")
                 
                 # Visualize test reconstructions
@@ -784,6 +868,311 @@ def create_metrics_plots(metrics, output_dir, args):
     plt.savefig(output_dir / "recon_vs_discreteness.png")
     plt.close()
 
+def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
+    """
+    Analyze a trained model by:
+    1. Comparing soft vs. hard discretization
+    2. Visualizing the effect of changing individual codes
+    
+    Args:
+        model_path: Path to the saved model
+        n_samples: Number of samples to analyze
+        temperature: Temperature for the model
+    """
+    # Load the model
+    model_path = Path(model_path)
+    checkpoint = torch.load(model_path)
+    
+    # Extract model parameters from the args.txt file in the same directory as the model
+    model_dir = model_path.parent
+    args_path = model_dir / "args.txt"
+    
+    # If args.txt is not in the same directory, try looking one level up
+    if not args_path.exists():
+        model_dir = model_path.parent.parent
+        args_path = model_dir / "args.txt"
+    
+    if not args_path.exists():
+        raise FileNotFoundError(f"Could not find args.txt in {model_path.parent} or {model_path.parent.parent}")
+    
+    with open(args_path, "r") as f:
+        args_dict = {}
+        for line in f:
+            if ":" in line:
+                key, value = line.strip().split(":", 1)
+                args_dict[key.strip()] = value.strip()
+    
+    print(f"Loaded model parameters from {args_path}")
+    
+    # Create model with the same parameters
+    model = DiscreteVAE(
+        latent_dim=int(args_dict.get('latent_dim', 64)),
+        codebook_size=int(args_dict.get('codebook_size', 512)),
+        n_codes=int(args_dict.get('n_codes', 8)),
+        hidden_dim=int(args_dict.get('hidden_dim', 400)),
+        use_exp_relaxed=args_dict.get('use_exp_relaxed', 'False').lower() == 'true',
+        sampling=args_dict.get('sampling', 'False').lower() == 'true'
+    )
+    
+    # Load the state dict
+    model.load_state_dict(checkpoint)
+    model.eval()
+    
+    # Create output directory for analysis results
+    analysis_dir = model_dir / "analysis"
+    analysis_dir.mkdir(exist_ok=True)
+    
+    print(f"Saving analysis results to {analysis_dir}")
+    
+    # Load MNIST test dataset
+    transform = transforms.Compose([transforms.ToTensor()])
+    test_dataset = datasets.MNIST('./.data', train=False, download=True, transform=transform)
+    
+    # Create a smaller test loader with just enough samples
+    test_loader = DataLoader(test_dataset, batch_size=n_samples, shuffle=True)
+    
+    # Get a batch of test images
+    data, labels = next(iter(test_loader))
+    
+    # Set temperature
+    temp_tensor = torch.tensor(temperature)
+    
+    # 1. Compare soft vs. hard discretization
+    with torch.no_grad():
+        # Standard forward pass (soft discretization)
+        recon_soft, log_alpha, z_soft, latent, quantized = model(data, temp_tensor)
+        
+        # Hard discretization (one-hot via argmax)
+        # First get the logits
+        _, log_alpha, _, _, _ = model(data, temp_tensor)
+        
+        # Convert to one-hot via argmax
+        z_hard = torch.zeros_like(z_soft)
+        indices = torch.argmax(log_alpha, dim=-1)
+        z_hard.scatter_(-1, indices.unsqueeze(-1), 1.0)
+        
+        # Get the codebook values for these one-hot vectors
+        latent_pos_indices = model.latent_pos_indices.expand(data.size(0), -1)
+        
+        # Run through the codebook with the hard one-hot vectors
+        # We need to manually compute the attention output
+        normed_context = model.codebook.norm_context(model.codebook.codebook)
+        normed_queries = model.codebook.norm_queries(latent)
+        
+        # Compute values from the codebook
+        v = model.codebook.value_proj(normed_context).unsqueeze(0).expand(data.size(0), -1, -1)
+        
+        # Compute the attention output using the hard one-hot vectors
+        attn_output_hard = torch.matmul(z_hard, v)
+        y_hard = model.codebook.c_proj(attn_output_hard)
+        
+        # Apply the feedforward layer
+        quantized_hard = y_hard + model.codebook.ff(model.codebook.norm_ff(y_hard))
+        
+        # Decode the hard quantized representation
+        recon_hard = model.decoder(quantized_hard)
+    
+    # Create a figure to compare original, soft reconstruction, and hard reconstruction
+    plt.figure(figsize=(15, 5))
+    for i in range(n_samples):
+        # Original
+        plt.subplot(3, n_samples, i + 1)
+        plt.imshow(data[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.axis('off')
+        if i == 0:
+            plt.title('Original')
+        
+        # Soft reconstruction
+        plt.subplot(3, n_samples, i + 1 + n_samples)
+        plt.imshow(recon_soft[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.axis('off')
+        if i == 0:
+            plt.title('Soft Reconstruction')
+        
+        # Hard reconstruction
+        plt.subplot(3, n_samples, i + 1 + 2*n_samples)
+        plt.imshow(recon_hard[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.axis('off')
+        if i == 0:
+            plt.title('Hard Reconstruction (argmax)')
+    
+    plt.tight_layout()
+    plt.savefig(analysis_dir / "soft_vs_hard_reconstruction.png")
+    plt.close()
+    
+    # Calculate reconstruction error for both methods
+    soft_recon_error = F.binary_cross_entropy(recon_soft, data, reduction='mean').item()
+    hard_recon_error = F.binary_cross_entropy(recon_hard, data, reduction='mean').item()
+    
+    print(f"Soft reconstruction error: {soft_recon_error:.6f}")
+    print(f"Hard reconstruction error: {hard_recon_error:.6f}")
+    print(f"Difference: {hard_recon_error - soft_recon_error:.6f}")
+    
+    # 2. Visualize the effect of changing individual codes
+    # Select a sample to modify
+    sample_idx = 0  # Use the first sample
+    
+    # Get the original codes (argmax indices)
+    original_indices = torch.argmax(log_alpha[sample_idx], dim=-1)  # [N]
+    
+    # For each code position, try all possible codebook entries
+    n_codes = model.encoder.n_codes
+    codebook_size = model.codebook.codebook_size
+    
+    # Print information about the codes
+    print(f"Original digit: {labels[sample_idx].item()}")
+    print(f"Original codes: {original_indices.tolist()}")
+    
+    for code_pos in range(n_codes):
+        # Create a grid of images for all codebook values
+        # Calculate grid dimensions - aim for roughly square layout
+        grid_cols = min(16, codebook_size)  # Limit to 16 columns max for readability
+        grid_rows = (codebook_size + grid_cols - 1) // grid_cols  # Ceiling division
+        
+        plt.figure(figsize=(grid_cols * 1.5, grid_rows * 1.5 + 1))
+        
+        # Show the original image at the top, spanning multiple columns
+        ax_orig = plt.subplot2grid((grid_rows + 1, grid_cols), (0, 0), colspan=min(4, grid_cols))
+        ax_orig.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap='gray')
+        ax_orig.axis('off')
+        ax_orig.set_title(f'Original Digit: {labels[sample_idx].item()}\nCode {code_pos+1} Original Value: {original_indices[code_pos].item()}')
+        
+        # For each variation, change one code and show the result
+        for var_idx in range(codebook_size):
+            # Create a copy of the original indices
+            modified_indices = original_indices.clone()
+            
+            # Change the code at the specified position
+            modified_indices[code_pos] = var_idx
+            
+            # Create one-hot vectors from these indices
+            z_modified = torch.zeros_like(z_soft[sample_idx:sample_idx+1])
+            z_modified.scatter_(-1, modified_indices.unsqueeze(0).unsqueeze(-1), 1.0)
+            
+            # Get the codebook values for these one-hot vectors
+            with torch.no_grad():
+                # Compute values from the codebook
+                v = model.codebook.value_proj(normed_context).unsqueeze(0)
+                
+                # Compute the attention output using the modified one-hot vectors
+                attn_output_mod = torch.matmul(z_modified, v)
+                y_mod = model.codebook.c_proj(attn_output_mod)
+                
+                # Apply the feedforward layer
+                quantized_mod = y_mod + model.codebook.ff(model.codebook.norm_ff(y_mod))
+                
+                # Decode the modified quantized representation
+                recon_mod = model.decoder(quantized_mod)
+            
+            # Calculate row and column in the grid
+            row = (var_idx // grid_cols) + 1  # +1 because original image is in row 0
+            col = var_idx % grid_cols
+            
+            # Show the modified reconstruction
+            ax = plt.subplot2grid((grid_rows + 1, grid_cols), (row, col))
+            ax.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap='gray')
+            ax.axis('off')
+            
+            # Highlight the original value with a colored border
+            if var_idx == original_indices[code_pos].item():
+                for spine in ax.spines.values():
+                    spine.set_visible(True)
+                    spine.set_color('red')
+                    spine.set_linewidth(3)
+            
+            ax.set_title(f'{var_idx}', fontsize=8)
+        
+        plt.tight_layout()
+        plt.savefig(analysis_dir / f"code_{code_pos+1}_all_variations.png")
+        plt.close()
+        
+        # Also create a more focused visualization with just a subset of variations
+        # This is helpful when codebook size is very large
+        n_variations = min(10, codebook_size)
+        plt.figure(figsize=(15, 3))
+        
+        # Show the original image
+        plt.subplot(1, n_variations + 1, 1)
+        plt.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap='gray')
+        plt.axis('off')
+        plt.title(f'Original\nDigit: {labels[sample_idx].item()}')
+        
+        # Include the original value and some values around it
+        original_value = original_indices[code_pos].item()
+        
+        # Generate a list of indices to visualize, centered around the original value
+        if codebook_size <= n_variations:
+            # If codebook is small enough, show all values
+            indices_to_show = list(range(codebook_size))
+        else:
+            # Otherwise, show the original value and some values around it
+            half_range = (n_variations - 1) // 2
+            start_idx = max(0, original_value - half_range)
+            end_idx = min(codebook_size, start_idx + n_variations)
+            
+            # Adjust start if we hit the upper bound
+            if end_idx == codebook_size:
+                start_idx = max(0, codebook_size - n_variations)
+                
+            indices_to_show = list(range(start_idx, end_idx))
+        
+        # For each selected variation, show the result
+        for i, var_idx in enumerate(indices_to_show):
+            # Create a copy of the original indices
+            modified_indices = original_indices.clone()
+            
+            # Change the code at the specified position
+            modified_indices[code_pos] = var_idx
+            
+            # Create one-hot vectors from these indices
+            z_modified = torch.zeros_like(z_soft[sample_idx:sample_idx+1])
+            z_modified.scatter_(-1, modified_indices.unsqueeze(0).unsqueeze(-1), 1.0)
+            
+            # Get the codebook values for these one-hot vectors
+            with torch.no_grad():
+                # Compute values from the codebook
+                v = model.codebook.value_proj(normed_context).unsqueeze(0)
+                
+                # Compute the attention output using the modified one-hot vectors
+                attn_output_mod = torch.matmul(z_modified, v)
+                y_mod = model.codebook.c_proj(attn_output_mod)
+                
+                # Apply the feedforward layer
+                quantized_mod = y_mod + model.codebook.ff(model.codebook.norm_ff(y_mod))
+                
+                # Decode the modified quantized representation
+                recon_mod = model.decoder(quantized_mod)
+            
+            # Show the modified reconstruction
+            plt.subplot(1, len(indices_to_show) + 1, i + 2)
+            plt.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap='gray')
+            plt.axis('off')
+            
+            # Highlight the original value
+            title = f'Code {code_pos+1}\nValue: {var_idx}'
+            if var_idx == original_value:
+                title += ' (orig)'
+                plt.gca().spines['bottom'].set_color('red')
+                plt.gca().spines['top'].set_color('red')
+                plt.gca().spines['right'].set_color('red')
+                plt.gca().spines['left'].set_color('red')
+                plt.gca().spines['bottom'].set_visible(True)
+                plt.gca().spines['top'].set_visible(True)
+                plt.gca().spines['right'].set_visible(True)
+                plt.gca().spines['left'].set_visible(True)
+                plt.gca().spines['bottom'].set_linewidth(2)
+                plt.gca().spines['top'].set_linewidth(2)
+                plt.gca().spines['right'].set_linewidth(2)
+                plt.gca().spines['left'].set_linewidth(2)
+            
+            plt.title(title)
+        
+        plt.tight_layout()
+        plt.savefig(analysis_dir / f"code_{code_pos+1}_focused_variations.png")
+        plt.close()
+    
+    print(f"Analysis complete. Results saved to {analysis_dir}")
+
 def main():
     parser = argparse.ArgumentParser(description='Study discrete representation learning on MNIST')
     
@@ -798,7 +1187,7 @@ def main():
     # Training parameters
     parser.add_argument('--batch_size', type=int, default=256, help='Batch size')
     parser.add_argument('--max_steps', type=int, default=1000, help='Maximum number of training steps')
-    parser.add_argument('--val_check_interval', type=int, default=500, help='Validation check interval (in steps)')
+    parser.add_argument('--val_check_interval', type=int, default=100, help='Validation check interval (in steps)')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
     
@@ -812,11 +1201,24 @@ def main():
     parser.add_argument('--max_entropy_weight', type=float, default=0.0, help='Maximum entropy weight')
     parser.add_argument('--entropy_anneal_steps', type=int, default=0, help='Number of steps for entropy weight annealing (0 = no annealing)')
     
+    # Diversity parameters
+    parser.add_argument('--diversity_weight', type=float, default=0.1, help='Weight for the codebook diversity loss')
+    
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='mnist_discrete_vae', help='Output directory')
     
+    # Analysis parameters
+    parser.add_argument('--analyze', action='store_true', help='Run analysis on a trained model')
+    parser.add_argument('--model_path', type=str, help='Path to the trained model for analysis')
+    parser.add_argument('--analysis_samples', type=int, default=10, help='Number of samples to use for analysis')
+    parser.add_argument('--analysis_temp', type=float, default=1.0, help='Temperature to use for analysis')
+    
     args = parser.parse_args()
-    run_experiment(args)
+    
+    if args.analyze and args.model_path:
+        analyze_trained_model(args.model_path, args.analysis_samples, args.analysis_temp)
+    else:
+        run_experiment(args)
 
 if __name__ == "__main__":
     main()
