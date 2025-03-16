@@ -337,15 +337,6 @@ class LoggingCallback(pl.Callback):
         current_step = pl_module.global_step
         should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
 
-        # Pass the current train EMA to compute_entropy and get the updated EMA back
-        entropy_dict, self.train_code_distribution_ema = self.compute_entropy(
-            log_alpha, 
-            current_ema=self.train_code_distribution_ema,
-            add_codebook_usage=should_visualize,
-            ema_decay=self.ema_decay
-        )
-        outputs.update(entropy_dict)
-
         entropy_dict_tau, self.train_code_distribution_ema_tau = self.compute_entropy(
             log_alpha, 
             current_ema=self.train_code_distribution_ema_tau,
@@ -413,15 +404,6 @@ class LoggingCallback(pl.Callback):
 
         # Only log the codebook usage figure once per epoch.
         # Pass the current val EMA to compute_entropy and get the updated EMA back
-        entropy_dict, self.val_code_distribution_ema = self.compute_entropy(
-            log_alpha, 
-            current_ema=self.val_code_distribution_ema,
-            add_codebook_usage=batch_idx == self.val_batch_to_visualize,
-            ema_decay=self.ema_decay
-        )
-
-        outputs.update(entropy_dict)
-
         entropy_dict_tau, self.val_code_distribution_ema_tau = self.compute_entropy(
             log_alpha, 
             current_ema=self.val_code_distribution_ema_tau,

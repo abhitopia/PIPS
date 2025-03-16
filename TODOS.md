@@ -107,7 +107,7 @@
 
 ## Version 4
 - [x] Add temperature to the entropy loss
-- [ ] Fix all perplexity and entropy calculations to only use log_alpha / tau
+- [x] Fix all perplexity and entropy calculations to only use log_alpha / tau
 - [ ] Implement diversity loss
 - [ ] Plot peakiness over steps
 
