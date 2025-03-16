@@ -119,6 +119,14 @@ class LoggingCallback(pl.Callback):
         perplexity_key = 'CodebookUsage/perplexity_tau' if tau is not None else 'CodebookUsage/perplexity'
         output_dict[perplexity_key] = avg_perplexity.detach()
         
+        # Calculate peakiness (maximum probability) for each code position
+        per_code_peakiness = probs.max(dim=-1)[0]  # [B, N]
+        avg_peakiness = per_code_peakiness.mean()
+        
+        # Use a different key name if tau is provided
+        peakiness_key = 'CodebookUsage/peakiness_tau' if tau is not None else 'CodebookUsage/peakiness'
+        output_dict[peakiness_key] = avg_peakiness.detach()
+        
         # Calculate distribution for each code position (for current batch)
         current_code_distribution = probs.mean(dim=0).detach()  # [N, C]
         
@@ -133,11 +141,15 @@ class LoggingCallback(pl.Callback):
         if add_codebook_usage and updated_ema is not None:
             # Average across batch dimension
             avg_per_code_perplexity = per_code_perplexity.mean(dim=0)  # [N]
+            avg_per_code_peakiness = per_code_peakiness.mean(dim=0)  # [N]
 
             # Add per-code perplexity metrics with appropriate key names
             code_perplexity_prefix = 'Codebook/perplexity_tau_code_' if tau is not None else 'Codebook/perplexity_code_'
+            code_peakiness_prefix = 'Codebook/peakiness_tau_code_' if tau is not None else 'Codebook/peakiness_code_'
+            
             for i, perp in enumerate(avg_per_code_perplexity):
                 output_dict[f'{code_perplexity_prefix}{i}'] = perp.detach()
+                output_dict[f'{code_peakiness_prefix}{i}'] = avg_per_code_peakiness[i].detach()
             
             # Combined heatmap visualization: EMA heatmap, first sample and last sample probability heatmaps
             code_dist_data = updated_ema.float().cpu().numpy()
@@ -864,14 +876,14 @@ class DVAETrainingModule(pl.LightningModule):
              tc_relu=self.experiment_config.tc_relu,
              tau=scheduled['tau'],
              beta_ce=scheduled['beta(CE)'],
+             beta_entropy=scheduled['beta(Entropy)'],
+             beta_diversity=scheduled['beta(Diversity)'],
              beta_mi=scheduled['beta(MI)'],
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
              beta_kl=scheduled['beta(KL)'],
-             beta_entropy=scheduled['beta(Entropy)'],
              mask_pct=mask_pct,
              residual_scaling=scheduled['residual_scaling'],
-             beta_diversity=scheduled['beta(Diversity)']
         )
 
         output_dict['percent(MASK)'] = mask_pct
@@ -902,7 +914,7 @@ class DVAETrainingModule(pl.LightningModule):
              tau=scheduled['tau'],
              beta_ce=scheduled['beta(CE)'],
              beta_entropy=scheduled['beta(Entropy)'],
-             beta_diversity=scheduled['beta(Diversity)']
+             beta_diversity=scheduled['beta(Diversity)'],
              beta_mi=scheduled['beta(MI)'],
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
