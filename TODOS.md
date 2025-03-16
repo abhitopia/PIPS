@@ -105,6 +105,13 @@
 - [ ] Create a MNIST example (properly this time)
 
 
+## Version 4
+- [x] Add temperature to the entropy loss
+- [ ] Fix all perplexity and entropy calculations to only use log_alpha / tau
+- [ ] Implement diversity loss
+- [ ] Plot peakiness over steps
+
+
 # Fix KLD Losses
 - [x] Read the paper
 - [x] Use log_softmax for numerical stability

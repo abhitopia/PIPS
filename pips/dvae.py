@@ -602,7 +602,7 @@ class AttnCodebook(nn.Module):
                                                             tau=tau,
                                                             positions=positions)
 
-        # Notice that this mixes the latents with the codebook embeddings.
+        # Notice that this mixes the latents with the codebook embeddings.
         # But this also means that attn_output is not a function of log_alpha only.
         # As such, we add a residual scaling factor to the residual connection.
         attn_output = residual_scaling * latents + attn_output # Residual connection
@@ -1053,13 +1053,14 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def entropy_loss(self, log_alpha: Tensor, reduction: str = "mean") -> Tensor:
+    def entropy_loss(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0), reduction: str = "mean") -> Tensor:
         """
-        Compute the entropy of the latent distribution.
+        Compute the entropy of the latent distribution, accounting for temperature scaling.
         
         Args:
             log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
                 where B is batch size, N is number of codes, C is codebook size.
+            tau (Tensor): Temperature parameter used for scaling the distribution.
             reduction (str): Reduction method, one of 'sum', 'mean', or 'batchmean'.
                 'sum': Sum over batch and latent dimensions.
                 'mean': Average over batch and latent dimensions.
@@ -1068,18 +1069,14 @@ class GridDVAE(nn.Module):
         Returns:
             Tensor: Entropy reduced according to the specified method.
         """
-        # Compute log probabilities directly using log_softmax
-        log_probs = F.log_softmax(log_alpha, dim=-1)  # [B, N, C]
-        
-        # Get probabilities by exponentiating log probabilities
-        probs = torch.exp(log_probs)  # [B, N, C]
+        # Apply temperature scaling to logits
+        log_probs = F.log_softmax(log_alpha / tau, dim=-1)
+        probs = torch.exp(log_probs)
         
         # Compute entropy: -sum(p * log(p))
         entropy_per_latent = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
         
         # Apply reduction
-        B, N, _ = log_alpha.shape
-        
         if reduction == "sum":
             return entropy_per_latent.sum()
         elif reduction == "mean":
