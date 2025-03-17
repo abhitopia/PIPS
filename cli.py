@@ -108,7 +108,7 @@ def new(
     n_head: int = typer.Option(8, "--n-head", "-h", help="Number of attention heads"),
     n_grid_layer: int = typer.Option(4, "--n-grid-layer", "-gl", help="Number of grid transformer layers"),
     n_latent_layer: int = typer.Option(4, "--n-latent-layer", "-ll", help="Number of latent transformer layers"),
-    n_codes: int = typer.Option(16, "--n-codes", "-c", help="Number of latent codes"),
+    n_codes: int = typer.Option(128, "--n-codes", "-c", help="Number of latent codes"),
     codebook_size: int = typer.Option(512, "--codebook-size", "--cs", help="Size of each codebook"),
     dropout: float = typer.Option(0.0, "--dropout", "--dp", help="Dropout rate"),
     gamma: float = typer.Option(2.0, "--gamma", "--g", help="Focal loss gamma parameter (default: 2.0)"),
@@ -122,10 +122,10 @@ def new(
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "--bs", help="Training batch size"),
-    learning_rate: float = typer.Option(1e-4, "--learning-rate", "--lr", help="Initial learning rate"),
+    learning_rate: float = typer.Option(4e-5, "--learning-rate", "--lr", help="Initial learning rate"),
     lr_min: float = typer.Option(None, "--lr-min", help="Minimum learning rate (defaults to 1% of learning rate if not specified)"),
     weight_decay: float = typer.Option(1e-4, "--weight-decay", "--wd", help="AdamW weight decay"),
-    max_steps: int = typer.Option(1_000_000, "--max-steps", "--ms", help="Maximum training steps"),
+    max_steps: int = typer.Option(100_000, "--max-steps", "--ms", help="Maximum training steps"),
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
     accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
     
@@ -136,13 +136,13 @@ def new(
     residual_scaling_schedule_type: str = typer.Option('cosine', "--residual-schedule-type", "--rst", help="Schedule type for residual scaling transition (linear, cosine, exponential, threshold)"),
     
     # Learning rate warmup / decay steps
-    warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
+    warmup_steps_lr: int = typer.Option(100, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
     decay_steps_lr: int = typer.Option(None, "--decay-steps-lr", "--dsl", help="Learning rate decay steps, if not specified, will be set to max_steps - warmup_steps_lr"),
     
     # Schedule parameters - tau
-    tau_start: float = typer.Option(3.5, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax."),
-    tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax."),
-    transition_steps_tau: int = typer.Option(150_000, "--transition-steps-tau", "--tst", help="Steps to transition tau from initial to target value"),
+    tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax."),
+    tau: float = typer.Option(1.0, "--tau", "-t", help="Final temperature for Gumbel-Softmax."),
+    transition_steps_tau: int = typer.Option(5_000, "--transition-steps-tau", "--tst", help="Steps to transition tau from initial to target value"),
     warmup_steps_tau: int = typer.Option(0, "--warmup-steps-tau", "--wst", help="Steps to wait before starting tau transition"),
     
     # Schedule parameters - residual scaling
@@ -154,7 +154,7 @@ def new(
     # Schedule parameters - mask percentage
     mask_pct_start: float = typer.Option(0.0, "--mask-pct-start", "--mss", help="Starting masking percentage"),
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
-    transition_steps_mask_pct: int = typer.Option(50_000, "--transition-steps-mask", "--tsm", help="Steps to transition mask percentage from initial to target value"),
+    transition_steps_mask_pct: int = typer.Option(5_000, "--transition-steps-mask", "--tsm", help="Steps to transition mask percentage from initial to target value"),
     warmup_steps_mask_pct: int = typer.Option(0, "--warmup-steps-mask", "--wsm", help="Steps to wait before starting mask percentage transition"),
 
     # Beta values and schedules for Cross-Entropy
