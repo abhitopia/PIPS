@@ -1053,46 +1053,9 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def entropy_loss(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0), reduction: str = "mean") -> Tensor:
+    def compute_codebook_losses(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0)) -> Tuple[Tensor, Tensor]:
         """
-        Compute the entropy of the latent distribution, accounting for temperature scaling.
-        
-        Args:
-            log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
-                where B is batch size, N is number of codes, C is codebook size.
-            tau (Tensor): Temperature parameter used for scaling the distribution.
-            reduction (str): Reduction method, one of 'sum', 'mean', or 'batchmean'.
-                'sum': Sum over batch and latent dimensions.
-                'mean': Average over batch and latent dimensions.
-                'batchmean': Sum over latent dimensions, then average over batch.
-                
-        Returns:
-            Tensor: Entropy reduced according to the specified method.
-        """
-        # Apply temperature scaling to logits
-        log_probs = F.log_softmax(log_alpha / tau, dim=-1)
-        probs = torch.exp(log_probs)
-        
-        # Compute entropy: -sum(p * log(p))
-        entropy_per_latent = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
-        
-        # Apply reduction
-        if reduction == "sum":
-            return entropy_per_latent.sum()
-        elif reduction == "mean":
-            return entropy_per_latent.mean()
-        elif reduction == "batchmean":
-            # Sum over latent dimensions, then average over batch
-            return entropy_per_latent.sum(dim=1).mean()
-        else:
-            raise ValueError(f"Invalid reduction: {reduction}")
-
-    def diversity_loss(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0)) -> Tensor:
-        """
-        Compute diversity loss to encourage different samples to use different parts of the codebook.
-        
-        This loss encourages the average distribution over the batch to be uniform (high entropy),
-        while individual samples can still have low entropy (deterministic) distributions.
+        Efficiently compute codebook-related losses with a single softmax computation.
         
         Args:
             log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
@@ -1100,21 +1063,32 @@ class GridDVAE(nn.Module):
             tau (Tensor): Temperature parameter used for scaling the distribution.
                 
         Returns:
-            Tensor: Diversity loss
+            Tuple[Tensor, Tensor]: Tuple containing (entropy_loss, diversity_loss).
+                entropy_loss: Low values indicate deterministic distributions.
+                diversity_loss: Low values indicate high diversity across the batch.
         """
-        # Apply temperature scaling to logits and get probabilities
+        # Apply temperature scaling and get probabilities - computed only once
         probs = F.softmax(log_alpha / tau, dim=-1)  # [B, N, C]
         
+        # For numerical stability in log calculations
+        epsilon = 1e-10
+        
+        # 1. Compute entropy loss (to encourage deterministic codes per sample)
+        log_probs = torch.log(probs + epsilon)  # [B, N, C]
+        entropy_per_latent = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
+        entropy_loss = entropy_per_latent.mean()
+        
+        # 2. Compute diversity loss (to encourage different samples to use different codes)
         # Average the probabilities across the batch dimension
         avg_probs = probs.mean(dim=0)  # [N, C]
+        log_avg_probs = torch.log(avg_probs + epsilon)
+        entropy_of_avg = -torch.sum(avg_probs * log_avg_probs, dim=-1)  # [N]
         
-        # Compute negative entropy of the average distribution
-        # We want this to be high entropy (uniform), so we minimize negative entropy
-        log_avg_probs = torch.log(avg_probs + 1e-10)  # Add small epsilon to avoid log(0)
-        neg_entropy = torch.sum(avg_probs * log_avg_probs, dim=-1)  # [N]
+        # Diversity loss: negative entropy of the average distribution
+        # Lower values indicate higher diversity when minimized
+        diversity_loss = -entropy_of_avg.mean()
         
-        # Average over all latent positions
-        return neg_entropy.mean()
+        return entropy_loss, diversity_loss
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
@@ -1124,7 +1098,7 @@ class GridDVAE(nn.Module):
     
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
     
-        quantized, log_alpha, _ = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices)
+        quantized, log_alpha, z = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices)
             
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
@@ -1132,24 +1106,20 @@ class GridDVAE(nn.Module):
         else:
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
     
-        # Calculate entropy loss (encourages deterministic codes per sample)
-        latent_entropy = self.entropy_loss(log_alpha, tau=tau, reduction="mean")
-        
-        # Calculate diversity loss (encourages different samples to use different codes)
-        diversity = self.diversity_loss(log_alpha, tau=tau)
+        # Calculate codebook-related losses efficiently
+        entropy_loss, diversity_loss = self.compute_codebook_losses(log_alpha, tau=tau)
 
         if self.skip_codebook:
             decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
         else:
             decoded_logits = self.decode(quantized, grid_pos_indices, latent_pos_indices)
-
     
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
     
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
-             "entropy_loss": latent_entropy,   # Add entropy to losses dictionary
-             "diversity_loss": diversity,      # Add diversity loss
+             "entropy_loss": entropy_loss,  # Entropy loss (low = deterministic codes)
+             "diversity_loss": diversity_loss,  # Diversity loss (low = different samples use different codes)
              **kld_losses.to_dict()
         }
         return decoded_logits, log_alpha, losses, q_z_marg_updated
