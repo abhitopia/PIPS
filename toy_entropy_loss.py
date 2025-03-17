@@ -152,8 +152,9 @@ class AttnCodebook(nn.Module):
 class Encoder(nn.Module):
     """
     Encoder network for MNIST images.
-    Maps 28x28 images to a latent representation with shape [B, N, D]
+    Maps 32x32 images to a latent representation with shape [B, N, D]
     where B is batch size, N is number of codes, and D is model dimension.
+    The 28x28 MNIST image is placed in the top-left corner of the 32x32 input.
     """
     def __init__(self, latent_dim, n_codes, hidden_dim=400):
         super().__init__()
@@ -162,14 +163,16 @@ class Encoder(nn.Module):
         
         self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.fc1 = nn.Linear(64 * 7 * 7, hidden_dim)
+        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)
+        self.fc1 = nn.Linear(64 * 4 * 4, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, n_codes * latent_dim)
         
     def forward(self, x):
-        # Input: [B, 1, 28, 28]
-        x = F.relu(self.conv1(x))  # [B, 32, 14, 14]
-        x = F.relu(self.conv2(x))  # [B, 64, 7, 7]
-        x = x.view(-1, 64 * 7 * 7)
+        # Input: [B, 1, 32, 32]
+        x = F.relu(self.conv1(x))  # [B, 32, 16, 16]
+        x = F.relu(self.conv2(x))  # [B, 64, 8, 8]
+        x = F.relu(self.conv3(x))  # [B, 64, 4, 4]
+        x = x.view(-1, 64 * 4 * 4)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         # Reshape to [B, N, D]
@@ -182,7 +185,8 @@ class Encoder(nn.Module):
 class Decoder(nn.Module):
     """
     Decoder network for MNIST images.
-    Maps latent representation [B, N, D] back to 28x28 images.
+    Maps latent representation [B, N, D] back to 32x32 images,
+    with the 28x28 MNIST image placed in the top-left corner.
     """
     def __init__(self, latent_dim, n_codes, hidden_dim=400):
         super().__init__()
@@ -190,9 +194,10 @@ class Decoder(nn.Module):
         self.n_codes = n_codes
         
         self.fc1 = nn.Linear(n_codes * latent_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, 64 * 7 * 7)
-        self.deconv1 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.deconv2 = nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.fc2 = nn.Linear(hidden_dim, 64 * 4 * 4)
+        self.deconv1 = nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.deconv2 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.deconv3 = nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1)
         
     def forward(self, x):
         # Input: [B, N, D]
@@ -200,9 +205,10 @@ class Decoder(nn.Module):
         x = x.view(-1, self.n_codes * self.latent_dim)
         x = F.relu(self.fc1(x))
         x = F.relu(self.fc2(x))
-        x = x.view(-1, 64, 7, 7)
-        x = F.relu(self.deconv1(x))
-        x = torch.sigmoid(self.deconv2(x))  # Sigmoid to get values in [0, 1]
+        x = x.view(-1, 64, 4, 4)
+        x = F.relu(self.deconv1(x))  # [B, 64, 8, 8]
+        x = F.relu(self.deconv2(x))  # [B, 32, 16, 16]
+        x = torch.sigmoid(self.deconv3(x))  # [B, 1, 32, 32]
         return x
 
 class DiscreteVAE(nn.Module):
@@ -360,11 +366,11 @@ def compute_peakiness(log_alpha, tau):
 
 def visualize_reconstructions(original, recon, n_samples=8, save_path=None):
     """
-    Visualize original and reconstructed MNIST images.
+    Visualize original and reconstructed 32x32 images.
     
     Args:
-        original: Original images [B, 1, 28, 28]
-        recon: Reconstructed images [B, 1, 28, 28]
+        original: Original images [B, 1, 32, 32]
+        recon: Reconstructed images [B, 1, 32, 32]
         n_samples: Number of samples to visualize
         save_path: Path to save the figure (optional)
     """
@@ -536,8 +542,19 @@ def run_experiment(args):
     dist_dir.mkdir(exist_ok=True)
     metrics_dir.mkdir(exist_ok=True)
     
-    # Load MNIST dataset
-    transform = transforms.Compose([transforms.ToTensor()])
+    # Custom transform to convert 28x28 MNIST to 32x32 with image in top-left corner
+    class MNISTTo32x32(object):
+        def __call__(self, pic):
+            # Convert PIL image to tensor (values in [0, 1])
+            tensor = transforms.ToTensor()(pic)
+            # Create a new 32x32 tensor filled with zeros
+            result = torch.zeros((1, 32, 32))
+            # Place the 28x28 image in the top-left corner
+            result[0, :28, :28] = tensor[0]
+            return result
+    
+    # Load MNIST dataset with custom transform
+    transform = MNISTTo32x32()
     
     # Keep the directory to "./data" as it is already in the .gitignore
     train_dataset = datasets.MNIST('./.data', train=True, download=True, transform=transform)
@@ -924,8 +941,19 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     
     print(f"Saving analysis results to {analysis_dir}")
     
-    # Load MNIST test dataset
-    transform = transforms.Compose([transforms.ToTensor()])
+    # Custom transform to convert 28x28 MNIST to 32x32 with image in top-left corner
+    class MNISTTo32x32(object):
+        def __call__(self, pic):
+            # Convert PIL image to tensor (values in [0, 1])
+            tensor = transforms.ToTensor()(pic)
+            # Create a new 32x32 tensor filled with zeros
+            result = torch.zeros((1, 32, 32))
+            # Place the 28x28 image in the top-left corner
+            result[0, :28, :28] = tensor[0]
+            return result
+    
+    # Load MNIST test dataset with custom transform
+    transform = MNISTTo32x32()
     test_dataset = datasets.MNIST('./.data', train=False, download=True, transform=transform)
     
     # Create a smaller test loader with just enough samples
