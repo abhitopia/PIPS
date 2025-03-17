@@ -129,29 +129,78 @@ def new(
     gradient_clip_val: float = typer.Option(1.0, "--gradient-clip-val", "--gc", help="Gradient clipping value"),
     accumulate_grad_batches: int = typer.Option(1, "--accumulate-grad-batches", "--acc", help="Number of batches to accumulate gradients"),
     
-    # Learning rate and other warmup / decay steps
+    # Schedule types
+    tau_schedule_type: str = typer.Option('cosine', "--tau-schedule-type", "--tst", help="Schedule type for tau transition (linear, cosine, exponential, threshold)"),
+    beta_schedule_type: str = typer.Option('cosine', "--beta-schedule-type", "--bst", help="Schedule type for beta transitions (linear, cosine, exponential, threshold)"),
+    mask_schedule_type: str = typer.Option('cosine', "--mask-schedule-type", "--mst", help="Schedule type for mask percentage transition (linear, cosine, exponential, threshold)"),
+    residual_scaling_schedule_type: str = typer.Option('cosine', "--residual-schedule-type", "--rst", help="Schedule type for residual scaling transition (linear, cosine, exponential, threshold)"),
+    
+    # Learning rate warmup / decay steps
     warmup_steps_lr: int = typer.Option(10_000, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
     decay_steps_lr: int = typer.Option(None, "--decay-steps-lr", "--dsl", help="Learning rate decay steps, if not specified, will be set to max_steps - warmup_steps_lr"),
-    warmup_steps_tau: int = typer.Option(150_000, "--warmup-steps-tau", "--wst", help="Temperature warmup steps"),
-    warmup_steps_beta: int = typer.Option(10_000, "--warmup-steps-beta", "--wsb", help="Beta parameters warmup steps"),
-    warmup_steps_mask_pct: int = typer.Option(50_000, "--warmup-steps-mask-pct", "--wsm", help="Mask percentage warmup steps"),
-    warmup_steps_residual: int = typer.Option(5_000, "--warmup-steps-residual", "--wsr", help="Residual scaling warmup steps"),
-
-    # Regularization parameters
-    tau_start: float = typer.Option(1.0, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
-    tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax. If negative, uses regular softmax for quantization."),
-    max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
+    
+    # Schedule parameters - tau
+    tau_start: float = typer.Option(3.5, "--tau-start", "--ts", help="Starting temperature for Gumbel-Softmax."),
+    tau: float = typer.Option(0.0625, "--tau", "-t", help="Final temperature for Gumbel-Softmax."),
+    transition_steps_tau: int = typer.Option(150_000, "--transition-steps-tau", "--tst", help="Steps to transition tau from initial to target value"),
+    warmup_steps_tau: int = typer.Option(0, "--warmup-steps-tau", "--wst", help="Steps to wait before starting tau transition"),
+    
+    # Schedule parameters - residual scaling
     residual_scaling_start: float = typer.Option(1.0, "--residual-scaling-start", "--rss", help="Residual scaling start value"),
-    residual_scaling: float = typer.Option(0.0, "--residual-scaling", "--rs", help="Residual scaling factor"),
+    residual_scaling: float = typer.Option(0.0, "--residual-scaling", "--rs", help="Residual scaling target value"),
+    transition_steps_residual_scaling: int = typer.Option(10_000, "--transition-steps-residual", "--tsr", help="Steps to transition residual scaling from initial to target value"),
+    warmup_steps_residual_scaling: int = typer.Option(0, "--warmup-steps-residual", "--wsr", help="Steps to wait before starting residual scaling transition"),
+    
+    # Schedule parameters - mask percentage
+    mask_pct_start: float = typer.Option(0.0, "--mask-pct-start", "--mss", help="Starting masking percentage"),
+    max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
+    transition_steps_mask_pct: int = typer.Option(50_000, "--transition-steps-mask", "--tsm", help="Steps to transition mask percentage from initial to target value"),
+    warmup_steps_mask_pct: int = typer.Option(0, "--warmup-steps-mask", "--wsm", help="Steps to wait before starting mask percentage transition"),
 
-    # Beta values for loss components
-    beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Beta for cross-entropy loss. Stays constant."),
-    beta_entropy: float = typer.Option(0.0, "--beta-entropy", "--bent", help="Beta for entropy loss"),
-    beta_diversity: float = typer.Option(0.0, "--beta-diversity", "--bdv", help="Beta for diversity loss (kept constant)"),
-    beta_kl: float = typer.Option(0.0, "--beta-kl", "--bkl", help="Beta for KL loss"),
-    beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Beta for mutual information loss"),
-    beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Beta for total correlation loss"),
-    beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Beta for dimension-wise KL loss"),
+    # Beta values and schedules for Cross-Entropy
+    beta_ce_start: float = typer.Option(1.0, "--beta-ce-start", "--bces", help="Starting beta for cross-entropy loss"),
+    beta_ce: float = typer.Option(1.0, "--beta-ce", "--bce", help="Target beta for cross-entropy loss"),
+    transition_steps_beta_ce: int = typer.Option(10_000, "--transition-steps-ce", "--tsce", help="Steps to transition beta CE from initial to target value"),
+    warmup_steps_beta_ce: int = typer.Option(0, "--warmup-steps-ce", "--wsce", help="Steps to wait before starting beta CE transition"),
+    
+    # Beta values and schedules for Entropy
+    beta_entropy_start: float = typer.Option(0.0, "--beta-entropy-start", "--bents", help="Starting beta for entropy loss"),
+    beta_entropy: float = typer.Option(0.0, "--beta-entropy", "--bent", help="Target beta for entropy loss"),
+    transition_steps_beta_entropy: int = typer.Option(10_000, "--transition-steps-entropy", "--tsent", help="Steps to transition beta entropy from initial to target value"),
+    warmup_steps_beta_entropy: int = typer.Option(0, "--warmup-steps-entropy", "--wsent", help="Steps to wait before starting beta entropy transition"),
+    
+    # Beta values and schedules for Diversity
+    beta_diversity_start: float = typer.Option(0.0, "--beta-diversity-start", "--bdvs", help="Starting beta for diversity loss"),
+    beta_diversity: float = typer.Option(0.0, "--beta-diversity", "--bdv", help="Target beta for diversity loss"),
+    transition_steps_beta_diversity: int = typer.Option(10_000, "--transition-steps-diversity", "--tsdv", help="Steps to transition beta diversity from initial to target value"),
+    warmup_steps_beta_diversity: int = typer.Option(0, "--warmup-steps-diversity", "--wsdv", help="Steps to wait before starting beta diversity transition"),
+    
+    # Beta values and schedules for KL Divergence
+    beta_kl_start: float = typer.Option(0.0, "--beta-kl-start", "--bkls", help="Starting beta for KL loss"),
+    beta_kl: float = typer.Option(0.0, "--beta-kl", "--bkl", help="Target beta for KL loss"),
+    transition_steps_beta_kl: int = typer.Option(10_000, "--transition-steps-kl", "--tskl", help="Steps to transition beta KL from initial to target value"),
+    warmup_steps_beta_kl: int = typer.Option(0, "--warmup-steps-kl", "--wskl", help="Steps to wait before starting beta KL transition"),
+    
+    # Beta values and schedules for Mutual Information
+    beta_mi_start: float = typer.Option(0.0, "--beta-mi-start", "--bmis", help="Starting beta for mutual information loss"),
+    beta_mi: float = typer.Option(0.0, "--beta-mi", "--bmi", help="Target beta for mutual information loss"),
+    transition_steps_beta_mi: int = typer.Option(10_000, "--transition-steps-mi", "--tsmi", help="Steps to transition beta MI from initial to target value"),
+    warmup_steps_beta_mi: int = typer.Option(0, "--warmup-steps-mi", "--wsmi", help="Steps to wait before starting beta MI transition"),
+    
+    # Beta values and schedules for Total Correlation
+    beta_tc_start: float = typer.Option(0.0, "--beta-tc-start", "--btcs", help="Starting beta for total correlation loss"),
+    beta_tc: float = typer.Option(0.0, "--beta-tc", "--btc", help="Target beta for total correlation loss"),
+    transition_steps_beta_tc: int = typer.Option(10_000, "--transition-steps-tc", "--tstc", help="Steps to transition beta TC from initial to target value"),
+    warmup_steps_beta_tc: int = typer.Option(0, "--warmup-steps-tc", "--wstc", help="Steps to wait before starting beta TC transition"),
+    
+    # Beta values and schedules for Dimension-wise KL
+    beta_dwkl_start: float = typer.Option(0.0, "--beta-dwkl-start", "--bdws", help="Starting beta for dimension-wise KL loss"),
+    beta_dwkl: float = typer.Option(0.0, "--beta-dwkl", "--bdw", help="Target beta for dimension-wise KL loss"),
+    transition_steps_beta_dwkl: int = typer.Option(10_000, "--transition-steps-dwkl", "--tsdw", help="Steps to transition beta DWKL from initial to target value"),
+    warmup_steps_beta_dwkl: int = typer.Option(0, "--warmup-steps-dwkl", "--wsdw", help="Steps to wait before starting beta DWKL transition"),
+    
+    # TC ReLU option
+    tc_relu: bool = typer.Option(False, "--tc-relu", help="Apply ReLU to TC loss", is_flag=True, flag_value=True),
     
     # Training data options
     train_ds: DatasetType = typer.Option(DatasetType.TRAIN, "--train-ds", "-tds", help="Training dataset type. Default is TRAIN.", case_sensitive=False, show_choices=True),
@@ -187,8 +236,11 @@ def new(
         matmul_precision=matmul_precision,
         compile_model=compile_model
     )
+
+    run_name = generate_friendly_name() if run_name is None else run_name
+
     
-    # Create fresh config with CLI parameters
+    # Create GridDVAEConfig
     model_config = GridDVAEConfig(
         n_dim=n_dim,
         n_head=n_head,
@@ -204,70 +256,91 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        sampling=sample,
-        init_mode=init_mode.value,
+        no_sample=not sample,
+        init_mode=init_mode,
         skip_codebook=skip_codebook,
-        normalise_kq=normalise_kq,
+        normalise_kq=normalise_kq
     )
     
-    config = ExperimentConfig(
-        # Model configuration
+    # Create ExperimentConfig
+    experiment_config = ExperimentConfig(
         model_config=model_config,
-        model_src=model_src,
-
-        # Regularization parameters
+        seed=seed,
         tau_start=tau_start,
         tau=tau,
-        beta_ce_start=beta_ce,
-        beta_diversity_start=beta_diversity,
-        beta_entropy_start=0.0,
-        beta_mi_start=0.0,
-        beta_tc_start=0.0,
-        beta_dwkl_start=0.0,
-        beta_kl_start=0.0,
-        mask_pct_start=0.0,
+        beta_ce_start=beta_ce_start,
         beta_ce=beta_ce,
+        beta_entropy_start=beta_entropy_start,
         beta_entropy=beta_entropy,
+        beta_diversity_start=beta_diversity_start,
         beta_diversity=beta_diversity,
+        beta_mi_start=beta_mi_start,
         beta_mi=beta_mi,
+        beta_tc_start=beta_tc_start,
         beta_tc=beta_tc,
+        beta_dwkl_start=beta_dwkl_start,
         beta_dwkl=beta_dwkl,
+        beta_kl_start=beta_kl_start,
         beta_kl=beta_kl,
+        mask_pct_start=mask_pct_start,
+        max_mask_pct=max_mask_pct,
         residual_scaling_start=residual_scaling_start,
         residual_scaling=residual_scaling,
-
-        # Learning rate and other warmup / decay steps
+        
+        # Schedule parameters
+        tau_schedule_type=tau_schedule_type,
+        beta_schedule_type=beta_schedule_type,
+        mask_schedule_type=mask_schedule_type,
+        residual_scaling_schedule_type=residual_scaling_schedule_type,
+        
+        # Schedule timing parameters
         warmup_steps_lr=warmup_steps_lr,
         decay_steps_lr=decay_steps_lr,
+        transition_steps_tau=transition_steps_tau,
         warmup_steps_tau=warmup_steps_tau,
-        warmup_steps_beta=warmup_steps_beta,
+        transition_steps_beta_ce=transition_steps_beta_ce,
+        warmup_steps_beta_ce=warmup_steps_beta_ce,
+        transition_steps_beta_entropy=transition_steps_beta_entropy,
+        warmup_steps_beta_entropy=warmup_steps_beta_entropy,
+        transition_steps_beta_diversity=transition_steps_beta_diversity,
+        warmup_steps_beta_diversity=warmup_steps_beta_diversity,
+        transition_steps_beta_mi=transition_steps_beta_mi,
+        warmup_steps_beta_mi=warmup_steps_beta_mi,
+        transition_steps_beta_tc=transition_steps_beta_tc,
+        warmup_steps_beta_tc=warmup_steps_beta_tc,
+        transition_steps_beta_dwkl=transition_steps_beta_dwkl,
+        warmup_steps_beta_dwkl=warmup_steps_beta_dwkl,
+        transition_steps_beta_kl=transition_steps_beta_kl,
+        warmup_steps_beta_kl=warmup_steps_beta_kl,
+        transition_steps_mask_pct=transition_steps_mask_pct,
         warmup_steps_mask_pct=warmup_steps_mask_pct,
-        warmup_steps_residual_scaling=warmup_steps_residual,
-        batch_size=batch_size,
-
-        # Dataset options
-        train_ds=train_ds,
-        val_ds=val_ds,
-        limit_training_samples=limit_training_samples,
-        permute_train=permute_train,
-
+        transition_steps_residual_scaling=transition_steps_residual_scaling,
+        warmup_steps_residual_scaling=warmup_steps_residual_scaling,
+        
         # Training parameters
+        batch_size=batch_size,
         learning_rate=learning_rate,
         lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         weight_decay=weight_decay,
         max_steps=max_steps,
-        max_mask_pct=max_mask_pct,
         gradient_clip_val=gradient_clip_val,
         accumulate_grad_batches=accumulate_grad_batches,
-        seed=seed,
+        
+        # Dataset parameters
+        train_ds=train_ds,
+        val_ds=val_ds,
+        limit_training_samples=limit_training_samples,
+        permute_train=permute_train,
+        
+        # Other parameters
+        model_src=model_src,
+        tc_relu=tc_relu
     )
 
-    run_name = generate_friendly_name() if run_name is None else run_name
-
-    print(config.to_dict())
+    print(experiment_config.to_dict())
     # Start training with the resolved settings
     train(
-        experiment_config=config,
+        experiment_config=experiment_config,
         run_name=run_name,
         project_name=project_name,
         checkpoint_dir=checkpoint_dir,

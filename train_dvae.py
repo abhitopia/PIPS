@@ -487,63 +487,93 @@ class ExperimentConfig:
     # Model configuration
     model_config: GridDVAEConfig
     
-    # Add seed parameter
+    # General training parameters
     seed: int | None = None  # None means random seed
+    batch_size: int = 64
+    max_steps: int = 1_000_000
+    gradient_clip_val: float = 1.0
+    accumulate_grad_batches: int = 1
     
-    # Initial values (renamed from initial_*)
-    tau_start: float = 3.5  # this is difference from Dalle-E paper which starts with 1.0. This is to match vanilla softmax.
-    tau: float = 0.0625 # 1/16 as per Dalle-E paper
-    beta_ce_start: float = 1.0  # Default to 1.0 to maintain original behavior
-    beta_ce: float = 1.0  # Default to 1.0 to maintain original behavior
-    beta_entropy_start: float = 0.0
-    beta_diversity_start: float = 0.0
-    beta_mi_start: float = 0.0
-    beta_tc_start: float = 0.0
-    beta_dwkl_start: float = 0.0
-    beta_kl_start: float = 0.0
-    mask_pct_start: float = 0.0
-    residual_scaling_start: float = 1.0
-
-    # Final values
-    beta_kl: float = 1.0
-    beta_entropy: float = 0.0
-    beta_diversity: float = 0.0
-    beta_mi: float = 0.0
-    beta_tc: float = 0.0
-    beta_dwkl: float = 0.0
-    max_mask_pct: float = 0.0
-    residual_scaling: float = 0.0
-
-    
-    # Schedule types
+    # Schedule types for all parameters
     tau_schedule_type: str = 'cosine'
     beta_schedule_type: str = 'cosine'
     mask_schedule_type: str = 'cosine'
     residual_scaling_schedule_type: str = 'cosine'
-    # Replace single warmup_steps with separate warmups
+    
+    # Learning rate parameters
+    learning_rate: float = 1e-4  # Consistent with Dalle-E paper
+    lr_min: float = 1e-6  # Minimum learning rate to be reached after decay
     warmup_steps_lr: int = 10_000
     decay_steps_lr: int | None = None
-    warmup_steps_tau: int = 150_000
-    warmup_steps_beta: int = 10_000
-    warmup_steps_mask_pct: int = 50_000
-    warmup_steps_residual_scaling: int = 5_000
-
-    # Training parameters
-    batch_size: int = 64
-    learning_rate: float = 1e-4 # Consistent with Dalle-E paper
-    lr_min: float = 1e-6 # Minimum learning rate to be reached after decay
-    weight_decay: float = 1e-4 # Consistent with Dalle-E paper
-    max_steps: int = 1_000_000
-    gradient_clip_val: float = 1.0
-    accumulate_grad_batches: int = 1
-
+    weight_decay: float = 1e-4  # Consistent with Dalle-E paper
+    
+    # Temperature (tau) parameters
+    tau_start: float = 3.5  # This is difference from Dalle-E paper which starts with 1.0. This is to match vanilla softmax.
+    tau: float = 0.0625  # 1/16 as per Dalle-E paper
+    transition_steps_tau: int = 150_000
+    warmup_steps_tau: int = 0
+    
+    # Cross-Entropy (CE) parameters
+    beta_ce_start: float = 1.0  # Default to 1.0 to maintain original behavior
+    beta_ce: float = 1.0  # Default to 1.0 to maintain original behavior
+    transition_steps_beta_ce: int = 10_000
+    warmup_steps_beta_ce: int = 0
+    
+    # Entropy regularization parameters
+    beta_entropy_start: float = 0.0
+    beta_entropy: float = 0.0
+    transition_steps_beta_entropy: int = 10_000
+    warmup_steps_beta_entropy: int = 0
+    
+    # Diversity regularization parameters
+    beta_diversity_start: float = 0.0
+    beta_diversity: float = 0.0
+    transition_steps_beta_diversity: int = 10_000
+    warmup_steps_beta_diversity: int = 0
+    
+    # Mutual Information (MI) parameters
+    beta_mi_start: float = 0.0
+    beta_mi: float = 0.0
+    transition_steps_beta_mi: int = 10_000
+    warmup_steps_beta_mi: int = 0
+    
+    # Total Correlation (TC) parameters
+    beta_tc_start: float = 0.0
+    beta_tc: float = 0.0
+    transition_steps_beta_tc: int = 10_000
+    warmup_steps_beta_tc: int = 0
+    
+    # Dimension-wise KL (DWKL) parameters
+    beta_dwkl_start: float = 0.0
+    beta_dwkl: float = 0.0
+    transition_steps_beta_dwkl: int = 10_000
+    warmup_steps_beta_dwkl: int = 0
+    
+    # KL Divergence parameters
+    beta_kl_start: float = 0.0
+    beta_kl: float = 1.0
+    transition_steps_beta_kl: int = 10_000
+    warmup_steps_beta_kl: int = 0
+    
+    # Mask percentage parameters
+    mask_pct_start: float = 0.0
+    max_mask_pct: float = 0.0
+    transition_steps_mask_pct: int = 50_000
+    warmup_steps_mask_pct: int = 0
+    
+    # Residual scaling parameters
+    residual_scaling_start: float = 1.0
+    residual_scaling: float = 0.0
+    transition_steps_residual_scaling: int = 5_000
+    warmup_steps_residual_scaling: int = 0
+    
     # Dataset parameters
     train_ds: DatasetType = DatasetType.TRAIN
     val_ds: DatasetType = DatasetType.VAL
     limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
     permute_train: bool = True  # Whether to permute the training data
-
-    # Add max_mask_pct parameter
+    
+    # Other parameters
     model_src: str | None = None
     tc_relu: bool = False
 
@@ -555,16 +585,61 @@ class ExperimentConfig:
         if self.seed is None:
             self.seed = np.random.randint(0, 2**32 - 1)
 
-        ## Make all warmup steps <= max_steps
+        # Cap warmup steps at max_steps and ensure warmup + transition <= max_steps
+        # For tau parameters
         self.warmup_steps_tau = min(self.warmup_steps_tau, self.max_steps)
-        self.warmup_steps_beta = min(self.warmup_steps_beta, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_tau
+        self.transition_steps_tau = min(self.transition_steps_tau, remaining_steps)
+        
+        # For mask percentage parameters
         self.warmup_steps_mask_pct = min(self.warmup_steps_mask_pct, self.max_steps)
-        self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_mask_pct
+        self.transition_steps_mask_pct = min(self.transition_steps_mask_pct, remaining_steps)
+        
+        # For residual scaling parameters
         self.warmup_steps_residual_scaling = min(self.warmup_steps_residual_scaling, self.max_steps)
-
+        remaining_steps = self.max_steps - self.warmup_steps_residual_scaling
+        self.transition_steps_residual_scaling = min(self.transition_steps_residual_scaling, remaining_steps)
+        
+        # For CE parameters
+        self.warmup_steps_beta_ce = min(self.warmup_steps_beta_ce, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_ce
+        self.transition_steps_beta_ce = min(self.transition_steps_beta_ce, remaining_steps)
+        
+        # For entropy parameters
+        self.warmup_steps_beta_entropy = min(self.warmup_steps_beta_entropy, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_entropy
+        self.transition_steps_beta_entropy = min(self.transition_steps_beta_entropy, remaining_steps)
+        
+        # For diversity parameters
+        self.warmup_steps_beta_diversity = min(self.warmup_steps_beta_diversity, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity
+        self.transition_steps_beta_diversity = min(self.transition_steps_beta_diversity, remaining_steps)
+        
+        # For MI parameters
+        self.warmup_steps_beta_mi = min(self.warmup_steps_beta_mi, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_mi
+        self.transition_steps_beta_mi = min(self.transition_steps_beta_mi, remaining_steps)
+        
+        # For TC parameters
+        self.warmup_steps_beta_tc = min(self.warmup_steps_beta_tc, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_tc
+        self.transition_steps_beta_tc = min(self.transition_steps_beta_tc, remaining_steps)
+        
+        # For DWKL parameters
+        self.warmup_steps_beta_dwkl = min(self.warmup_steps_beta_dwkl, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_dwkl
+        self.transition_steps_beta_dwkl = min(self.transition_steps_beta_dwkl, remaining_steps)
+        
+        # For KL parameters
+        self.warmup_steps_beta_kl = min(self.warmup_steps_beta_kl, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_kl
+        self.transition_steps_beta_kl = min(self.transition_steps_beta_kl, remaining_steps)
+        
+        # For learning rate (special case - using original name)
+        self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
         if self.decay_steps_lr is None:
             self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
-  
 
     def to_dict(self) -> dict:
         """Convert config to a dictionary."""
@@ -692,80 +767,86 @@ class DVAETrainingModule(pl.LightningModule):
         """
         cfg = self.experiment_config
 
-
-        # Residual scaling schedule with its own warmup.
+        # Residual scaling schedule
         residual_scaling_schedule = Schedule.get_schedule(
             initial_value=cfg.residual_scaling_start,
             target_value=cfg.residual_scaling,
+            transition_steps=cfg.transition_steps_residual_scaling,
             warmup_steps=cfg.warmup_steps_residual_scaling,
             schedule_type=cfg.residual_scaling_schedule_type
         )
 
-        # Temperature schedule with its own warmup.
+        # Temperature schedule
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.tau_start,
             target_value=cfg.tau,
+            transition_steps=cfg.transition_steps_tau,
             warmup_steps=cfg.warmup_steps_tau,
             schedule_type=cfg.tau_schedule_type
         )
         
-        # Add beta_ce schedule with shared beta warmup.
+        # Individual beta schedules
         beta_ce_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_ce_start,
             target_value=cfg.beta_ce,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_ce,
+            warmup_steps=cfg.warmup_steps_beta_ce,
             schedule_type=cfg.beta_schedule_type
         )
 
-        # Add beta_entropy schedule with shared beta warmup.
         beta_entropy_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_entropy_start,
             target_value=cfg.beta_entropy,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_entropy,
+            warmup_steps=cfg.warmup_steps_beta_entropy,
             schedule_type=cfg.beta_schedule_type
         )
 
-        # Add beta_diversity schedule with shared beta warmup.
         beta_diversity_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_diversity_start,
             target_value=cfg.beta_diversity,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_diversity,
+            warmup_steps=cfg.warmup_steps_beta_diversity,
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Beta schedules with shared beta warmup.
         beta_mi_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_mi_start,
             target_value=cfg.beta_mi,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_mi,
+            warmup_steps=cfg.warmup_steps_beta_mi,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_tc_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_tc_start,
             target_value=cfg.beta_tc,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_tc,
+            warmup_steps=cfg.warmup_steps_beta_tc,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_dwkl_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_dwkl_start,
             target_value=cfg.beta_dwkl,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_dwkl,
+            warmup_steps=cfg.warmup_steps_beta_dwkl,
             schedule_type=cfg.beta_schedule_type
         )
         
         beta_kl_schedule = Schedule.get_schedule(
             initial_value=cfg.beta_kl_start,
             target_value=cfg.beta_kl,
-            warmup_steps=cfg.warmup_steps_beta,
+            transition_steps=cfg.transition_steps_beta_kl,
+            warmup_steps=cfg.warmup_steps_beta_kl,
             schedule_type=cfg.beta_schedule_type
         )
         
-        # Add max mask percentage schedule (using beta warmup).
+        # Max mask percentage schedule
         max_mask_pct_schedule = Schedule.get_schedule(
             initial_value=cfg.mask_pct_start,
             target_value=cfg.max_mask_pct,
+            transition_steps=cfg.transition_steps_mask_pct,
             warmup_steps=cfg.warmup_steps_mask_pct,
             schedule_type=cfg.mask_schedule_type
         )
@@ -1124,7 +1205,7 @@ def measure_bits_stats_from_dataset(dataset: GridDataset, num_samples: int) -> d
     upper_bound = overall_mean + 2 * overall_std    
 
     return {
-        'mean': float(overall_mean) ,
+        'mean': float(overall_mean),
         'median': float(overall_median),
         'std': float(overall_std),
         'lower_bound': float(lower_bound),
