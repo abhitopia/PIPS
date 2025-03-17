@@ -156,27 +156,44 @@ class Encoder(nn.Module):
     where B is batch size, N is number of codes, and D is model dimension.
     The 28x28 MNIST image is placed in the top-left corner of the 32x32 input.
     """
-    def __init__(self, latent_dim, n_codes, hidden_dim=400):
+    def __init__(self, latent_dim, n_codes, hidden_dim=400, num_classes=11):
         super().__init__()
         self.n_codes = n_codes
         self.latent_dim = latent_dim
+        self.num_classes = num_classes
         
-        self.conv1 = nn.Conv2d(1, 32, kernel_size=3, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=2, padding=1)
-        self.fc1 = nn.Linear(64 * 4 * 4, hidden_dim)
+        # Embedding layer to convert integer inputs to float embeddings
+        self.embedding = nn.Embedding(num_classes, 32)
+        
+        self.conv1 = nn.Conv2d(32, 64, kernel_size=3, stride=2, padding=1)
+        self.conv2 = nn.Conv2d(64, 128, kernel_size=3, stride=2, padding=1)
+        self.conv3 = nn.Conv2d(128, 128, kernel_size=3, stride=2, padding=1)
+        self.fc1 = nn.Linear(128 * 4 * 4, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, n_codes * latent_dim)
         
     def forward(self, x):
-        # Input: [B, 1, 32, 32]
-        x = F.relu(self.conv1(x))  # [B, 32, 16, 16]
-        x = F.relu(self.conv2(x))  # [B, 64, 8, 8]
-        x = F.relu(self.conv3(x))  # [B, 64, 4, 4]
-        x = x.view(-1, 64 * 4 * 4)
+        # Input: [B, 1, 32, 32] with integer values 0-10
+        batch_size = x.size(0)
+        
+        # Convert integer inputs to embeddings
+        # First, squeeze the channel dimension
+        x = x.squeeze(1)  # [B, 32, 32]
+        
+        # Apply embedding to convert integers to vectors
+        x = self.embedding(x)  # [B, 32, 32, 32]
+        
+        # Permute to get [B, 32, 32, 32] -> [B, 32, 32, 32]
+        x = x.permute(0, 3, 1, 2)  # [B, 32, 32, 32]
+        
+        # Continue with convolutions
+        x = F.relu(self.conv1(x))  # [B, 64, 16, 16]
+        x = F.relu(self.conv2(x))  # [B, 128, 8, 8]
+        x = F.relu(self.conv3(x))  # [B, 128, 4, 4]
+        x = x.view(batch_size, -1)
         x = F.relu(self.fc1(x))
         x = self.fc2(x)
         # Reshape to [B, N, D]
-        x = x.view(-1, self.n_codes, self.latent_dim)
+        x = x.view(batch_size, self.n_codes, self.latent_dim)
         return x
     
 
@@ -187,17 +204,19 @@ class Decoder(nn.Module):
     Decoder network for MNIST images.
     Maps latent representation [B, N, D] back to 32x32 images,
     with the 28x28 MNIST image placed in the top-left corner.
+    Outputs categorical values (0-9 for the image, 10 for padding).
     """
-    def __init__(self, latent_dim, n_codes, hidden_dim=400):
+    def __init__(self, latent_dim, n_codes, hidden_dim=400, num_classes=11):
         super().__init__()
         self.latent_dim = latent_dim
         self.n_codes = n_codes
+        self.num_classes = num_classes  # 0-9 for image, 10 for padding
         
         self.fc1 = nn.Linear(n_codes * latent_dim, hidden_dim)
         self.fc2 = nn.Linear(hidden_dim, 64 * 4 * 4)
         self.deconv1 = nn.ConvTranspose2d(64, 64, kernel_size=3, stride=2, padding=1, output_padding=1)
         self.deconv2 = nn.ConvTranspose2d(64, 32, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.deconv3 = nn.ConvTranspose2d(32, 1, kernel_size=3, stride=2, padding=1, output_padding=1)
+        self.deconv3 = nn.ConvTranspose2d(32, num_classes, kernel_size=3, stride=2, padding=1, output_padding=1)
         
     def forward(self, x):
         # Input: [B, N, D]
@@ -208,7 +227,9 @@ class Decoder(nn.Module):
         x = x.view(-1, 64, 4, 4)
         x = F.relu(self.deconv1(x))  # [B, 64, 8, 8]
         x = F.relu(self.deconv2(x))  # [B, 32, 16, 16]
-        x = torch.sigmoid(self.deconv3(x))  # [B, 1, 32, 32]
+        x = self.deconv3(x)  # [B, num_classes, 32, 32]
+        
+        # Note: We don't apply softmax here because nn.CrossEntropyLoss expects raw logits
         return x
 
 class DiscreteVAE(nn.Module):
@@ -216,14 +237,14 @@ class DiscreteVAE(nn.Module):
     Discrete VAE model for MNIST using AttnCodebook for discretization.
     """
     def __init__(self, latent_dim, codebook_size, n_codes=8, hidden_dim=400, 
-                 use_exp_relaxed=False, sampling=True):
+                 use_exp_relaxed=False, sampling=True, num_classes=11):
         super().__init__()
-        self.encoder = Encoder(latent_dim, n_codes, hidden_dim)
+        self.encoder = Encoder(latent_dim, n_codes, hidden_dim, num_classes)
         self.rope = RotaryPositionalEmbeddings(latent_dim)
         self.codebook = AttnCodebook(d_model=latent_dim, codebook_size=codebook_size, 
                                      use_exp_relaxed=use_exp_relaxed, sampling=sampling,
                                      rope=self.rope)
-        self.decoder = Decoder(latent_dim, n_codes, hidden_dim)
+        self.decoder = Decoder(latent_dim, n_codes, hidden_dim, num_classes)
 
         self.latent_pos_indices = torch.arange(1024).unsqueeze(0)
 
@@ -366,27 +387,33 @@ def compute_peakiness(log_alpha, tau):
 
 def visualize_reconstructions(original, recon, n_samples=8, save_path=None):
     """
-    Visualize original and reconstructed 32x32 images.
+    Visualize original and reconstructed 32x32 images with quantized values.
     
     Args:
-        original: Original images [B, 1, 32, 32]
-        recon: Reconstructed images [B, 1, 32, 32]
+        original: Original images [B, 1, 32, 32] with values 0-10
+        recon: Reconstructed images [B, 1, 32, 32] with values 0-10
         n_samples: Number of samples to visualize
         save_path: Path to save the figure (optional)
     """
     plt.figure(figsize=(12, 4))
     
+    # Create a custom colormap for values 0-10
+    # Values 0-9 are grayscale from black to white, value 10 is white (for padding)
+    colors = [(i/9, i/9, i/9) for i in range(10)]  # Grayscale from black to white
+    colors.append((1, 1, 1))  # White for padding (value 10)
+    custom_cmap = plt.matplotlib.colors.ListedColormap(colors)
+    
     for i in range(n_samples):
         # Original image
         plt.subplot(2, n_samples, i + 1)
-        plt.imshow(original[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(original[i, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         if i == 0:
             plt.title('Original')
         
         # Reconstructed image
         plt.subplot(2, n_samples, i + 1 + n_samples)
-        plt.imshow(recon[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(recon[i, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         if i == 0:
             plt.title('Reconstructed')
@@ -547,10 +574,17 @@ def run_experiment(args):
         def __call__(self, pic):
             # Convert PIL image to tensor (values in [0, 1])
             tensor = transforms.ToTensor()(pic)
-            # Create a new 32x32 tensor filled with zeros
-            result = torch.zeros((1, 32, 32))
-            # Place the 28x28 image in the top-left corner
-            result[0, :28, :28] = tensor[0]
+            
+            # Quantize the image to 10 different values (0-9)
+            # Original values are in [0, 1], so we multiply by 9 and round to get values in [0, 9]
+            quantized = torch.round(tensor * 9).long()
+            
+            # Create a new 32x32 tensor filled with the padding value (10)
+            result = torch.full((1, 32, 32), 10, dtype=torch.long)
+            
+            # Place the 28x28 quantized image in the top-left corner
+            result[0, :28, :28] = quantized[0]
+            
             return result
     
     # Load MNIST dataset with custom transform
@@ -570,11 +604,15 @@ def run_experiment(args):
         n_codes=args.n_codes,
         hidden_dim=args.hidden_dim,
         use_exp_relaxed=args.use_exp_relaxed,
-        sampling=args.sampling
+        sampling=args.sampling,
+        num_classes=11  # 0-9 for image, 10 for padding
     )
     
     # Create optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
+    
+    # Create loss function - CrossEntropyLoss for categorical outputs
+    criterion = nn.CrossEntropyLoss(reduction='mean')
     
     # Initialize metrics tracking
     metrics = {
@@ -641,8 +679,10 @@ def run_experiment(args):
             # Forward pass
             recon, log_alpha, z, _, _ = model(data, temp_tensor)
             
-            # Compute losses - using mean reconstruction loss
-            recon_loss = F.binary_cross_entropy(recon, data, reduction='mean')
+            # Compute losses - using CrossEntropyLoss
+            # recon shape: [B, num_classes, 32, 32]
+            # data shape: [B, 1, 32, 32] with values 0-10
+            recon_loss = criterion(recon, data.squeeze(1))
             ent_loss = entropy_loss(log_alpha, temp_tensor, reduction="mean")
             
             # Compute diversity loss if weight > 0
@@ -725,10 +765,13 @@ def run_experiment(args):
                       f"Recon: {avg_recon_loss:.4f}, Entropy: {avg_entropy_loss:.4f}, "
                       f"Peakiness: {avg_peakiness:.4f}, Perplexity: {avg_perplexity:.2f}")
                 
+                # Get predicted classes for visualization
+                pred_classes = torch.argmax(recon, dim=1, keepdim=True)
+                
                 # Visualize reconstructions
                 visualize_reconstructions(
                     data[:8], 
-                    recon[:8], 
+                    pred_classes[:8], 
                     save_path=recon_dir / f"recon_step{global_step}.png"
                 )
                 
@@ -751,13 +794,15 @@ def run_experiment(args):
                         # Forward pass
                         recon, log_alpha, z, _, _ = model(data, temp_tensor)
                         
-                        # Compute reconstruction loss - using mean
-                        recon_loss = F.binary_cross_entropy(recon, data, reduction='mean')
+                        # Compute reconstruction loss - using CrossEntropyLoss
+                        recon_loss = criterion(recon, data.squeeze(1))
                         test_recon_loss += recon_loss.item()
                         
                         # Store some samples for visualization
                         if i == 0:
-                            test_samples = (data[:8], recon[:8], log_alpha[:8])
+                            # Get predicted classes for visualization
+                            pred_classes = torch.argmax(recon, dim=1, keepdim=True)
+                            test_samples = (data[:8], pred_classes[:8], log_alpha[:8])
                         
                         # Limit the number of test batches to 5 for faster evaluation
                         if i >= 10:  # This means we process 5 batches (0-4)
@@ -928,7 +973,8 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         n_codes=int(args_dict.get('n_codes', 8)),
         hidden_dim=int(args_dict.get('hidden_dim', 400)),
         use_exp_relaxed=args_dict.get('use_exp_relaxed', 'False').lower() == 'true',
-        sampling=args_dict.get('sampling', 'False').lower() == 'true'
+        sampling=args_dict.get('sampling', 'False').lower() == 'true',
+        num_classes=11  # 0-9 for image, 10 for padding
     )
     
     # Load the state dict
@@ -946,10 +992,17 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         def __call__(self, pic):
             # Convert PIL image to tensor (values in [0, 1])
             tensor = transforms.ToTensor()(pic)
-            # Create a new 32x32 tensor filled with zeros
-            result = torch.zeros((1, 32, 32))
-            # Place the 28x28 image in the top-left corner
-            result[0, :28, :28] = tensor[0]
+            
+            # Quantize the image to 10 different values (0-9)
+            # Original values are in [0, 1], so we multiply by 9 and round to get values in [0, 9]
+            quantized = torch.round(tensor * 9).long()
+            
+            # Create a new 32x32 tensor filled with the padding value (10)
+            result = torch.full((1, 32, 32), 10, dtype=torch.long)
+            
+            # Place the 28x28 quantized image in the top-left corner
+            result[0, :28, :28] = quantized[0]
+            
             return result
     
     # Load MNIST test dataset with custom transform
@@ -965,10 +1018,16 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     # Set temperature
     temp_tensor = torch.tensor(temperature)
     
+    # Create a custom colormap for values 0-10
+    colors = [(i/9, i/9, i/9) for i in range(10)]  # Grayscale from black to white
+    colors.append((1, 1, 1))  # White for padding (value 10)
+    custom_cmap = plt.matplotlib.colors.ListedColormap(colors)
+    
     # 1. Compare soft vs. hard discretization
     with torch.no_grad():
         # Standard forward pass (soft discretization)
-        recon_soft, log_alpha, z_soft, latent, quantized = model(data, temp_tensor)
+        recon_logits, log_alpha, z_soft, latent, quantized = model(data, temp_tensor)
+        recon_soft = torch.argmax(recon_logits, dim=1, keepdim=True)
         
         # Hard discretization (one-hot via argmax)
         # First get the logits
@@ -998,28 +1057,29 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         quantized_hard = y_hard + model.codebook.ff(model.codebook.norm_ff(y_hard))
         
         # Decode the hard quantized representation
-        recon_hard = model.decoder(quantized_hard)
+        recon_hard_logits = model.decoder(quantized_hard)
+        recon_hard = torch.argmax(recon_hard_logits, dim=1, keepdim=True)
     
     # Create a figure to compare original, soft reconstruction, and hard reconstruction
     plt.figure(figsize=(15, 5))
     for i in range(n_samples):
         # Original
         plt.subplot(3, n_samples, i + 1)
-        plt.imshow(data[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(data[i, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         if i == 0:
             plt.title('Original')
         
         # Soft reconstruction
         plt.subplot(3, n_samples, i + 1 + n_samples)
-        plt.imshow(recon_soft[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(recon_soft[i, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         if i == 0:
             plt.title('Soft Reconstruction')
         
         # Hard reconstruction
         plt.subplot(3, n_samples, i + 1 + 2*n_samples)
-        plt.imshow(recon_hard[i, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(recon_hard[i, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         if i == 0:
             plt.title('Hard Reconstruction (argmax)')
@@ -1029,8 +1089,9 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     plt.close()
     
     # Calculate reconstruction error for both methods
-    soft_recon_error = F.binary_cross_entropy(recon_soft, data, reduction='mean').item()
-    hard_recon_error = F.binary_cross_entropy(recon_hard, data, reduction='mean').item()
+    criterion = nn.CrossEntropyLoss(reduction='mean')
+    soft_recon_error = criterion(recon_logits, data.squeeze(1)).item()
+    hard_recon_error = criterion(recon_hard_logits, data.squeeze(1)).item()
     
     print(f"Soft reconstruction error: {soft_recon_error:.6f}")
     print(f"Hard reconstruction error: {hard_recon_error:.6f}")
@@ -1061,7 +1122,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         
         # Show the original image at the top, spanning multiple columns
         ax_orig = plt.subplot2grid((grid_rows + 1, grid_cols), (0, 0), colspan=min(4, grid_cols))
-        ax_orig.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap='gray')
+        ax_orig.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         ax_orig.axis('off')
         ax_orig.set_title(f'Original Digit: {labels[sample_idx].item()}\nCode {code_pos+1} Original Value: {original_indices[code_pos].item()}')
         
@@ -1090,7 +1151,8 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
                 quantized_mod = y_mod + model.codebook.ff(model.codebook.norm_ff(y_mod))
                 
                 # Decode the modified quantized representation
-                recon_mod = model.decoder(quantized_mod)
+                recon_mod_logits = model.decoder(quantized_mod)
+                recon_mod = torch.argmax(recon_mod_logits, dim=1, keepdim=True)
             
             # Calculate row and column in the grid
             row = (var_idx // grid_cols) + 1  # +1 because original image is in row 0
@@ -1098,7 +1160,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
             
             # Show the modified reconstruction
             ax = plt.subplot2grid((grid_rows + 1, grid_cols), (row, col))
-            ax.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap='gray')
+            ax.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
             ax.axis('off')
             
             # Highlight the original value with a colored border
@@ -1121,7 +1183,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         
         # Show the original image
         plt.subplot(1, n_variations + 1, 1)
-        plt.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap='gray')
+        plt.imshow(data[sample_idx, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
         plt.axis('off')
         plt.title(f'Original\nDigit: {labels[sample_idx].item()}')
         
@@ -1169,11 +1231,12 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
                 quantized_mod = y_mod + model.codebook.ff(model.codebook.norm_ff(y_mod))
                 
                 # Decode the modified quantized representation
-                recon_mod = model.decoder(quantized_mod)
+                recon_mod_logits = model.decoder(quantized_mod)
+                recon_mod = torch.argmax(recon_mod_logits, dim=1, keepdim=True)
             
             # Show the modified reconstruction
             plt.subplot(1, len(indices_to_show) + 1, i + 2)
-            plt.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap='gray')
+            plt.imshow(recon_mod[0, 0].detach().cpu().numpy(), cmap=custom_cmap, vmin=0, vmax=10)
             plt.axis('off')
             
             # Highlight the original value
