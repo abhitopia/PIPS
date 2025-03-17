@@ -256,7 +256,7 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        no_sample=not sample,
+        sampling=sample,
         init_mode=init_mode,
         skip_codebook=skip_codebook,
         normalise_kq=normalise_kq
