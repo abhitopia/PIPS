@@ -14,6 +14,7 @@ import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 
 from pips.dvae import RMSNorm, RotaryPositionalEmbeddings, SwiGLUFFN
+from pips.grid_dataset import DatasetType, GridDataset
 
     
 class AttnCodebook(nn.Module):
@@ -569,33 +570,11 @@ def run_experiment(args):
     dist_dir.mkdir(exist_ok=True)
     metrics_dir.mkdir(exist_ok=True)
     
-    # Custom transform to convert 28x28 MNIST to 32x32 with image in top-left corner
-    class MNISTTo32x32(object):
-        def __call__(self, pic):
-            # Convert PIL image to tensor (values in [0, 1])
-            tensor = transforms.ToTensor()(pic)
-            
-            # Quantize the image to 10 different values (0-9)
-            # Original values are in [0, 1], so we multiply by 9 and round to get values in [0, 9]
-            quantized = torch.round(tensor * 9).long()
-            
-            # Create a new 32x32 tensor filled with the padding value (10)
-            result = torch.full((1, 32, 32), 10, dtype=torch.long)
-            
-            # Place the 28x28 quantized image in the top-left corner
-            result[0, :28, :28] = quantized[0]
-            
-            return result
-    
-    # Load MNIST dataset with custom transform
-    transform = MNISTTo32x32()
-    
-    # Keep the directory to "./data" as it is already in the .gitignore
-    train_dataset = datasets.MNIST('./.data', train=True, download=True, transform=transform)
-    test_dataset = datasets.MNIST('./.data', train=False, download=True, transform=transform)
-    
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    # Load appropriate dataset based on the dataset argument
+    if args.dataset == 'grid':
+        train_loader, test_loader = load_grid_dataset(args.batch_size)
+    else:
+        train_loader, test_loader = load_mnist_dataset(args.batch_size)
     
     # Create model
     model = DiscreteVAE(
@@ -1264,6 +1243,107 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     
     print(f"Analysis complete. Results saved to {analysis_dir}")
 
+def load_grid_dataset(batch_size):
+    """
+    Load the GridDataset and prepare it for use with the model.
+    
+    Args:
+        batch_size: Batch size for data loaders
+        
+    Returns:
+        Tuple of (train_loader, test_loader)
+    """
+    def grid_collate_fn(batch):
+        """
+        Custom collate function for GridDataset.
+        
+        Args:
+            batch: List of grid objects from GridDataset
+            
+        Returns:
+            Tensor of shape [B, 1, 32, 32] with values 0-10
+        """
+        processed_batch = []
+        
+        for grid in batch:
+            # Use the project method to get a 32x32 representation
+            # The output is a 2D numpy array
+            projected = grid.permute().project(32, 32, pad_value=10)
+            
+            # Convert to tensor and ensure it's in the right format
+            # The model expects a torch tensor of shape [1, 32, 32] with values 0-10
+            # where 10 is used for padding
+            tensor = torch.tensor(projected, dtype=torch.long).unsqueeze(0)
+            
+            # Ensure values are in range 0-10
+            if tensor.max() > 10:
+                tensor = torch.clamp(tensor, 0, 10)
+                
+            processed_batch.append(tensor)
+        
+        # Stack all processed grids into a batch
+        return torch.stack(processed_batch), None  # Return None for labels as they're not used
+
+    train_dataset = GridDataset(dataset_type=DatasetType.TRAIN)
+    test_dataset = GridDataset(dataset_type=DatasetType.VAL)
+    
+    # Create data loaders with custom collate function
+    train_loader = DataLoader(
+        train_dataset, 
+        batch_size=batch_size, 
+        shuffle=True, 
+        collate_fn=grid_collate_fn
+    )
+    
+    test_loader = DataLoader(
+        test_dataset, 
+        batch_size=batch_size, 
+        shuffle=False, 
+        collate_fn=grid_collate_fn
+    )
+    
+    return train_loader, test_loader
+
+def load_mnist_dataset(batch_size):
+    """
+    Load the MNIST dataset using the original transform.
+    
+    Args:
+        batch_size: Batch size for data loaders
+        
+    Returns:
+        Tuple of (train_loader, test_loader)
+    """
+    # Custom transform to convert 28x28 MNIST to 32x32 with image in top-left corner
+    class MNISTTo32x32(object):
+        def __call__(self, pic):
+            # Convert PIL image to tensor (values in [0, 1])
+            tensor = transforms.ToTensor()(pic)
+            
+            # Quantize the image to 10 different values (0-9)
+            # Original values are in [0, 1], so we multiply by 9 and round to get values in [0, 9]
+            quantized = torch.round(tensor * 9).long()
+            
+            # Create a new 32x32 tensor filled with the padding value (10)
+            result = torch.full((1, 32, 32), 10, dtype=torch.long)
+            
+            # Place the 28x28 quantized image in the top-left corner
+            result[0, :28, :28] = quantized[0]
+            
+            return result
+    
+    # Load MNIST dataset with custom transform
+    transform = MNISTTo32x32()
+    
+    # Keep the directory to "./data" as it is already in the .gitignore
+    train_dataset = datasets.MNIST('./.data', train=True, download=True, transform=transform)
+    test_dataset = datasets.MNIST('./.data', train=False, download=True, transform=transform)
+    
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    
+    return train_loader, test_loader
+
 def main():
     parser = argparse.ArgumentParser(description='Study discrete representation learning on MNIST')
     
@@ -1294,6 +1374,9 @@ def main():
     
     # Diversity parameters
     parser.add_argument('--diversity_weight', type=float, default=0.1, help='Weight for the codebook diversity loss')
+    
+    # Dataset parameters
+    parser.add_argument('--dataset', type=str, default='mnist', choices=['mnist', 'grid'], help='Dataset to use (mnist or grid)')
     
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='mnist_discrete_vae', help='Output directory')
