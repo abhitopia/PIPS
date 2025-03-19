@@ -1067,28 +1067,42 @@ class GridDVAE(nn.Module):
                 entropy_loss: Low values indicate deterministic distributions.
                 diversity_loss: Low values indicate high diversity across the batch.
         """
-        # Apply temperature scaling and get probabilities - computed only once
-        probs = F.softmax(log_alpha / tau, dim=-1)  # [B, N, C]
-        
-        # For numerical stability in log calculations
-        epsilon = 1e-10
-        
-        # 1. Compute entropy loss (to encourage deterministic codes per sample)
-        log_probs = torch.log(probs + epsilon)  # [B, N, C]
-        entropy_per_latent = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
-        entropy_loss = entropy_per_latent.mean()
+
+        # Apply temperature to logits
+        scaled_log_alpha = log_alpha / tau
+
+        # Compute log probabilities using log_softmax
+        log_probs = F.log_softmax(scaled_log_alpha, dim=-1)
+    
+        # Get probabilities by exponentiating log probabilities
+        probs = torch.exp(log_probs)
+    
+
+         # Compute entropy: -sum(p * log(p))
+        entropy_per_sample = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
+
+       
+        entropy_loss = entropy_per_sample.mean()
         
         # 2. Compute diversity loss (to encourage different samples to use different codes)
         # Average the probabilities across the batch dimension
         avg_probs = probs.mean(dim=0)  # [N, C]
-        log_avg_probs = torch.log(avg_probs + epsilon)
-        entropy_of_avg = -torch.sum(avg_probs * log_avg_probs, dim=-1)  # [N]
+
+        # Average usage of each codebook entry across the batch
+        # This gives us the average probability of each codebook entry for each code position
+        batch_avg_probs = probs.mean(dim=0)  # [N, codebook_size]
+    
+        # Compute entropy of the batch-averaged distribution
+        # High entropy means different samples use different codebook entries
+        # Low entropy means all samples use the same codebook entries
+        log_batch_avg_probs = torch.log2(batch_avg_probs + 1e-10)
+        batch_entropy = -torch.sum(batch_avg_probs * log_batch_avg_probs, dim=-1)  # [N]
+    
+        # We want to maximize this entropy, so we negate it for minimization
+        diversity_loss = -batch_entropy  # [N]
+    
         
-        # Diversity loss: negative entropy of the average distribution
-        # Lower values indicate higher diversity when minimized
-        diversity_loss = -entropy_of_avg.mean()
-        
-        return entropy_loss, diversity_loss
+        return entropy_loss, diversity_loss.mean()
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
