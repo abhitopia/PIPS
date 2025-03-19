@@ -16,7 +16,10 @@ from tqdm import tqdm
 from pips.dvae import RMSNorm, RotaryPositionalEmbeddings, SwiGLUFFN
 from pips.grid_dataset import DatasetType, GridDataset
 
-    
+# Set up device
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
+
 class AttnCodebook(nn.Module):
     """
     A single-head attention-based codebook module.
@@ -248,13 +251,13 @@ class DiscreteVAE(nn.Module):
         self.decoder = Decoder(latent_dim, n_codes, hidden_dim, num_classes)
 
         self.latent_pos_indices = torch.arange(1024).unsqueeze(0)
+        self.to(device)  # Move model to device
 
-        
     def forward(self, x, tau):
         # Encode input to shape [B, N, D]
         latent = self.encoder(x)
         
-        latent_pos_indices = self.latent_pos_indices.expand(x.size(0), -1)
+        latent_pos_indices = self.latent_pos_indices.expand(x.size(0), -1).to(x.device)
         
         # Discretize through codebook
         quantized, log_alpha, z = self.codebook(
@@ -531,6 +534,8 @@ def run_experiment(args):
     # Set random seed for reproducibility
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(args.seed)
     
     # Create a unique experiment folder based on arguments and a random suffix
     import uuid
@@ -576,7 +581,7 @@ def run_experiment(args):
     else:
         train_loader, test_loader = load_mnist_dataset(args.batch_size)
     
-    # Create model
+    # Create model and move to device
     model = DiscreteVAE(
         latent_dim=args.latent_dim,
         codebook_size=args.codebook_size,
@@ -585,7 +590,7 @@ def run_experiment(args):
         use_exp_relaxed=args.use_exp_relaxed,
         sampling=args.sampling,
         num_classes=11  # 0-9 for image, 10 for padding
-    )
+    ).to(device)
     
     # Create optimizer
     optimizer = optim.Adam(model.parameters(), lr=args.learning_rate)
@@ -646,12 +651,15 @@ def run_experiment(args):
             if global_step >= args.max_steps:
                 break
                 
+            # Move data to device
+            data = data.to(device)
+                
             # Set temperature and entropy weight for this step
             temperature = temp_schedule(global_step)
             entropy_weight = entropy_schedule(global_step)
             
-            # Convert temperature to tensor
-            temp_tensor = torch.tensor(temperature)
+            # Convert temperature to tensor and move to device
+            temp_tensor = torch.tensor(temperature).to(device)
             
             optimizer.zero_grad()
             
@@ -922,7 +930,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     """
     # Load the model
     model_path = Path(model_path)
-    checkpoint = torch.load(model_path)
+    checkpoint = torch.load(model_path, map_location=device)
     
     # Extract model parameters from the args.txt file in the same directory as the model
     model_dir = model_path.parent
@@ -945,7 +953,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
     
     print(f"Loaded model parameters from {args_path}")
     
-    # Create model with the same parameters
+    # Create model with the same parameters and move to device
     model = DiscreteVAE(
         latent_dim=int(args_dict.get('latent_dim', 64)),
         codebook_size=int(args_dict.get('codebook_size', 512)),
@@ -954,7 +962,7 @@ def analyze_trained_model(model_path, n_samples=10, temperature=1.0):
         use_exp_relaxed=args_dict.get('use_exp_relaxed', 'False').lower() == 'true',
         sampling=args_dict.get('sampling', 'False').lower() == 'true',
         num_classes=11  # 0-9 for image, 10 for padding
-    )
+    ).to(device)
     
     # Load the state dict
     model.load_state_dict(checkpoint)
@@ -1361,6 +1369,7 @@ def main():
     parser.add_argument('--val_check_interval', type=int, default=100, help='Validation check interval (in steps)')
     parser.add_argument('--learning_rate', type=float, default=1e-3, help='Learning rate')
     parser.add_argument('--seed', type=int, default=42, help='Random seed')
+    parser.add_argument('--device', type=str, default=None, help='Device to use (cuda or cpu, default: auto-detect)')
     
     # Temperature parameters
     parser.add_argument('--min_temp', type=float, default=1.0, help='Minimum temperature')
@@ -1388,6 +1397,12 @@ def main():
     parser.add_argument('--analysis_temp', type=float, default=1.0, help='Temperature to use for analysis')
     
     args = parser.parse_args()
+    
+    # Set device if specified
+    global device
+    if args.device:
+        device = torch.device(args.device)
+        print(f"Using specified device: {device}")
     
     if args.analyze and args.model_path:
         analyze_trained_model(args.model_path, args.analysis_samples, args.analysis_temp)
