@@ -13,7 +13,7 @@ from pathlib import Path
 import matplotlib.gridspec as gridspec
 from tqdm import tqdm
 
-from pips.dvae import RMSNorm, RotaryPositionalEmbeddings, SwiGLUFFN
+from pips.dvae import LatentTransformer, RMSNorm, RoPE2D, RotaryPositionalEmbeddings, SwiGLUFFN, Transformer
 from pips.grid_dataset import DatasetType, GridDataset
 
 # Set up device
@@ -235,7 +235,119 @@ class Decoder(nn.Module):
         
         # Note: We don't apply softmax here because nn.CrossEntropyLoss expects raw logits
         return x
+    
+class GridDVAE(nn.Module):
+    def __init__(self, latent_dim, codebook_size, n_codes=8, hidden_dim=400, 
+                 use_exp_relaxed=False, sampling=True, num_classes=11):
+        
+        super().__init__()
 
+        self.embd = nn.Embedding(num_classes, latent_dim)
+
+
+        rope_2d = RoPE2D(
+                dim=latent_dim // 4,  # per-head dimension (e.g., 256//8 = 32)
+                max_height=32,
+                max_width=32,
+                base_height=10000,
+                base_width=10000)
+        
+        rope_1d = RotaryPositionalEmbeddings(
+            dim=latent_dim // 4,  # 256//8 = 32, per-head dimension
+            max_seq_len=1024,   
+            base=10000
+        )
+
+        rope_codebook = RotaryPositionalEmbeddings(
+            dim=latent_dim // 1,
+            max_seq_len=1024,
+            base=10000
+        )
+         
+        self.grid_encoder = Transformer(
+            d_model=latent_dim,
+            n_head=4,
+            n_layer=2,
+            out_norm=False,
+            rope=rope_2d
+        )
+
+        self.latent_encoder = LatentTransformer(
+            n_latent=n_codes,
+            d_model= latent_dim,
+            n_head=4,
+            n_layer=2,
+            out_norm=False,
+            rope=rope_1d
+        )
+
+
+        self.codebook = AttnCodebook(d_model=latent_dim, codebook_size=codebook_size, 
+                                     use_exp_relaxed=use_exp_relaxed, sampling=sampling,
+                                     rope=rope_codebook)
+
+
+        self.latent_decoder = LatentTransformer(
+            n_latent=1024,
+            d_model=latent_dim,
+            n_head=4,
+            n_layer=2,
+            out_norm=False,
+            rope=rope_1d
+        )
+
+        self.grid_decoder = Transformer(
+            d_model=latent_dim,
+            n_head=4,
+            n_layer=2,
+            out_norm=True,
+            rope=rope_2d
+        )
+
+        self.decoder_head = nn.Linear(latent_dim, num_classes, bias=False)
+
+        rows = torch.arange(32, dtype=torch.long)
+        cols = torch.arange(32, dtype=torch.long)
+        grid_y, grid_x = torch.meshgrid(rows, cols, indexing='ij')
+        grid_pos_indices = torch.stack([grid_y.flatten(), grid_x.flatten()], dim=1).unsqueeze(0)
+        latent_pos_indices = torch.arange(1024).unsqueeze(0)
+
+        self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
+        self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
+
+
+
+    def forward(self, x, tau):
+        # Encode input to shape [B, N, D]
+        x = x.squeeze(1).view(-1, 1024)
+        B, S = x.size()
+
+        grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
+        latent_pos_indices = self.latent_pos_indices.expand(B, -1)
+
+
+        x_embd = self.embd(x)
+        grid_encoded, _ = self.grid_encoder(x_embd, positions=grid_pos_indices)
+        latent_encoded, _ = self.latent_encoder(grid_encoded, positions=latent_pos_indices)
+
+        
+        # Discretize through codebook
+        quantized, log_alpha, z = self.codebook(
+                        latents=latent_encoded, 
+                        tau=tau, 
+                        residual_scaling=0.0, 
+                        positions=latent_pos_indices)
+        
+    
+        latent_decoded, _ = self.latent_decoder(quantized, positions=latent_pos_indices)        
+        grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)        
+        grid_decoded_logits = self.decoder_head(grid_decoded)
+
+        recon = grid_decoded_logits.permute(0, 2, 1).contiguous().view(B, 11, 32, 32)
+        print("grid_decoded_logits shape", grid_decoded_logits.shape)        
+        # recon = grid_decoded_logits.view(B, 32, 32)
+        return recon, log_alpha, z, _, quantized
+    
 class DiscreteVAE(nn.Module):
     """
     Discrete VAE model for MNIST using AttnCodebook for discretization.
@@ -269,6 +381,7 @@ class DiscreteVAE(nn.Module):
         # Decode
         recon = self.decoder(quantized)
         
+        print("recon shape", recon.shape)
         return recon, log_alpha, z, latent, quantized
 
 def entropy_loss(log_alpha, tau, reduction="mean"):
@@ -582,7 +695,9 @@ def run_experiment(args):
         train_loader, test_loader = load_mnist_dataset(args.batch_size)
     
     # Create model and move to device
-    model = DiscreteVAE(
+    # model = DiscreteVAE(
+
+    model = GridDVAE(
         latent_dim=args.latent_dim,
         codebook_size=args.codebook_size,
         n_codes=args.n_codes,
