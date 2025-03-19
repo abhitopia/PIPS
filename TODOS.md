@@ -110,6 +110,7 @@
 - [x] Fix all perplexity and entropy calculations to only use log_alpha / tau
 - [x] Implement diversity loss
 - [x] Plot peakiness over steps
+- [ ] Fix perplexity to use base 2
 
 
 # Fix KLD Losses
