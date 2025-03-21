@@ -497,12 +497,11 @@ class AttnCodebook(nn.Module):
         - codebook_keys: [d_model, codebook_size]
         - codebook_values: [codebook_size, d_model]
     """
-    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, sampling: bool = True, dim_feedforward=None, rope=None, normalise_kq: bool = False):
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, dim_feedforward=None, rope=None, normalise_kq: bool = False):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
         self.use_exp_relaxed = use_exp_relaxed
-        self.sampling = sampling
         self.rope = rope
         self.normalise_kq = normalise_kq
 
@@ -526,20 +525,21 @@ class AttnCodebook(nn.Module):
         self.norm_ff = RMSNorm(dim=d_model)
 
 
-    def sample(self, log_alpha: Tensor, tau: Tensor) -> Tensor:
-        """Sample from either RelaxedOneHotCategorical or ExpRelaxedCategorical."""
-        assert tau > 0.0, "Temperature must be greater than 0.0"
-        # tau is already a tensor, so we simply use it directly.
-        if self.use_exp_relaxed:
-            # We need to exponentiate the sample to get the correct sample from the distribution.
-            return ExpRelaxedCategorical(tau, logits=log_alpha).rsample().exp()
-        else:
-            return RelaxedOneHotCategorical(tau, logits=log_alpha).rsample()
-    
-
-    def single_head_attention(self, queries: Tensor, keys: Tensor, values: Tensor, tau: Tensor, positions: Tensor) -> Tensor:
+    def single_head_attention(self, queries: Tensor, keys: Tensor, values: Tensor, tau: Tensor, positions: Tensor, gumbel_noise_scale: Tensor = torch.tensor(0.0)) -> Tensor:
         """
         Single-head attention pass.
+        
+        Args:
+            queries (Tensor): Query tensors of shape [B, N, d_model].
+            keys (Tensor): Key tensors of shape [C, d_model].
+            values (Tensor): Value tensors of shape [C, d_model].
+            tau (Tensor): Temperature parameter for controlling distribution sharpness.
+            positions (Tensor): Position indices for rotary position embeddings.
+            gumbel_noise_scale (Tensor): Scale of Gumbel noise to add when sampling=False. Value between 0 and 1.
+                                         Only applied when self.sampling is False.
+        
+        Returns:
+            Tuple[Tensor, Tensor, Tensor]: (attention_output, log_alpha, z)
         """
         # Project queries: [B, N, d_model]
         q = self.query_proj(queries).unsqueeze(1) # [B, 1, N, d_model]
@@ -562,20 +562,20 @@ class AttnCodebook(nn.Module):
         log_alpha = torch.matmul(q, k.mT) # [B, N, C]
         log_alpha = log_alpha / self.scale # [B, N, C]
         
-        if self.sampling:
-            # Sample using the (Gumbel-Softmax) distribution.
-            z = self.sample(log_alpha, tau)  # [B, N, C]
-        else:
-            # Apply softmax with temperature scaling.
-            z = torch.softmax(log_alpha / tau, dim=-1)
+        # Sample Gumbel noise: -log(-log(uniform(0,1)))
+        gumbel = -torch.log(-torch.log(torch.rand_like(log_alpha) + 1e-10) + 1e-10)
+        # Add scaled Gumbel noise to logits before temperature scaling
+        log_alpha_tau = (log_alpha + gumbel_noise_scale * gumbel) / tau
+        z = torch.softmax(log_alpha_tau, dim=-1)
+
 
         attn_output = torch.matmul(z, v) # [B, N, d_model]
         y = self.c_proj(attn_output) # [B, N, d_model]
 
-        return y, log_alpha, z
+        return y, log_alpha, log_alpha_tau, z
     
 
-    def forward(self, latents: Tensor, tau: Tensor, residual_scaling: Tensor, positions: Tensor) -> Tensor:
+    def forward(self, latents: Tensor, tau: Tensor, residual_scaling: Tensor, positions: Tensor, gumbel_noise_scale: Tensor = torch.tensor(0.0)) -> Tensor:
         """
         Forward pass through the codebook.
 
@@ -584,6 +584,7 @@ class AttnCodebook(nn.Module):
             tau (Tensor): The temperature for the Gumbel-Softmax distribution.
             residual_scaling (Tensor): The scaling factor for the residual connection.
             positions (Tensor): The positions of the latents.
+            gumbel_noise_scale (Tensor): Scale of Gumbel noise to add when sampling=False. Value between 0 and 1.
 
         Returns:
             Tuple[Tensor, Tensor, Tensor]: A tuple of (codebook_output, log_alpha, z), where:
@@ -595,12 +596,13 @@ class AttnCodebook(nn.Module):
         normed_context = self.norm_context(self.codebook) # [C, d_model]
         normed_queries = self.norm_queries(latents) # [B, N, d_model]
 
-        attn_output, log_alpha, z = self.single_head_attention(
+        attn_output, log_alpha, log_alpha_tau, z = self.single_head_attention(
                                                             queries=normed_queries, 
                                                             keys=normed_context, 
                                                             values=normed_context, 
                                                             tau=tau,
-                                                            positions=positions)
+                                                            positions=positions,
+                                                            gumbel_noise_scale=gumbel_noise_scale)
 
         # Notice that this mixes the latents with the codebook embeddings.
         # But this also means that attn_output is not a function of log_alpha only.
@@ -609,7 +611,7 @@ class AttnCodebook(nn.Module):
 
         codebook_output = attn_output + self.ff(self.norm_ff(attn_output)) # Residual connection
 
-        return codebook_output, log_alpha, z
+        return codebook_output, log_alpha, log_alpha_tau, z
 
 
 class GumbelCodebook(nn.Module):
@@ -762,7 +764,6 @@ class GridDVAEConfig(Config):
     padding_idx: int | None = None
     mask_idx: int | None = None
     pad_weight: float = 0.01,
-    sampling: bool = False,
     use_exp_relaxed: bool = False,
     use_monte_carlo_kld: bool = False,
     gamma: float = 2.0
@@ -825,7 +826,6 @@ class GridDVAEConfig(Config):
             'padding_idx': self.padding_idx,
             'mask_idx': self.mask_idx,
             'pad_weight': self.pad_weight,
-            'sampling': self.sampling,
             'use_exp_relaxed': self.use_exp_relaxed,
             'use_monte_carlo_kld': self.use_monte_carlo_kld,
             'gamma': self.gamma,
@@ -937,19 +937,10 @@ class GridDVAE(nn.Module):
             rope=rope_1d
         )
 
-        # self.codebook = GumbelCodebook(d_model=config.n_dim, 
-        #                                codebook_size=config.codebook_size,
-        #                                n_codes=config.n_codes,
-        #                                use_exp_relaxed=config.use_exp_relaxed,
-        #                                position_dependent=False,
-        #                                sampling=config.sampling)
-        
-
         self.codebook = AttnCodebook(d_model=config.n_dim, 
                                     codebook_size=config.codebook_size,
                                     use_exp_relaxed=config.use_exp_relaxed,
                                     rope=rope_codebook,
-                                    sampling=config.sampling,
                                     normalise_kq=config.normalise_kq)
 
         self.latent_decoder = LatentTransformer(
@@ -1053,40 +1044,29 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def compute_codebook_losses(self, log_alpha: Tensor, tau: Tensor = torch.tensor(1.0)) -> Tuple[Tensor, Tensor]:
+    def compute_codebook_losses(self, log_alpha: Tensor) -> Tuple[Tensor, Tensor]:
         """
         Efficiently compute codebook-related losses with a single softmax computation.
         
         Args:
             log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
-                where B is batch size, N is number of codes, C is codebook size.
-            tau (Tensor): Temperature parameter used for scaling the distribution.
-                
+                where B is batch size, N is number of codes, C is codebook size.                
         Returns:
             Tuple[Tensor, Tensor]: Tuple containing (entropy_loss, diversity_loss).
                 entropy_loss: Low values indicate deterministic distributions.
                 diversity_loss: Low values indicate high diversity across the batch.
         """
 
-        # Apply temperature to logits
-        scaled_log_alpha = log_alpha / tau
-
         # Compute log probabilities using log_softmax
-        log_probs = F.log_softmax(scaled_log_alpha, dim=-1)
+        log_probs = F.log_softmax(log_alpha, dim=-1)
     
         # Get probabilities by exponentiating log probabilities
         probs = torch.exp(log_probs)
     
-
          # Compute entropy: -sum(p * log(p))
         entropy_per_sample = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
-
        
         entropy_loss = entropy_per_sample.mean()
-        
-        # 2. Compute diversity loss (to encourage different samples to use different codes)
-        # Average the probabilities across the batch dimension
-        avg_probs = probs.mean(dim=0)  # [N, C]
 
         # Average usage of each codebook entry across the batch
         # This gives us the average probability of each codebook entry for each code position
@@ -1100,11 +1080,10 @@ class GridDVAE(nn.Module):
     
         # We want to maximize this entropy, so we negate it for minimization
         diversity_loss = -batch_entropy  # [N]
-    
         
         return entropy_loss, diversity_loss.mean()
 
-    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
+    def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0), gumbel_noise_scale: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
@@ -1112,16 +1091,16 @@ class GridDVAE(nn.Module):
     
         encoded_logits = self.encode(x_masked, grid_pos_indices, latent_pos_indices)
     
-        quantized, log_alpha, z = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices)
+        quantized, log_alpha, log_alpha_tau, z = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices, gumbel_noise_scale=gumbel_noise_scale)
             
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
             q_z_marg_updated = q_z_marg
         else:
-            kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha, q_z_marg, reduction='mean')
+            kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha_tau, q_z_marg, reduction='mean')
     
         # Calculate codebook-related losses efficiently
-        entropy_loss, diversity_loss = self.compute_codebook_losses(log_alpha, tau=tau)
+        entropy_loss, diversity_loss = self.compute_codebook_losses(log_alpha_tau)
 
         if self.skip_codebook:
             decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
@@ -1136,7 +1115,7 @@ class GridDVAE(nn.Module):
              "diversity_loss": diversity_loss,  # Diversity loss (low = different samples use different codes)
              **kld_losses.to_dict()
         }
-        return decoded_logits, log_alpha, losses, q_z_marg_updated
+        return decoded_logits, log_alpha_tau, losses, q_z_marg_updated
     
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 1.0, gamma: float = 0.0) -> Tensor:

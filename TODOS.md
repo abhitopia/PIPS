@@ -110,8 +110,11 @@
 - [x] Fix all perplexity and entropy calculations to only use log_alpha / tau
 - [x] Implement diversity loss
 - [x] Plot peakiness over steps
-- [ ] Fix perplexity to use base 2
-
+- [x] Fix perplexity to use base 2
+- [x] Add global step number to the images in the wandb logs (log tau and noise scale)
+- [x] Add gumbel noise option to code, which changes the log_alpha before the softmax
+- [x] Change all the functions to work independently of the tau
+- [x] simplify the code
 
 # Fix KLD Losses
 - [x] Read the paper

@@ -115,7 +115,6 @@ def new(
     pad_weight: float = typer.Option(0.01, "--pad-weight", "--pw", help="Weight for pad token loss (default: 0.01 = 1% of normal weight)"),
     use_exp_relaxed: bool = typer.Option(False, "--exp-relaxed", help="Use exponentially relaxed Gumbel-Softmax"),
     use_monte_carlo_kld: bool = typer.Option(False, "--monte-carlo-kld", help="Use Monte Carlo KLD estimation instead of approximate KLD"),
-    sample: bool = typer.Option(False, "--sample", help="Enable sampling using Gumbel-Softmax", is_flag=True, flag_value=True, show_default=True),
     init_mode: InitMode = typer.Option(InitMode.NORMAL, "--init-mode", help="Initialization mode for model weights", case_sensitive=False),
     skip_codebook: bool = typer.Option(False, "--skip-codebook", help="Skip the codebook", is_flag=True, flag_value=True),
     normalise_kq: bool = typer.Option(False, "--normalise-kq", "--nkq", help="Normalise the keys and queries", is_flag=True, flag_value=True),
@@ -134,7 +133,8 @@ def new(
     beta_schedule_type: str = typer.Option('cosine', "--beta-schedule-type", "--bst", help="Schedule type for beta transitions (linear, cosine, exponential, threshold)"),
     mask_schedule_type: str = typer.Option('cosine', "--mask-schedule-type", "--mst", help="Schedule type for mask percentage transition (linear, cosine, exponential, threshold)"),
     residual_scaling_schedule_type: str = typer.Option('cosine', "--residual-schedule-type", "--rst", help="Schedule type for residual scaling transition (linear, cosine, exponential, threshold)"),
-    
+    gumbel_noise_scale_schedule_type: str = typer.Option('cosine', "--gumbel-noise-scale-schedule-type", "--gnsst", help="Schedule type for gumbel noise scale transition (linear, cosine, exponential, threshold)"),
+        
     # Learning rate warmup / decay steps
     warmup_steps_lr: int = typer.Option(100, "--warmup-steps-lr", "--wsl", help="Learning rate warmup steps"),
     decay_steps_lr: int = typer.Option(None, "--decay-steps-lr", "--dsl", help="Learning rate decay steps, if not specified, will be set to max_steps - warmup_steps_lr"),
@@ -150,7 +150,13 @@ def new(
     residual_scaling: float = typer.Option(0.0, "--residual-scaling", "--rs", help="Residual scaling target value"),
     transition_steps_residual_scaling: int = typer.Option(10_000, "--transition-steps-residual", "--tsr", help="Steps to transition residual scaling from initial to target value"),
     warmup_steps_residual_scaling: int = typer.Option(0, "--warmup-steps-residual", "--wsr", help="Steps to wait before starting residual scaling transition"),
-    
+
+    # Schedule parameters - gumbel noise scale
+    gumbel_noise_scale_start: float = typer.Option(0.0, "--gumbel-noise-scale-start", "--gns", help="Starting gumbel noise scale"),
+    gumbel_noise_scale: float = typer.Option(0.0, "--gumbel-noise-scale", "--gns", help="Gumbel noise scale target value"),
+    transition_steps_gumbel_noise_scale: int = typer.Option(10_000, "--transition-steps-gumbel-noise-scale", "--tsgns", help="Steps to transition gumbel noise scale from initial to target value"),
+    warmup_steps_gumbel_noise_scale: int = typer.Option(0, "--warmup-steps-gumbel-noise-scale", "--wsgns", help="Steps to wait before starting gumbel noise scale transition"),
+
     # Schedule parameters - mask percentage
     mask_pct_start: float = typer.Option(0.0, "--mask-pct-start", "--mss", help="Starting masking percentage"),
     max_mask_pct: float = typer.Option(0.0, "--max-mask-pct", "--msk", help="Maximum masking percentage during training"),
@@ -256,7 +262,6 @@ def new(
         pad_weight=pad_weight,
         use_exp_relaxed=use_exp_relaxed,
         use_monte_carlo_kld=use_monte_carlo_kld,
-        sampling=sample,
         init_mode=init_mode,
         skip_codebook=skip_codebook,
         normalise_kq=normalise_kq
@@ -286,12 +291,15 @@ def new(
         max_mask_pct=max_mask_pct,
         residual_scaling_start=residual_scaling_start,
         residual_scaling=residual_scaling,
+        gumbel_noise_scale_start=gumbel_noise_scale_start,
+        gumbel_noise_scale=gumbel_noise_scale,
         
         # Schedule parameters
         tau_schedule_type=tau_schedule_type,
         beta_schedule_type=beta_schedule_type,
         mask_schedule_type=mask_schedule_type,
         residual_scaling_schedule_type=residual_scaling_schedule_type,
+        gumbel_noise_scale_schedule_type=gumbel_noise_scale_schedule_type,
         
         # Schedule timing parameters
         warmup_steps_lr=warmup_steps_lr,
@@ -316,7 +324,9 @@ def new(
         warmup_steps_mask_pct=warmup_steps_mask_pct,
         transition_steps_residual_scaling=transition_steps_residual_scaling,
         warmup_steps_residual_scaling=warmup_steps_residual_scaling,
-        
+        transition_steps_gumbel_noise_scale=transition_steps_gumbel_noise_scale,
+        warmup_steps_gumbel_noise_scale=warmup_steps_gumbel_noise_scale,
+
         # Training parameters
         batch_size=batch_size,
         learning_rate=learning_rate,

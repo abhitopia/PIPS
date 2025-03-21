@@ -73,24 +73,7 @@ class LoggingCallback(pl.Callback):
         else:
             self.train_batch_start_time = time.monotonic()
 
-    @staticmethod
-    def log_alpha_statistics(log_alpha: torch.Tensor, tau: torch.Tensor):
-        mean_val = log_alpha.mean().item()
-        std_val = log_alpha.std().item()
-        median_val = log_alpha.median().item()
-        tau_val = tau.item()
-        
-        # Compute the ratio of standard deviation to temperature
-        ratio = std_val / tau_val
-
-        return {
-            'logα_mean(Stats)': mean_val,
-            'logα_std(Stats)': std_val,
-            'logα_median(Stats)': median_val,
-            'logα_tau_ratio(Stats)': ratio
-        }
-
-    def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95, tau: Tensor = None):
+    def compute_entropy(self, log_alpha: Tensor, current_ema: Tensor = None, eps: float = 1e-8, add_codebook_usage: bool = True, ema_decay: float = 0.95, suffix: str = ""):
         """
         Compute entropy metrics and update code distribution EMA.
         
@@ -100,14 +83,14 @@ class LoggingCallback(pl.Callback):
             eps: Small value for numerical stability
             add_codebook_usage: Whether to create and return visualizations
             ema_decay: EMA decay factor (higher = slower adaptation)
-            tau: Optional temperature parameter for scaling entropy calculations
+            suffix: Optional suffix to append to metric keys for differentiation
             
         Returns:
             Tuple of (output_dict, updated_ema)
         """
         output_dict = {}
         # Calculate per-code perplexity
-        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1) if tau is None else F.log_softmax(log_alpha / tau, dim=-1)
+        normalized_log_alpha = F.log_softmax(log_alpha, dim=-1)
         probs = normalized_log_alpha.exp()
 
         per_code_entropy = -(probs * normalized_log_alpha).sum(dim=-1)  # [B, N]
@@ -115,16 +98,16 @@ class LoggingCallback(pl.Callback):
 
         avg_perplexity = per_code_perplexity.mean()
         
-        # Use a different key name if tau is provided
-        perplexity_key = 'CodebookUsage/perplexity_tau' if tau is not None else 'CodebookUsage/perplexity'
+        # Append suffix to key name if provided
+        perplexity_key = f'CodebookUsage/perplexity'
         output_dict[perplexity_key] = avg_perplexity.detach()
         
         # Calculate peakiness (maximum probability) for each code position
         per_code_peakiness = probs.max(dim=-1)[0]  # [B, N]
         avg_peakiness = per_code_peakiness.mean()
         
-        # Use a different key name if tau is provided
-        peakiness_key = 'CodebookUsage/peakiness_tau' if tau is not None else 'CodebookUsage/peakiness'
+        # Append suffix to key name if provided
+        peakiness_key = f'CodebookUsage/peakiness'
         output_dict[peakiness_key] = avg_peakiness.detach()
         
         # Calculate distribution for each code position (for current batch)
@@ -144,8 +127,8 @@ class LoggingCallback(pl.Callback):
             avg_per_code_peakiness = per_code_peakiness.mean(dim=0)  # [N]
 
             # Add per-code perplexity metrics with appropriate key names
-            code_perplexity_prefix = 'Codebook/perplexity_tau_code_' if tau is not None else 'Codebook/perplexity_code_'
-            code_peakiness_prefix = 'Codebook/peakiness_tau_code_' if tau is not None else 'Codebook/peakiness_code_'
+            code_perplexity_prefix = f'Codebook/perplexity_code_'
+            code_peakiness_prefix = f'Codebook/peakiness_code_'
             
             for i, perp in enumerate(avg_per_code_perplexity):
                 output_dict[f'{code_perplexity_prefix}{i}'] = perp.detach()
@@ -161,9 +144,6 @@ class LoggingCallback(pl.Callback):
             first_sample_probs = first_sample_probs.T
             last_sample_probs = last_sample_probs.T
             
-            # Add tau information to title if provided
-            title_suffix = f" (τ={tau.item():.4f})" if tau is not None else ""
-            
             # Always create a new figure (remove caching)
             combined_heatmap_fig = plt.figure(figsize=(30, 12), dpi=80)
 
@@ -177,7 +157,7 @@ class LoggingCallback(pl.Callback):
             plt.colorbar(im1 := ax1.images[0], ax=ax1)
             ax1.set_xlabel('Position')
             ax1.set_ylabel('Codebook Index')
-            ax1.set_title(f'Code Usage Distribution (EMA){title_suffix}')
+            ax1.set_title(f'Code Usage Distribution (EMA){suffix}')
 
             # Second subplot - First sample
             ax2 = combined_heatmap_fig.add_subplot(1, 3, 2)
@@ -188,7 +168,7 @@ class LoggingCallback(pl.Callback):
             plt.colorbar(im2 := ax2.images[0], ax=ax2)
             ax2.set_xlabel('Position')
             ax2.set_ylabel('Codebook Index')
-            ax2.set_title(f'First Sample Probability Heatmap{title_suffix}')
+            ax2.set_title(f'First Sample Probability Heatmap{suffix}')
             
             # Third subplot - Last sample
             ax3 = combined_heatmap_fig.add_subplot(1, 3, 3)
@@ -199,10 +179,10 @@ class LoggingCallback(pl.Callback):
             plt.colorbar(im3 := ax3.images[0], ax=ax3)
             ax3.set_xlabel('Position')
             ax3.set_ylabel('Codebook Index')
-            ax3.set_title(f'Last Sample Probability Heatmap{title_suffix}')
+            ax3.set_title(f'Last Sample Probability Heatmap{suffix}')
 
             plt.tight_layout()
-            key = 'Codebook/latent_distribution_tau' if tau is not None else 'Codebook/latent_distribution'
+            key = f'Codebook/latent_distribution{suffix}'
             output_dict[key] = combined_heatmap_fig
 
         return output_dict, updated_ema
@@ -340,6 +320,33 @@ class LoggingCallback(pl.Callback):
         
         plt.close(fig)  # Close the figure to free memory
 
+    def _create_metric_suffix(self, outputs, current_step):
+        """
+        Creates a standardized suffix for metrics with consistent formatting.
+        
+        Args:
+            outputs: Dictionary containing model outputs
+            current_step: Current global step
+            
+        Returns:
+            String suffix to append to metric keys
+        """
+        suffix_parts = []
+        
+        # Add tau if available
+        if 'tau' in outputs:
+            suffix_parts.append(f"tau_{outputs['tau'].item():.4f}")
+            
+        # Add global step
+        suffix_parts.append(f"step_{current_step}")
+        
+        # Add gumbel noise scale if available
+        if 'gumbel_noise_scale' in outputs:
+            suffix_parts.append(f"gns_{outputs['gumbel_noise_scale'].item():.4f}")
+            
+        # Combine parts with underscores and add a leading underscore
+        return "_" + "_".join(suffix_parts) if suffix_parts else ""
+
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         log_alpha = outputs.pop('log_alpha')
         x = outputs.pop('input')
@@ -349,17 +356,17 @@ class LoggingCallback(pl.Callback):
         current_step = pl_module.global_step
         should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
 
+        # Create suffix using the helper method
+        suffix = self._create_metric_suffix(outputs, current_step)
+        
         entropy_dict_tau, self.train_code_distribution_ema_tau = self.compute_entropy(
             log_alpha, 
             current_ema=self.train_code_distribution_ema_tau,
             add_codebook_usage=should_visualize,
             ema_decay=self.ema_decay,
-            tau=outputs['tau']
+            suffix=suffix
         )
         outputs.update(entropy_dict_tau)
-
-        log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
-        outputs.update(log_alpha_stats)
 
         # Visualize reconstructions if the time interval has been reached.
         if should_visualize:
@@ -416,17 +423,19 @@ class LoggingCallback(pl.Callback):
 
         # Only log the codebook usage figure once per epoch.
         # Pass the current val EMA to compute_entropy and get the updated EMA back
+        
+        # Create suffix using the helper method
+        current_step = pl_module.global_step
+        suffix = self._create_metric_suffix(outputs, current_step)
+        
         entropy_dict_tau, self.val_code_distribution_ema_tau = self.compute_entropy(
             log_alpha, 
             current_ema=self.val_code_distribution_ema_tau,
             add_codebook_usage=batch_idx == self.val_batch_to_visualize,
             ema_decay=self.ema_decay,
-            tau=outputs['tau']
+            suffix=suffix
         )
         outputs.update(entropy_dict_tau)
-
-        log_alpha_stats = self.log_alpha_statistics(log_alpha, outputs['tau'])
-        outputs.update(log_alpha_stats)
 
         # Calculate tokens per second for the validation batch.
         if self.val_batch_start_time is not None:
@@ -442,12 +451,12 @@ class LoggingCallback(pl.Callback):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
             # Handle the figure separately.
-            if key == 'Codebook/latent_distribution' or key == 'Codebook/latent_distribution_tau':
+            if key.startswith('Codebook/latent_distribution'):
                 if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
                     # Only log from rank 0
-                    log_key = 'CodebookUsage/Distribution_{phase}' if key == 'Codebook/latent_distribution' else 'CodebookUsage/Distribution_tau_{phase}'
+                    log_key = f'{key}_{phase}'
                     pl_module.logger.experiment.log({
-                        log_key.format(phase=phase): wandb.Image(value)
+                        log_key: wandb.Image(value)
                     })
                 plt.close(value)  # Close the figure to free memory
                 continue
@@ -460,7 +469,7 @@ class LoggingCallback(pl.Callback):
                 category = key.split('(')[-1].split(')')[0]  # Extract category.
                 metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
             # Handle special parameters like 'hard', 'tau', 'beta', etc.
-            elif key in ['tau', 'mask_pct', 'max_mask_pct', 'residual_scaling']:
+            elif key in ['tau', 'mask_pct', 'max_mask_pct', 'residual_scaling', 'gumbel_noise_scale']:
                 metric_name = f'params/{key}_{phase}'  # Group parameters under 'params/'.
             elif key in ['tokens_per_sec', 'Δ_ms']:
                 metric_name = f'Throughput/{key}_{phase}'
@@ -499,6 +508,7 @@ class ExperimentConfig:
     beta_schedule_type: str = 'cosine'
     mask_schedule_type: str = 'cosine'
     residual_scaling_schedule_type: str = 'cosine'
+    gumbel_noise_scale_schedule_type: str = 'cosine'
     
     # Learning rate parameters
     learning_rate: float = 1e-4  # Consistent with Dalle-E paper
@@ -566,6 +576,12 @@ class ExperimentConfig:
     residual_scaling: float = 0.0
     transition_steps_residual_scaling: int = 5_000
     warmup_steps_residual_scaling: int = 0
+
+    # Gumbel noise parameters
+    gumbel_noise_scale_start: float = 0.0
+    gumbel_noise_scale: float = 0.0
+    transition_steps_gumbel_noise_scale: int = 5_000
+    warmup_steps_gumbel_noise_scale: int = 0
     
     # Dataset parameters
     train_ds: DatasetType = DatasetType.TRAIN
@@ -600,6 +616,11 @@ class ExperimentConfig:
         self.warmup_steps_residual_scaling = min(self.warmup_steps_residual_scaling, self.max_steps)
         remaining_steps = self.max_steps - self.warmup_steps_residual_scaling
         self.transition_steps_residual_scaling = min(self.transition_steps_residual_scaling, remaining_steps)
+
+        # For gumbel noise scale parameters
+        self.warmup_steps_gumbel_noise_scale = min(self.warmup_steps_gumbel_noise_scale, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_gumbel_noise_scale
+        self.transition_steps_gumbel_noise_scale = min(self.transition_steps_gumbel_noise_scale, remaining_steps)
         
         # For CE parameters
         self.warmup_steps_beta_ce = min(self.warmup_steps_beta_ce, self.max_steps)
@@ -776,6 +797,15 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.residual_scaling_schedule_type
         )
 
+        # Gumbel noise scale schedule
+        gumbel_noise_scale_schedule = Schedule.get_schedule(
+            initial_value=cfg.gumbel_noise_scale_start,
+            target_value=cfg.gumbel_noise_scale,
+            transition_steps=cfg.transition_steps_gumbel_noise_scale,
+            warmup_steps=cfg.warmup_steps_gumbel_noise_scale,
+            schedule_type=cfg.gumbel_noise_scale_schedule_type
+        )
+
         # Temperature schedule
         tau_schedule = Schedule.get_schedule(
             initial_value=cfg.tau_start,
@@ -861,7 +891,8 @@ class DVAETrainingModule(pl.LightningModule):
             'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
             'beta(KL)': torch.tensor(beta_kl_schedule(step), device=device, dtype=torch.float32),
             'max_pct(MASK)': torch.tensor(max_mask_pct_schedule(step), device=device, dtype=torch.float32),
-            'residual_scaling': torch.tensor(residual_scaling_schedule(step), device=device, dtype=torch.float32)
+            'residual_scaling': torch.tensor(residual_scaling_schedule(step), device=device, dtype=torch.float32),
+            'gumbel_noise_scale': torch.tensor(gumbel_noise_scale_schedule(step), device=device, dtype=torch.float32)
         }
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, 
@@ -874,6 +905,7 @@ class DVAETrainingModule(pl.LightningModule):
                 beta_tc: Tensor = torch.tensor(0.0), 
                 beta_kl: Tensor = torch.tensor(0.0), 
                 residual_scaling: Tensor = torch.tensor(0.0), 
+                gumbel_noise_scale: Tensor = torch.tensor(0.0),
                 mask_pct: Tensor = torch.tensor(0.0), 
                 tc_relu: bool = False):
         
@@ -883,7 +915,8 @@ class DVAETrainingModule(pl.LightningModule):
             q_z_marg=q_z_marg,
             mask_percentage=mask_pct, 
             tau=tau,
-            residual_scaling=residual_scaling
+            residual_scaling=residual_scaling,
+            gumbel_noise_scale=gumbel_noise_scale
         )
         
         # Calculate token accuracy excluding padding tokens.
@@ -965,6 +998,7 @@ class DVAETrainingModule(pl.LightningModule):
              beta_kl=scheduled['beta(KL)'],
              mask_pct=mask_pct,
              residual_scaling=scheduled['residual_scaling'],
+             gumbel_noise_scale=scheduled['gumbel_noise_scale']
         )
 
         output_dict['percent(MASK)'] = mask_pct
@@ -1002,6 +1036,7 @@ class DVAETrainingModule(pl.LightningModule):
              beta_kl=scheduled['beta(KL)'],
              mask_pct=mask_pct,
              residual_scaling=scheduled['residual_scaling'],
+             gumbel_noise_scale=scheduled['gumbel_noise_scale']
         )
 
         output_dict.update(scheduled)
