@@ -154,7 +154,7 @@ class LoggingCallback(pl.Callback):
             ax1.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
             ax1.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
             ax1.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-            plt.colorbar(im1 := ax1.images[0], ax=ax1)
+            plt.colorbar(im1, ax=ax1)
             ax1.set_xlabel('Position')
             ax1.set_ylabel('Codebook Index')
             ax1.set_title(f'Code Usage Distribution (EMA){suffix}')
@@ -165,7 +165,7 @@ class LoggingCallback(pl.Callback):
             ax2.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
             ax2.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
             ax2.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-            plt.colorbar(im2 := ax2.images[0], ax=ax2)
+            plt.colorbar(im2, ax=ax2)
             ax2.set_xlabel('Position')
             ax2.set_ylabel('Codebook Index')
             ax2.set_title(f'First Sample Probability Heatmap{suffix}')
@@ -176,13 +176,13 @@ class LoggingCallback(pl.Callback):
             ax3.set_xticks(np.arange(-0.5, n_cols, 1), minor=True)
             ax3.set_yticks(np.arange(-0.5, n_rows, 1), minor=True)
             ax3.grid(which='minor', color='black', linestyle='-', linewidth=0.3)
-            plt.colorbar(im3 := ax3.images[0], ax=ax3)
+            plt.colorbar(im3, ax=ax3)
             ax3.set_xlabel('Position')
             ax3.set_ylabel('Codebook Index')
             ax3.set_title(f'Last Sample Probability Heatmap{suffix}')
 
             plt.tight_layout()
-            key = f'Codebook/latent_distribution{suffix}'
+            key = f'Codebook/latent_distribution'
             output_dict[key] = combined_heatmap_fig
 
         return output_dict, updated_ema
@@ -452,8 +452,7 @@ class LoggingCallback(pl.Callback):
         for key, value in outputs.items():
             # Handle the figure separately.
             if key.startswith('Codebook/latent_distribution'):
-                if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:  # Make sure we're using WandbLogger
-                    # Only log from rank 0
+                if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:
                     log_key = f'{key}_{phase}'
                     pl_module.logger.experiment.log({
                         log_key: wandb.Image(value)
