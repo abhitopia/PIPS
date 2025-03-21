@@ -182,7 +182,7 @@ class LoggingCallback(pl.Callback):
             ax3.set_title(f'Last Sample Probability Heatmap{suffix}')
 
             plt.tight_layout()
-            key = f'Codebook/latent_distribution'
+            key = f'CodebookUsage/latent_distribution'
             output_dict[key] = combined_heatmap_fig
 
         return output_dict, updated_ema
@@ -451,7 +451,7 @@ class LoggingCallback(pl.Callback):
         """Helper method to log loss metrics."""
         for key, value in outputs.items():
             # Handle the figure separately.
-            if key.startswith('Codebook/latent_distribution'):
+            if key.startswith('CodebookUsage/latent_distribution'):
                 if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:
                     log_key = f'{key}_{phase}'
                     pl_module.logger.experiment.log({
