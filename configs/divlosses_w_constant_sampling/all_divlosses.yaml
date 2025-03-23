@@ -47,7 +47,7 @@ schedules:
     transition_steps_mask_pct: 5000
     warmup_steps_mask_pct: 0
   residual:
-    residual_scaling_start: 1.0
+    residual_scaling_start: 0.0
     residual_scaling: 0.0
     transition_steps_residual_scaling: 10000
     warmup_steps_residual_scaling: 0
