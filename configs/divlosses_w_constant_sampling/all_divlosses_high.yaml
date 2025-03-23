@@ -119,7 +119,7 @@ dataset:
   val_ds: val
 project:
   project_name: divlosses_w_constant_sampling
-  run_name: all_divlosses_v1
+  run_name: all_divlosses_high
   checkpoint_dir: runs
   model_src: null
 misc:
