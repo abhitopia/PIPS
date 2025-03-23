@@ -1,7 +1,7 @@
 
 # 23rd March 2025
 - [x] Implement 4 different loss functions (divergence sample, batch, entropy, position)
-- [ ] Implement ability to run CLI using configs
+- [x] Implement ability to run CLI using configs
 
 
 

@@ -13,7 +13,163 @@ from pips.misc.acceleration_config import AccelerationConfig
 import click
 from rich import print
 from enum import Enum
+import yaml
+import inspect
+from typing import Dict, Any, Optional
+import os
 
+
+# Helper functions for YAML configuration
+def save_config_to_yaml(config: Dict[str, Any], file_path: Path) -> None:
+    """Save configuration dictionary to a YAML file."""
+    os.makedirs(os.path.dirname(file_path), exist_ok=True)
+    with open(file_path, 'w') as f:
+        yaml.dump(config, f, default_flow_style=False, sort_keys=False)
+    print(f"Configuration saved to: {file_path}")
+
+def load_config_from_yaml(file_path: Path) -> Dict[str, Any]:
+    """Load configuration from a YAML file."""
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"Config file not found: {file_path}")
+    with open(file_path, 'r') as f:
+        config = yaml.safe_load(f)
+    return config
+
+def get_default_param_values(func) -> Dict[str, Any]:
+    """Extract default parameter values from a function."""
+    signature = inspect.signature(func)
+    defaults = {}
+    
+    for param_name, param in signature.parameters.items():
+        # Skip *args, **kwargs, and parameters without defaults
+        if param.default is not inspect.Parameter.empty and param_name != 'self':
+            # Handle Typer Option objects
+            if isinstance(param.default, typer.models.OptionInfo):
+                defaults[param_name] = param.default.default
+            else:
+                defaults[param_name] = param.default
+    
+    return defaults
+
+def get_current_config_from_func(func, **kwargs) -> Dict[str, Any]:
+    """
+    Get all configuration parameters from a function, including those with None defaults.
+    
+    Args:
+        func: The function whose parameters we want to extract
+        **kwargs: Any override values for specific parameters
+        
+    Returns:
+        A dictionary of parameter names to their values
+    """
+    # Get the signature of the function
+    signature = inspect.signature(func)
+    
+    # Extract all parameters (even those with None defaults)
+    config = {}
+    for param_name, param in signature.parameters.items():
+        # Skip self parameter if present (for methods)
+        if param_name == 'self':
+            continue
+            
+        # Skip parameters without defaults (required parameters)
+        if param.default is inspect.Parameter.empty:
+            continue
+            
+        # Handle Typer Option objects
+        if isinstance(param.default, typer.models.OptionInfo):
+            # Store the default value, even if it's None
+            config[param_name] = param.default.default
+        else:
+            # Store regular default values
+            config[param_name] = param.default
+    
+    # Update with any provided override values
+    for k, v in kwargs.items():
+        if k in config:
+            config[k] = v
+    
+    # Convert Enum values to strings and Path objects to strings
+    for k, v in list(config.items()):
+        if isinstance(v, Enum):
+            config[k] = v.value
+        elif isinstance(v, Path):
+            config[k] = str(v)
+    
+    # Verify that we have all parameters
+    func_params = set(p.name for p in signature.parameters.values() 
+                     if p.name != 'self' and p.default is not inspect.Parameter.empty)
+    config_params = set(config.keys())
+    
+    missing_params = func_params - config_params
+    if missing_params:
+        logger.warning(f"Missing parameters in configuration for {func.__name__}: {missing_params}")
+    
+    return config
+
+def apply_config_from_yaml(yaml_config: Dict[str, Any], local_vars: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Apply configuration from a YAML file to local variables.
+    
+    Args:
+        yaml_config: The loaded YAML configuration
+        local_vars: Dictionary of local variables (usually from locals())
+        
+    Returns:
+        Updated dictionary of local variables
+    """
+    # Create a copy of local_vars to update
+    updated_vars = local_vars.copy()
+    
+    # Helper function to update variables from nested config
+    def update_from_nested_config(config_dict, prefix=""):
+        for key, value in config_dict.items():
+            if isinstance(value, dict):
+                # Recursively process nested dictionaries
+                update_from_nested_config(value, f"{prefix}{key}_")
+            else:
+                # Determine the param name based on the section and key
+                param_name = f"{prefix}{key}"
+                
+                # Only update if param exists in locals and is not None in config
+                if param_name in updated_vars and value is not None:
+                    # Special handling for run_name - only override if not explicitly set on CLI
+                    if param_name == "run_name" and updated_vars["run_name"] is not None:
+                        continue
+                        
+                    # Skip if it's a flag that was explicitly set via CLI
+                    if isinstance(value, bool):
+                        bool_flags = ["skip_codebook", "normalise_kq", "tc_relu", "debug", 
+                                      "compile_model", "lr_find", "wandb_logging", 
+                                      "use_exp_relaxed", "use_monte_carlo_kld", "permute_train"]
+                        
+                        if param_name in bool_flags:
+                            # Check if this was explicitly set on CLI
+                            original_value = updated_vars[param_name]
+                            default_value = get_default_param_values(new).get(param_name)
+                            
+                            # If the original value is not the default, it was set on CLI
+                            if original_value != default_value:
+                                continue
+                    
+                    # Update the variable
+                    updated_vars[param_name] = value
+    
+    # Process all sections
+    for section, content in yaml_config.items():
+        if isinstance(content, dict):
+            # For nested sections like 'model', 'training', etc.
+            update_from_nested_config(content)
+        else:
+            # For top-level keys
+            if section in updated_vars:
+                # Special handling for run_name
+                if section == "run_name" and updated_vars["run_name"] is not None:
+                    continue
+                    
+                updated_vars[section] = content
+    
+    return updated_vars
 
 # Initialize logger
 logging.basicConfig(
@@ -93,8 +249,102 @@ def get_common_options():
 
     }
 
+# Add export-config command
+@dvae_app.command("export-config")
+def export_config(
+    output_path: Path = typer.Argument(..., help="Path to save the config YAML file"),
+    # Include any parameters you want to customize for the export
+    model_src: Optional[str] = get_common_options()["model_src_option"],
+    run_name: Optional[str] = typer.Option(None, "--name", "-n", help="Run name to include in the config"),
+):
+    """Export the default configuration to a YAML file that can be later used with --config option."""
+    # Get default configuration from the new command
+    config = get_current_config_from_func(new)
+    
+    # Update with any values provided to this command
+    if model_src is not None:
+        config["model_src"] = model_src
+    if run_name is not None:
+        config["run_name"] = run_name
+        
+    # Organize into sections for better readability
+    organized_config = {
+        "model": {k: v for k, v in config.items() if k in [
+            "n_dim", "n_head", "n_grid_layer", "n_latent_layer", "n_codes", "codebook_size",
+            "dropout", "gamma", "pad_weight", "use_exp_relaxed", "use_monte_carlo_kld",
+            "init_mode", "skip_codebook", "normalise_kq"
+        ]},
+        "training": {k: v for k, v in config.items() if k in [
+            "batch_size", "weight_decay", "max_steps",
+            "gradient_clip_val", "accumulate_grad_batches", "seed", "permute_train",
+            "limit_training_samples", "lr_find"
+        ]},
+        "schedules": {
+            "types": {k: v for k, v in config.items() if k.endswith("_schedule_type")},
+            "lr": {k: v for k, v in config.items() if k in [
+                "learning_rate", "lr_min", "warmup_steps_lr", "decay_steps_lr"
+            ]},
+            "tau": {k: v for k, v in config.items() if k.startswith("tau_") or k == "tau" or k.startswith("warmup_steps_tau") or k.startswith("transition_steps_tau")},
+            "mask": {k: v for k, v in config.items() if k.startswith("mask_pct") or k == "max_mask_pct" or k.startswith("warmup_steps_mask") or k.startswith("transition_steps_mask")},
+            "residual": {k: v for k, v in config.items() if k.startswith("residual_scaling") or k.startswith("warmup_steps_residual") or k.startswith("transition_steps_residual")},
+            "gumbel": {k: v for k, v in config.items() if k.startswith("gumbel_noise") or k.startswith("warmup_steps_gumbel") or k.startswith("transition_steps_gumbel")},
+        },
+        "loss_weights": {
+            "ce": {k: v for k, v in config.items() if k.startswith("beta_ce") or k.startswith("warmup_steps_beta_ce") or k.startswith("transition_steps_beta_ce")},
+            "kl": {k: v for k, v in config.items() if k.startswith("beta_kl") or k.startswith("warmup_steps_beta_kl") or k.startswith("transition_steps_beta_kl")},
+            "mi": {k: v for k, v in config.items() if k.startswith("beta_mi") or k.startswith("warmup_steps_beta_mi") or k.startswith("transition_steps_beta_mi")},
+            "tc": {k: v for k, v in config.items() if k.startswith("beta_tc") or k.startswith("warmup_steps_beta_tc") or k.startswith("transition_steps_beta_tc") or k == "tc_relu"},
+            "dwkl": {k: v for k, v in config.items() if k.startswith("beta_dwkl") or k.startswith("warmup_steps_beta_dwkl") or k.startswith("transition_steps_beta_dwkl")},
+            "diversity": {
+                "entropy": {k: v for k, v in config.items() if k.startswith("beta_diversity_entropy") or k.startswith("warmup_steps_beta_diversity_entropy") or k.startswith("transition_steps_beta_diversity_entropy")},
+                "sample": {k: v for k, v in config.items() if k.startswith("beta_diversity_sample") or k.startswith("warmup_steps_beta_diversity_sample") or k.startswith("transition_steps_beta_diversity_sample")},
+                "position": {k: v for k, v in config.items() if k.startswith("beta_diversity_position") or k.startswith("warmup_steps_beta_diversity_position") or k.startswith("transition_steps_beta_diversity_position")},
+                "usage": {k: v for k, v in config.items() if k.startswith("beta_diversity_usage") or k.startswith("warmup_steps_beta_diversity_usage") or k.startswith("transition_steps_beta_diversity_usage")},
+            }
+        },
+        "logging": {k: v for k, v in config.items() if k in [
+            "viz_interval", "val_check_interval", "debug", "wandb_logging"
+        ]},
+        "acceleration": {k: v for k, v in config.items() if k in [
+            "matmul_precision", "precision", "compile_model", "device"
+        ]},
+        "dataset": {k: v for k, v in config.items() if k in [
+            "train_ds", "val_ds"
+        ]},
+        "project": {k: v for k, v in config.items() if k in [
+            "project_name", "checkpoint_dir", "model_src", "run_name"
+        ]},
+    }
+    
+    # Check if we're missing any parameters in our organized config
+    all_organized_keys = set()
+    
+    def collect_keys(config_dict):
+        keys = set()
+        for k, v in config_dict.items():
+            if isinstance(v, dict):
+                keys.update(collect_keys(v))
+            else:
+                keys.add(k)
+        return keys
+    
+    all_organized_keys = collect_keys(organized_config)
+    all_config_keys = set(config.keys())
+    
+    missing_keys = all_config_keys - all_organized_keys
+    if missing_keys:
+        # Add a 'misc' section for any parameters not captured in other sections
+        organized_config["misc"] = {k: config[k] for k in missing_keys}
+        logger.info(f"Added {len(missing_keys)} parameters to 'misc' section: {', '.join(missing_keys)}")
+    
+    # Save to file
+    save_config_to_yaml(organized_config, output_path)
+
 @dvae_app.command("train")
 def new(
+    # Add config file option
+    config_file: Optional[Path] = typer.Option(None, "--config", "-c", help="Path to YAML configuration file"),
+    
     # Project tracking
     project_name: str = get_common_options()["project_name"],
     run_name: str = typer.Option(None, "--name", "-n", help="Run name (generated if not specified)"),
@@ -243,6 +493,16 @@ def new(
     lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
+    # If config file is provided, load settings from it
+    if config_file is not None:
+        logger.info(f"Loading configuration from {config_file}")
+        yaml_config = load_config_from_yaml(config_file)
+        
+        # Apply config to local variables
+        updated_vars = apply_config_from_yaml(yaml_config, locals())
+        
+        # Update all local variables from the modified dictionary
+        locals().update(updated_vars)
 
     # Append debug suffix to project name if in debug mode
     project_name = f"{project_name}-debug" if debug else project_name
@@ -255,9 +515,10 @@ def new(
         compile_model=compile_model
     )
 
-    run_name = generate_friendly_name() if run_name is None else run_name
+    # Generate run name if not provided
+    if run_name is None:
+        run_name = generate_friendly_name()
 
-    
     # Create GridDVAEConfig
     model_config = GridDVAEConfig(
         n_dim=n_dim,
