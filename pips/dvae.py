@@ -1044,44 +1044,7 @@ class GridDVAE(nn.Module):
         return x
     
 
-    def compute_codebook_losses(self, log_alpha: Tensor) -> Tuple[Tensor, Tensor]:
-        """
-        Efficiently compute codebook-related losses with a single softmax computation.
-        
-        Args:
-            log_alpha (Tensor): Logits for the latent distribution, shape [B, N, C]
-                where B is batch size, N is number of codes, C is codebook size.                
-        Returns:
-            Tuple[Tensor, Tensor]: Tuple containing (entropy_loss, diversity_loss).
-                entropy_loss: Low values indicate deterministic distributions.
-                diversity_loss: Low values indicate high diversity across the batch.
-        """
 
-        # Compute log probabilities using log_softmax
-        log_probs = F.log_softmax(log_alpha, dim=-1)
-    
-        # Get probabilities by exponentiating log probabilities
-        probs = torch.exp(log_probs)
-    
-         # Compute entropy: -sum(p * log(p))
-        entropy_per_sample = -torch.sum(probs * log_probs, dim=-1)  # [B, N]
-       
-        entropy_loss = entropy_per_sample.mean()
-
-        # Average usage of each codebook entry across the batch
-        # This gives us the average probability of each codebook entry for each code position
-        batch_avg_probs = probs.mean(dim=0)  # [N, codebook_size]
-    
-        # Compute entropy of the batch-averaged distribution
-        # High entropy means different samples use different codebook entries
-        # Low entropy means all samples use the same codebook entries
-        log_batch_avg_probs = torch.log2(batch_avg_probs + 1e-10)
-        batch_entropy = -torch.sum(batch_avg_probs * log_batch_avg_probs, dim=-1)  # [N]
-    
-        # We want to maximize this entropy, so we negate it for minimization
-        diversity_loss = -batch_entropy  # [N]
-        
-        return entropy_loss, diversity_loss.mean()
 
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, tau: Tensor = torch.tensor(1.0), mask_percentage: Tensor = torch.tensor(0.0), residual_scaling: Tensor = torch.tensor(0.0), gumbel_noise_scale: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
@@ -1100,7 +1063,7 @@ class GridDVAE(nn.Module):
             kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha_tau, q_z_marg, reduction='mean')
     
         # Calculate codebook-related losses efficiently
-        entropy_loss, diversity_loss = self.compute_codebook_losses(log_alpha_tau)
+        diversity_losses = self.compute_diversity_losses(log_alpha_tau)
 
         if self.skip_codebook:
             decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
@@ -1111,8 +1074,7 @@ class GridDVAE(nn.Module):
     
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
-             "entropy_loss": entropy_loss,  # Entropy loss (low = deterministic codes)
-             "diversity_loss": diversity_loss,  # Diversity loss (low = different samples use different codes)
+             **diversity_losses,  # Include all diversity losses
              **kld_losses.to_dict()
         }
         return decoded_logits, log_alpha_tau, losses, q_z_marg_updated
@@ -1167,6 +1129,64 @@ class GridDVAE(nn.Module):
         
         normalized_loss = total_loss / total_weight
         return normalized_loss
+    
+
+    def compute_diversity_losses(self, log_alpha_tau: torch.Tensor):
+        """
+        Computes diversity losses from log_alpha.
+        
+        Returns a dictionary with:
+        - diversity_entropy: average per-token entropy (we want this low)
+        - diversity_sample: negative entropy of aggregated per-sample distribution
+        - diversity_position: negative entropy of aggregated per-position distribution
+        - diversity_usage: KL divergence between overall codebook usage and uniform distribution
+        """
+        # Use a single small epsilon value for numerical stability
+        epsilon = 1e-10
+        
+        # Compute log probabilities and probabilities in one go
+        log_p = F.log_softmax(log_alpha_tau, dim=-1)
+        p = torch.exp(log_p)
+
+        # Entropy Loss: average per-token entropy.
+        # We can use the log_p we already computed
+        token_entropy = -(p * log_p).sum(dim=-1)  # [B, N]
+        diversity_entropy = token_entropy.mean()  # Positive; lower is better.
+
+        # Sample Loss: aggregated distribution per sample (average over tokens).
+        q = p.mean(dim=1)  # [B, C]
+        log_q = torch.log(q + epsilon)
+        H_q = -(q * log_q).sum(dim=-1)  # [B]
+        diversity_sample = -H_q.mean()  # Negative; minimizing encourages higher entropy.
+
+        # Position Loss: aggregated distribution per token position (average over batch).
+        r = p.mean(dim=0)  # [N, C]
+        log_r = torch.log(r + epsilon)
+        H_r = -(r * log_r).sum(dim=-1)  # [N]
+        diversity_position = -H_r.mean()  # Negative; minimizing encourages higher entropy.
+
+        # Usage Loss: measures if all codebook entries are being utilized equally
+        # First, compute the aggregated usage by summing over batch and position dimensions
+        # This gives us the total "usage count" for each codebook entry
+        codebook_usage = p.sum(dim=(0, 1))  # [C]
+        
+        # Normalize to get a proper probability distribution
+        codebook_usage = codebook_usage / codebook_usage.sum()
+        
+        # Compute KL divergence with uniform distribution
+        # KL(usage||uniform) = Σ(usage_i * log(usage_i / (1/C)))
+        log_codebook_size = math.log(self.config.codebook_size)
+        
+        # Simplified computation using properties of logarithms
+        usage_log_usage = codebook_usage * torch.log(codebook_usage + epsilon)
+        diversity_usage = usage_log_usage.sum() + log_codebook_size
+        
+        return {
+            "diversity_entropy": diversity_entropy, 
+            "diversity_sample": diversity_sample, 
+            "diversity_position": diversity_position, 
+            "diversity_usage": diversity_usage
+        }
 
 
 #%%

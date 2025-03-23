@@ -1,4 +1,9 @@
 
+# 23rd March 2025
+- [x] Implement 4 different loss functions (divergence sample, batch, entropy, position)
+- [ ] Implement ability to run CLI using configs
+
+
 
 ## Training
 - [x] Implement KLD Loss

@@ -534,11 +534,30 @@ class ExperimentConfig:
     transition_steps_beta_entropy: int = 10_000
     warmup_steps_beta_entropy: int = 0
     
-    # Diversity regularization parameters
-    beta_diversity_start: float = 0.0
-    beta_diversity: float = 0.0
-    transition_steps_beta_diversity: int = 10_000
-    warmup_steps_beta_diversity: int = 0
+    # Diversity regularization parameters (separate for each diversity component)
+    # Entropy diversity parameters
+    beta_diversity_entropy_start: float = 0.0
+    beta_diversity_entropy: float = 0.0  
+    transition_steps_beta_diversity_entropy: int = 10_000
+    warmup_steps_beta_diversity_entropy: int = 0
+    
+    # Sample diversity parameters
+    beta_diversity_sample_start: float = 0.0
+    beta_diversity_sample: float = 0.0
+    transition_steps_beta_diversity_sample: int = 10_000
+    warmup_steps_beta_diversity_sample: int = 0
+    
+    # Position diversity parameters
+    beta_diversity_position_start: float = 0.0
+    beta_diversity_position: float = 0.0
+    transition_steps_beta_diversity_position: int = 10_000
+    warmup_steps_beta_diversity_position: int = 0
+    
+    # Usage diversity parameters
+    beta_diversity_usage_start: float = 0.0
+    beta_diversity_usage: float = 0.0
+    transition_steps_beta_diversity_usage: int = 10_000
+    warmup_steps_beta_diversity_usage: int = 0
     
     # Mutual Information (MI) parameters
     beta_mi_start: float = 0.0
@@ -626,15 +645,30 @@ class ExperimentConfig:
         remaining_steps = self.max_steps - self.warmup_steps_beta_ce
         self.transition_steps_beta_ce = min(self.transition_steps_beta_ce, remaining_steps)
         
-        # For entropy parameters
-        self.warmup_steps_beta_entropy = min(self.warmup_steps_beta_entropy, self.max_steps)
-        remaining_steps = self.max_steps - self.warmup_steps_beta_entropy
-        self.transition_steps_beta_entropy = min(self.transition_steps_beta_entropy, remaining_steps)
+        # For Diversity Entropy parameters
+        self.warmup_steps_beta_diversity_entropy = min(self.warmup_steps_beta_diversity_entropy, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity_entropy
+        self.transition_steps_beta_diversity_entropy = min(self.transition_steps_beta_diversity_entropy, remaining_steps)
+
+        # For Diversity Sample parameters
+        self.warmup_steps_beta_diversity_sample = min(self.warmup_steps_beta_diversity_sample, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity_sample
+        self.transition_steps_beta_diversity_sample = min(self.transition_steps_beta_diversity_sample, remaining_steps)
+
+        # For Diversity Position parameters
+        self.warmup_steps_beta_diversity_position = min(self.warmup_steps_beta_diversity_position, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity_position
+        self.transition_steps_beta_diversity_position = min(self.transition_steps_beta_diversity_position, remaining_steps)
+
+        # For Diversity Usage parameters
+        self.warmup_steps_beta_diversity_usage = min(self.warmup_steps_beta_diversity_usage, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity_usage
+        self.transition_steps_beta_diversity_usage = min(self.transition_steps_beta_diversity_usage, remaining_steps)
         
         # For diversity parameters
-        self.warmup_steps_beta_diversity = min(self.warmup_steps_beta_diversity, self.max_steps)
-        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity
-        self.transition_steps_beta_diversity = min(self.transition_steps_beta_diversity, remaining_steps)
+        self.warmup_steps_beta_diversity_entropy = min(self.warmup_steps_beta_diversity_entropy, self.max_steps)
+        remaining_steps = self.max_steps - self.warmup_steps_beta_diversity_entropy
+        self.transition_steps_beta_diversity_entropy = min(self.transition_steps_beta_diversity_entropy, remaining_steps)
         
         # For MI parameters
         self.warmup_steps_beta_mi = min(self.warmup_steps_beta_mi, self.max_steps)
@@ -823,19 +857,36 @@ class DVAETrainingModule(pl.LightningModule):
             schedule_type=cfg.beta_schedule_type
         )
 
-        beta_entropy_schedule = Schedule.get_schedule(
-            initial_value=cfg.beta_entropy_start,
-            target_value=cfg.beta_entropy,
-            transition_steps=cfg.transition_steps_beta_entropy,
-            warmup_steps=cfg.warmup_steps_beta_entropy,
+        # Separate diversity component schedules
+        beta_diversity_entropy_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_diversity_entropy_start,
+            target_value=cfg.beta_diversity_entropy,
+            transition_steps=cfg.transition_steps_beta_diversity_entropy,
+            warmup_steps=cfg.warmup_steps_beta_diversity_entropy,
             schedule_type=cfg.beta_schedule_type
         )
-
-        beta_diversity_schedule = Schedule.get_schedule(
-            initial_value=cfg.beta_diversity_start,
-            target_value=cfg.beta_diversity,
-            transition_steps=cfg.transition_steps_beta_diversity,
-            warmup_steps=cfg.warmup_steps_beta_diversity,
+        
+        beta_diversity_sample_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_diversity_sample_start,
+            target_value=cfg.beta_diversity_sample,
+            transition_steps=cfg.transition_steps_beta_diversity_sample,
+            warmup_steps=cfg.warmup_steps_beta_diversity_sample,
+            schedule_type=cfg.beta_schedule_type
+        )
+        
+        beta_diversity_position_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_diversity_position_start,
+            target_value=cfg.beta_diversity_position,
+            transition_steps=cfg.transition_steps_beta_diversity_position,
+            warmup_steps=cfg.warmup_steps_beta_diversity_position,
+            schedule_type=cfg.beta_schedule_type
+        )
+        
+        beta_diversity_usage_schedule = Schedule.get_schedule(
+            initial_value=cfg.beta_diversity_usage_start,
+            target_value=cfg.beta_diversity_usage,
+            transition_steps=cfg.transition_steps_beta_diversity_usage,
+            warmup_steps=cfg.warmup_steps_beta_diversity_usage,
             schedule_type=cfg.beta_schedule_type
         )
         
@@ -883,8 +934,10 @@ class DVAETrainingModule(pl.LightningModule):
         return {
             'tau': torch.tensor(tau_schedule(step), device=device, dtype=torch.float32),
             'beta(CE)': torch.tensor(beta_ce_schedule(step), device=device, dtype=torch.float32),
-            'beta(Entropy)': torch.tensor(beta_entropy_schedule(step), device=device, dtype=torch.float32),
-            'beta(Diversity)': torch.tensor(beta_diversity_schedule(step), device=device, dtype=torch.float32),
+            'beta(DivEntropy)': torch.tensor(beta_diversity_entropy_schedule(step), device=device, dtype=torch.float32),
+            'beta(DivSample)': torch.tensor(beta_diversity_sample_schedule(step), device=device, dtype=torch.float32),
+            'beta(DivPosition)': torch.tensor(beta_diversity_position_schedule(step), device=device, dtype=torch.float32),
+            'beta(DivUsage)': torch.tensor(beta_diversity_usage_schedule(step), device=device, dtype=torch.float32),
             'beta(MI)': torch.tensor(beta_mi_schedule(step), device=device, dtype=torch.float32),
             'beta(TC)': torch.tensor(beta_tc_schedule(step), device=device, dtype=torch.float32),
             'beta(DWKL)': torch.tensor(beta_dwkl_schedule(step), device=device, dtype=torch.float32),
@@ -897,8 +950,10 @@ class DVAETrainingModule(pl.LightningModule):
     def forward(self, x: Tensor, q_z_marg: Optional[Tensor] = None, 
                 tau: Tensor = torch.tensor(1.0), 
                 beta_ce: Tensor = torch.tensor(1.0), 
-                beta_entropy: Tensor = torch.tensor(0.0), 
-                beta_diversity: Tensor = torch.tensor(0.0),
+                beta_diversity_entropy: Tensor = torch.tensor(0.0),
+                beta_diversity_sample: Tensor = torch.tensor(0.0),
+                beta_diversity_position: Tensor = torch.tensor(0.0),
+                beta_diversity_usage: Tensor = torch.tensor(0.0),
                 beta_mi: Tensor = torch.tensor(0.0), 
                 beta_dwkl: Tensor = torch.tensor(0.0), 
                 beta_tc: Tensor = torch.tensor(0.0), 
@@ -940,8 +995,10 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(DWKL)': losses['dwkl_loss'],
             'loss(TC)': maybe_relu(losses['tc_loss']),
             'loss(KL)': losses['kl_loss'],
-            'loss(Entropy)': losses['entropy_loss'],
-            'loss(Diversity)': losses['diversity_loss']
+            'loss(DivEntropy)': losses['diversity_entropy'],
+            'loss(DivSample)': losses['diversity_sample'],
+            'loss(DivPosition)': losses['diversity_position'],
+            'loss(DivUsage)': losses['diversity_usage']
         }
         
         # Compute weighted losses for total loss.
@@ -951,8 +1008,10 @@ class DVAETrainingModule(pl.LightningModule):
             'loss(DWKL)': raw_losses['loss(DWKL)'] * beta_dwkl,
             'loss(TC)': raw_losses['loss(TC)'] * beta_tc,
             'loss(KL)': raw_losses['loss(KL)'] * beta_kl,
-            'loss(Entropy)': raw_losses['loss(Entropy)'] * beta_entropy,
-            'loss(Diversity)': raw_losses['loss(Diversity)'] * beta_diversity
+            'loss(DivEntropy)': raw_losses['loss(DivEntropy)'] * beta_diversity_entropy,
+            'loss(DivSample)': raw_losses['loss(DivSample)'] * beta_diversity_sample,
+            'loss(DivPosition)': raw_losses['loss(DivPosition)'] * beta_diversity_position,
+            'loss(DivUsage)': raw_losses['loss(DivUsage)'] * beta_diversity_usage
         }
         
         total_loss = sum(weighted_losses.values())
@@ -989,8 +1048,10 @@ class DVAETrainingModule(pl.LightningModule):
              tc_relu=self.experiment_config.tc_relu,
              tau=scheduled['tau'],
              beta_ce=scheduled['beta(CE)'],
-             beta_entropy=scheduled['beta(Entropy)'],
-             beta_diversity=scheduled['beta(Diversity)'],
+             beta_diversity_entropy=scheduled['beta(DivEntropy)'],
+             beta_diversity_sample=scheduled['beta(DivSample)'],
+             beta_diversity_position=scheduled['beta(DivPosition)'],
+             beta_diversity_usage=scheduled['beta(DivUsage)'],
              beta_mi=scheduled['beta(MI)'],
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],
@@ -1027,8 +1088,10 @@ class DVAETrainingModule(pl.LightningModule):
              tc_relu=self.experiment_config.tc_relu,
              tau=scheduled['tau'],
              beta_ce=scheduled['beta(CE)'],
-             beta_entropy=scheduled['beta(Entropy)'],
-             beta_diversity=scheduled['beta(Diversity)'],
+             beta_diversity_entropy=scheduled['beta(DivEntropy)'],
+             beta_diversity_sample=scheduled['beta(DivSample)'],
+             beta_diversity_position=scheduled['beta(DivPosition)'],
+             beta_diversity_usage=scheduled['beta(DivUsage)'],
              beta_mi=scheduled['beta(MI)'],
              beta_dwkl=scheduled['beta(DWKL)'],
              beta_tc=scheduled['beta(TC)'],

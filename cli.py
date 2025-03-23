@@ -168,19 +168,31 @@ def new(
     beta_ce: float = typer.Option(1.0, "--beta-ce", "-bce", help="Target beta for cross-entropy loss"),
     transition_steps_beta_ce: int = typer.Option(10_000, "--transition-steps-ce", "-tsce", help="Steps to transition beta CE from initial to target value"),
     warmup_steps_beta_ce: int = typer.Option(0, "--warmup-steps-ce", "-wsce", help="Steps to wait before starting beta CE transition"),
-    
-    # Beta values and schedules for Entropy
-    beta_entropy_start: float = typer.Option(0.0, "--beta-entropy-start", "-bes", help="Starting beta for entropy loss"),
-    beta_entropy: float = typer.Option(0.0, "--beta-entropy", "-be", help="Target beta for entropy loss"),
-    transition_steps_beta_entropy: int = typer.Option(10_000, "--transition-steps-entropy", "-tse", help="Steps to transition beta entropy from initial to target value"),
-    warmup_steps_beta_entropy: int = typer.Option(0, "--warmup-steps-entropy", "-wse", help="Steps to wait before starting beta entropy transition"),
-    
-    # Beta values and schedules for Diversity
-    beta_diversity_start: float = typer.Option(0.0, "--beta-diversity-start", "-bds", help="Starting beta for diversity loss"),
-    beta_diversity: float = typer.Option(0.0, "--beta-diversity", "-bd", help="Target beta for diversity loss"),
-    transition_steps_beta_diversity: int = typer.Option(10_000, "--transition-steps-diversity", "-tsd", help="Steps to transition beta diversity from initial to target value"),
-    warmup_steps_beta_diversity: int = typer.Option(0, "--warmup-steps-diversity", "-wsd", help="Steps to wait before starting beta diversity transition"),
-    
+   
+    # beta div entropy
+    beta_diversity_entropy_start: float = typer.Option(0.0, "--beta-div-entropy-start", "-bdes", help="Starting beta for diversity entropy loss"),
+    beta_diversity_entropy: float = typer.Option(0.0, "--beta-div-entropy", "-bde", help="Target beta for diversity entropy loss"),
+    transition_steps_beta_diversity_entropy: int = typer.Option(10_000, "--transition-steps-div-entropy", "-tsde", help="Steps to transition beta diversity entropy from initial to target value"),
+    warmup_steps_beta_diversity_entropy: int = typer.Option(0, "--warmup-steps-div-entropy", "-wsde", help="Steps to wait before starting beta diversity entropy transition"),
+
+    # beta div sample
+    beta_diversity_sample_start: float = typer.Option(0.0, "--beta-div-sample-start", "-bds", help="Starting beta for diversity sample loss"),
+    beta_diversity_sample: float = typer.Option(0.0, "--beta-div-sample", "-bds", help="Target beta for diversity sample loss"),
+    transition_steps_beta_diversity_sample: int = typer.Option(10_000, "--transition-steps-div-sample", "-tsds", help="Steps to transition beta diversity sample from initial to target value"),
+    warmup_steps_beta_diversity_sample: int = typer.Option(0, "--warmup-steps-div-sample", "-wsds", help="Steps to wait before starting beta diversity sample transition"),
+
+    # beta div position
+    beta_diversity_position_start: float = typer.Option(0.0, "--beta-div-position-start", "-bdp", help="Starting beta for diversity position loss"),
+    beta_diversity_position: float = typer.Option(0.0, "--beta-div-position", "-bdp", help="Target beta for diversity position loss"),
+    transition_steps_beta_diversity_position: int = typer.Option(10_000, "--transition-steps-div-position", "-tsdp", help="Steps to transition beta diversity position from initial to target value"),
+    warmup_steps_beta_diversity_position: int = typer.Option(0, "--warmup-steps-div-position", "-wsdp", help="Steps to wait before starting beta diversity position transition"),
+
+    # beta div usage
+    beta_diversity_usage_start: float = typer.Option(0.0, "--beta-div-usage-start", "-bdu", help="Starting beta for diversity usage loss"),
+    beta_diversity_usage: float = typer.Option(0.0, "--beta-div-usage", "-bdu", help="Target beta for diversity usage loss"),
+    transition_steps_beta_diversity_usage: int = typer.Option(10_000, "--transition-steps-div-usage", "-tsdu", help="Steps to transition beta diversity usage from initial to target value"),
+    warmup_steps_beta_diversity_usage: int = typer.Option(0, "--warmup-steps-div-usage", "-wsdu", help="Steps to wait before starting beta diversity usage transition"),    
+
     # Beta values and schedules for KL Divergence
     beta_kl_start: float = typer.Option(0.0, "--beta-kl-start", "-bks", help="Starting beta for KL loss"),
     beta_kl: float = typer.Option(0.0, "--beta-kl", "-bk", help="Target beta for KL loss"),
@@ -271,28 +283,86 @@ def new(
     experiment_config = ExperimentConfig(
         model_config=model_config,
         seed=seed,
+
+        # Tau
         tau_start=tau_start,
         tau=tau,
+        transition_steps_tau=transition_steps_tau,
+        warmup_steps_tau=warmup_steps_tau,
+
+        # CE
         beta_ce_start=beta_ce_start,
         beta_ce=beta_ce,
-        beta_entropy_start=beta_entropy_start,
-        beta_entropy=beta_entropy,
-        beta_diversity_start=beta_diversity_start,
-        beta_diversity=beta_diversity,
-        beta_mi_start=beta_mi_start,
-        beta_mi=beta_mi,
-        beta_tc_start=beta_tc_start,
-        beta_tc=beta_tc,
-        beta_dwkl_start=beta_dwkl_start,
-        beta_dwkl=beta_dwkl,
+        transition_steps_beta_ce=transition_steps_beta_ce,
+        warmup_steps_beta_ce=warmup_steps_beta_ce,
+
+        # Diversity Losses
+        ## Entropy
+        beta_diversity_entropy_start=beta_diversity_entropy_start,
+        beta_diversity_entropy=beta_diversity_entropy,
+        transition_steps_beta_diversity_entropy=transition_steps_beta_diversity_entropy,
+        warmup_steps_beta_diversity_entropy=warmup_steps_beta_diversity_entropy,
+
+        ## Sample
+        beta_diversity_sample_start=beta_diversity_sample_start,
+        beta_diversity_sample=beta_diversity_sample,
+        transition_steps_beta_diversity_sample=transition_steps_beta_diversity_sample,
+        warmup_steps_beta_diversity_sample=warmup_steps_beta_diversity_sample,
+        
+        ## Position
+        beta_diversity_position_start=beta_diversity_position_start,
+        beta_diversity_position=beta_diversity_position,
+        transition_steps_beta_diversity_position=transition_steps_beta_diversity_position,
+        warmup_steps_beta_diversity_position=warmup_steps_beta_diversity_position,
+
+        ## Usage
+        beta_diversity_usage_start=beta_diversity_usage_start,
+        beta_diversity_usage=beta_diversity_usage,
+        transition_steps_beta_diversity_usage=transition_steps_beta_diversity_usage,
+        warmup_steps_beta_diversity_usage=warmup_steps_beta_diversity_usage,
+
+        # KL Losses
+        ## KL
         beta_kl_start=beta_kl_start,
         beta_kl=beta_kl,
+        transition_steps_beta_kl=transition_steps_beta_kl,
+        warmup_steps_beta_kl=warmup_steps_beta_kl,
+
+        ## MI
+        beta_mi_start=beta_mi_start,
+        beta_mi=beta_mi,
+        transition_steps_beta_mi=transition_steps_beta_mi,
+        warmup_steps_beta_mi=warmup_steps_beta_mi,
+
+        ## TC
+        beta_tc_start=beta_tc_start,
+        beta_tc=beta_tc,
+        transition_steps_beta_tc=transition_steps_beta_tc,
+        warmup_steps_beta_tc=warmup_steps_beta_tc,
+
+        ## DWKL
+        beta_dwkl_start=beta_dwkl_start,
+        beta_dwkl=beta_dwkl,
+        transition_steps_beta_dwkl=transition_steps_beta_dwkl,
+        warmup_steps_beta_dwkl=warmup_steps_beta_dwkl,
+
+        # Mask
         mask_pct_start=mask_pct_start,
         max_mask_pct=max_mask_pct,
+        transition_steps_mask_pct=transition_steps_mask_pct,
+        warmup_steps_mask_pct=warmup_steps_mask_pct,
+
+        # Residual scaling
         residual_scaling_start=residual_scaling_start,
         residual_scaling=residual_scaling,
+        transition_steps_residual_scaling=transition_steps_residual_scaling,
+        warmup_steps_residual_scaling=warmup_steps_residual_scaling,
+
+        # Gumbel noise scale
         gumbel_noise_scale_start=gumbel_noise_scale_start,
         gumbel_noise_scale=gumbel_noise_scale,
+        transition_steps_gumbel_noise_scale=transition_steps_gumbel_noise_scale,
+        warmup_steps_gumbel_noise_scale=warmup_steps_gumbel_noise_scale,
         
         # Schedule parameters
         tau_schedule_type=tau_schedule_type,
@@ -302,35 +372,13 @@ def new(
         gumbel_noise_scale_schedule_type=gumbel_noise_scale_schedule_type,
         
         # Schedule timing parameters
+        learning_rate=learning_rate,
+        lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         warmup_steps_lr=warmup_steps_lr,
         decay_steps_lr=decay_steps_lr,
-        transition_steps_tau=transition_steps_tau,
-        warmup_steps_tau=warmup_steps_tau,
-        transition_steps_beta_ce=transition_steps_beta_ce,
-        warmup_steps_beta_ce=warmup_steps_beta_ce,
-        transition_steps_beta_entropy=transition_steps_beta_entropy,
-        warmup_steps_beta_entropy=warmup_steps_beta_entropy,
-        transition_steps_beta_diversity=transition_steps_beta_diversity,
-        warmup_steps_beta_diversity=warmup_steps_beta_diversity,
-        transition_steps_beta_mi=transition_steps_beta_mi,
-        warmup_steps_beta_mi=warmup_steps_beta_mi,
-        transition_steps_beta_tc=transition_steps_beta_tc,
-        warmup_steps_beta_tc=warmup_steps_beta_tc,
-        transition_steps_beta_dwkl=transition_steps_beta_dwkl,
-        warmup_steps_beta_dwkl=warmup_steps_beta_dwkl,
-        transition_steps_beta_kl=transition_steps_beta_kl,
-        warmup_steps_beta_kl=warmup_steps_beta_kl,
-        transition_steps_mask_pct=transition_steps_mask_pct,
-        warmup_steps_mask_pct=warmup_steps_mask_pct,
-        transition_steps_residual_scaling=transition_steps_residual_scaling,
-        warmup_steps_residual_scaling=warmup_steps_residual_scaling,
-        transition_steps_gumbel_noise_scale=transition_steps_gumbel_noise_scale,
-        warmup_steps_gumbel_noise_scale=warmup_steps_gumbel_noise_scale,
 
         # Training parameters
         batch_size=batch_size,
-        learning_rate=learning_rate,
-        lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
         weight_decay=weight_decay,
         max_steps=max_steps,
         gradient_clip_val=gradient_clip_val,
