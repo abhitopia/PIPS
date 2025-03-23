@@ -121,53 +121,101 @@ def apply_config_from_yaml(yaml_config: Dict[str, Any], local_vars: Dict[str, An
     # Create a copy of local_vars to update
     updated_vars = local_vars.copy()
     
-    # Helper function to update variables from nested config
-    def update_from_nested_config(config_dict, prefix=""):
-        for key, value in config_dict.items():
-            if isinstance(value, dict):
-                # Recursively process nested dictionaries
-                update_from_nested_config(value, f"{prefix}{key}_")
-            else:
-                # Determine the param name based on the section and key
-                param_name = f"{prefix}{key}"
-                
-                # Only update if param exists in locals and is not None in config
-                if param_name in updated_vars and value is not None:
-                    # Special handling for run_name - only override if not explicitly set on CLI
-                    if param_name == "run_name" and updated_vars["run_name"] is not None:
-                        continue
-                        
-                    # Skip if it's a flag that was explicitly set via CLI
-                    if isinstance(value, bool):
-                        bool_flags = ["skip_codebook", "normalise_kq", "tc_relu", "debug", 
-                                      "compile_model", "lr_find", "wandb_logging", 
-                                      "use_exp_relaxed", "use_monte_carlo_kld", "permute_train"]
-                        
-                        if param_name in bool_flags:
-                            # Check if this was explicitly set on CLI
-                            original_value = updated_vars[param_name]
-                            default_value = get_default_param_values(new).get(param_name)
-                            
-                            # If the original value is not the default, it was set on CLI
-                            if original_value != default_value:
-                                continue
-                    
-                    # Update the variable
-                    updated_vars[param_name] = value
+    # Define mappings from nested keys to flat parameter names
+    # This handles the known sections in our YAML structure
+    section_mapping = {
+        "model": "",  # model.n_dim -> n_dim
+        "training": "",  # training.batch_size -> batch_size
+        "schedules": {
+            "types": "",  # schedules.types.tau_schedule_type -> tau_schedule_type
+            "lr": "",  # schedules.lr.learning_rate -> learning_rate
+            "tau": "",  # schedules.tau.tau -> tau
+            "mask": "",  # schedules.mask.max_mask_pct -> max_mask_pct
+            "residual": "",  # schedules.residual.residual_scaling -> residual_scaling
+            "gumbel": "",  # schedules.gumbel.gumbel_noise_scale -> gumbel_noise_scale
+        },
+        "loss_weights": {
+            "ce": "",  # loss_weights.ce.beta_ce -> beta_ce
+            "kl": "",  # loss_weights.kl.beta_kl -> beta_kl
+            "mi": "",  # loss_weights.mi.beta_mi -> beta_mi
+            "tc": "",  # loss_weights.tc.beta_tc -> beta_tc
+            "dwkl": "",  # loss_weights.dwkl.beta_dwkl -> beta_dwkl
+            "diversity": {
+                "entropy": "",  # loss_weights.diversity.entropy.beta_diversity_entropy -> beta_diversity_entropy
+                "sample": "",  # loss_weights.diversity.sample.beta_diversity_sample -> beta_diversity_sample
+                "position": "", # loss_weights.diversity.position.beta_diversity_position -> beta_diversity_position
+                "usage": "",  # loss_weights.diversity.usage.beta_diversity_usage -> beta_diversity_usage
+            }
+        },
+        "logging": "",  # logging.viz_interval -> viz_interval
+        "acceleration": "",  # acceleration.device -> device
+        "dataset": "",  # dataset.train_ds -> train_ds
+        "project": "",  # project.project_name -> project_name
+    }
     
-    # Process all sections
-    for section, content in yaml_config.items():
-        if isinstance(content, dict):
-            # For nested sections like 'model', 'training', etc.
-            update_from_nested_config(content)
-        else:
-            # For top-level keys
-            if section in updated_vars:
-                # Special handling for run_name
-                if section == "run_name" and updated_vars["run_name"] is not None:
-                    continue
+    # Function to recursively extract values from nested config using our mapping
+    def extract_values(config, mapping, prefix=""):
+        result = {}
+        for key, value in config.items():
+            if key in mapping:
+                # This is a section we have a mapping for
+                if isinstance(mapping[key], dict):
+                    # This is a nested section
+                    if isinstance(value, dict):
+                        result.update(extract_values(value, mapping[key], prefix))
+                    else:
+                        print(f"Warning: Expected a dict for {key}, got {type(value)}")
+                else:
+                    # This is a section that maps directly to param names
+                    if isinstance(value, dict):
+                        for subkey, subvalue in value.items():
+                            # Map nested parameter to a flat parameter name
+                            param_name = subkey
+                            result[param_name] = subvalue
+                    else:
+                        print(f"Warning: Expected a dict for {key}, got {type(value)}")
+            else:
+                # This is a direct parameter at this level
+                param_name = key
+                result[param_name] = value
+        return result
+    
+    # Extract flattened values using our mapping
+    flattened_values = extract_values(yaml_config, section_mapping)
+    
+    # Debug output
+    print(f"Loaded {len(flattened_values)} parameters from YAML config")
+    
+    # Apply the flattened values to our local vars
+    applied_count = 0
+    for param_name, value in flattened_values.items():
+        if param_name in updated_vars:
+            # Special handling for run_name - only override if not explicitly set on CLI
+            if param_name == "run_name" and updated_vars["run_name"] is not None:
+                continue
+                
+            # Skip if it's a flag that was explicitly set via CLI
+            if isinstance(value, bool):
+                bool_flags = ["skip_codebook", "normalise_kq", "tc_relu", "debug", 
+                             "compile_model", "lr_find", "wandb_logging", 
+                             "use_exp_relaxed", "use_monte_carlo_kld", "permute_train"]
+                
+                if param_name in bool_flags:
+                    # Check if this was explicitly set on CLI
+                    original_value = updated_vars[param_name]
+                    default_value = get_default_param_values(new).get(param_name)
                     
-                updated_vars[section] = content
+                    # If the original value is not the default, it was set on CLI
+                    if original_value != default_value:
+                        continue
+            
+            # Update the variable
+            updated_vars[param_name] = value
+            applied_count += 1
+        else:
+            print(f"Warning: Parameter '{param_name}' in config file is not a valid parameter for the command")
+    
+    print(f"Applied {applied_count} parameters from YAML config")
     
     return updated_vars
 
@@ -493,183 +541,198 @@ def new(
     lr_find: bool = get_common_options()["lr_find"],
 ):
     """Train a new DVAE model with specified configuration."""
-    # If config file is provided, load settings from it
+    
+    # Get all parameters from locals, exclude built-in and temporary variables
+    params = {k: v for k, v in locals().items() 
+              if not k.startswith('_') and k != 'config_file' and k != 'self'}
+    
+    # If config file is provided, update parameters from it
     if config_file is not None:
-        logger.info(f"Loading configuration from {config_file}")
-        yaml_config = load_config_from_yaml(config_file)
-        
-        # Apply config to local variables
-        updated_vars = apply_config_from_yaml(yaml_config, locals())
-        
-        # Update all local variables from the modified dictionary
-        locals().update(updated_vars)
+        try:
+            print(f"Loading configuration from {config_file}")
+            yaml_config = load_config_from_yaml(config_file)
+            
+            # Apply configuration to parameters
+            # First create a dictionary of locals to pass to apply_config_from_yaml
+            locals_dict = locals()
+            updated_locals = apply_config_from_yaml(yaml_config, locals_dict)
+            
+            # Update our params dictionary with values from updated_locals
+            for key in params.keys():
+                if key in updated_locals:
+                    if params[key] != updated_locals[key]:
+                        print(f"Updated param from config: {key} = {updated_locals[key]}")
+                        params[key] = updated_locals[key]
 
-    # Append debug suffix to project name if in debug mode
-    project_name = f"{project_name}-debug" if debug else project_name
+        except Exception as e:
+            logger.error(f"Error loading configuration: {e}")
+            import traceback
+            traceback.print_exc()
+            raise typer.Exit(code=1)
     
     # Create acceleration config (will validate and resolve settings)
     acceleration = AccelerationConfig(
-        device=device,
-        precision=precision,
-        matmul_precision=matmul_precision,
-        compile_model=compile_model
+        device=params["device"],
+        precision=params["precision"],
+        matmul_precision=params["matmul_precision"],
+        compile_model=params["compile_model"]
     )
 
     # Generate run name if not provided
-    if run_name is None:
-        run_name = generate_friendly_name()
+    if params["run_name"] is None:
+        params["run_name"] = generate_friendly_name()
 
     # Create GridDVAEConfig
     model_config = GridDVAEConfig(
-        n_dim=n_dim,
-        n_head=n_head,
-        n_grid_layer=n_grid_layer,
-        n_latent_layer=n_latent_layer,
-        n_codes=n_codes,
-        codebook_size=codebook_size,
-        dropout=dropout,
-        gamma=gamma,
+        n_dim=params["n_dim"],
+        n_head=params["n_head"],
+        n_grid_layer=params["n_grid_layer"],
+        n_latent_layer=params["n_latent_layer"],
+        n_codes=params["n_codes"],
+        codebook_size=params["codebook_size"],
+        dropout=params["dropout"],
+        gamma=params["gamma"],
         n_vocab=16,  # Fixed for grid world
         max_grid_height=32,  # Fixed for grid world
         max_grid_width=32,  # Fixed for grid world
-        pad_weight=pad_weight,
-        use_exp_relaxed=use_exp_relaxed,
-        use_monte_carlo_kld=use_monte_carlo_kld,
-        init_mode=init_mode,
-        skip_codebook=skip_codebook,
-        normalise_kq=normalise_kq
+        pad_weight=params["pad_weight"],
+        use_exp_relaxed=params["use_exp_relaxed"],
+        use_monte_carlo_kld=params["use_monte_carlo_kld"],
+        init_mode=params["init_mode"],
+        skip_codebook=params["skip_codebook"],
+        normalise_kq=params["normalise_kq"]
     )
     
     # Create ExperimentConfig
     experiment_config = ExperimentConfig(
         model_config=model_config,
-        seed=seed,
+        seed=params["seed"],
 
         # Tau
-        tau_start=tau_start,
-        tau=tau,
-        transition_steps_tau=transition_steps_tau,
-        warmup_steps_tau=warmup_steps_tau,
+        tau_start=params["tau_start"],
+        tau=params["tau"],
+        transition_steps_tau=params["transition_steps_tau"],
+        warmup_steps_tau=params["warmup_steps_tau"],
 
         # CE
-        beta_ce_start=beta_ce_start,
-        beta_ce=beta_ce,
-        transition_steps_beta_ce=transition_steps_beta_ce,
-        warmup_steps_beta_ce=warmup_steps_beta_ce,
+        beta_ce_start=params["beta_ce_start"],
+        beta_ce=params["beta_ce"],
+        transition_steps_beta_ce=params["transition_steps_beta_ce"],
+        warmup_steps_beta_ce=params["warmup_steps_beta_ce"],
 
         # Diversity Losses
         ## Entropy
-        beta_diversity_entropy_start=beta_diversity_entropy_start,
-        beta_diversity_entropy=beta_diversity_entropy,
-        transition_steps_beta_diversity_entropy=transition_steps_beta_diversity_entropy,
-        warmup_steps_beta_diversity_entropy=warmup_steps_beta_diversity_entropy,
+        beta_diversity_entropy_start=params["beta_diversity_entropy_start"],
+        beta_diversity_entropy=params["beta_diversity_entropy"],
+        transition_steps_beta_diversity_entropy=params["transition_steps_beta_diversity_entropy"],
+        warmup_steps_beta_diversity_entropy=params["warmup_steps_beta_diversity_entropy"],
 
         ## Sample
-        beta_diversity_sample_start=beta_diversity_sample_start,
-        beta_diversity_sample=beta_diversity_sample,
-        transition_steps_beta_diversity_sample=transition_steps_beta_diversity_sample,
-        warmup_steps_beta_diversity_sample=warmup_steps_beta_diversity_sample,
+        beta_diversity_sample_start=params["beta_diversity_sample_start"],
+        beta_diversity_sample=params["beta_diversity_sample"],
+        transition_steps_beta_diversity_sample=params["transition_steps_beta_diversity_sample"],
+        warmup_steps_beta_diversity_sample=params["warmup_steps_beta_diversity_sample"],
         
         ## Position
-        beta_diversity_position_start=beta_diversity_position_start,
-        beta_diversity_position=beta_diversity_position,
-        transition_steps_beta_diversity_position=transition_steps_beta_diversity_position,
-        warmup_steps_beta_diversity_position=warmup_steps_beta_diversity_position,
+        beta_diversity_position_start=params["beta_diversity_position_start"],
+        beta_diversity_position=params["beta_diversity_position"],
+        transition_steps_beta_diversity_position=params["transition_steps_beta_diversity_position"],
+        warmup_steps_beta_diversity_position=params["warmup_steps_beta_diversity_position"],
 
         ## Usage
-        beta_diversity_usage_start=beta_diversity_usage_start,
-        beta_diversity_usage=beta_diversity_usage,
-        transition_steps_beta_diversity_usage=transition_steps_beta_diversity_usage,
-        warmup_steps_beta_diversity_usage=warmup_steps_beta_diversity_usage,
+        beta_diversity_usage_start=params["beta_diversity_usage_start"],
+        beta_diversity_usage=params["beta_diversity_usage"],
+        transition_steps_beta_diversity_usage=params["transition_steps_beta_diversity_usage"],
+        warmup_steps_beta_diversity_usage=params["warmup_steps_beta_diversity_usage"],
 
         # KL Losses
         ## KL
-        beta_kl_start=beta_kl_start,
-        beta_kl=beta_kl,
-        transition_steps_beta_kl=transition_steps_beta_kl,
-        warmup_steps_beta_kl=warmup_steps_beta_kl,
+        beta_kl_start=params["beta_kl_start"],
+        beta_kl=params["beta_kl"],
+        transition_steps_beta_kl=params["transition_steps_beta_kl"],
+        warmup_steps_beta_kl=params["warmup_steps_beta_kl"],
 
         ## MI
-        beta_mi_start=beta_mi_start,
-        beta_mi=beta_mi,
-        transition_steps_beta_mi=transition_steps_beta_mi,
-        warmup_steps_beta_mi=warmup_steps_beta_mi,
+        beta_mi_start=params["beta_mi_start"],
+        beta_mi=params["beta_mi"],
+        transition_steps_beta_mi=params["transition_steps_beta_mi"],
+        warmup_steps_beta_mi=params["warmup_steps_beta_mi"],
 
         ## TC
-        beta_tc_start=beta_tc_start,
-        beta_tc=beta_tc,
-        transition_steps_beta_tc=transition_steps_beta_tc,
-        warmup_steps_beta_tc=warmup_steps_beta_tc,
+        beta_tc_start=params["beta_tc_start"],
+        beta_tc=params["beta_tc"],
+        transition_steps_beta_tc=params["transition_steps_beta_tc"],
+        warmup_steps_beta_tc=params["warmup_steps_beta_tc"],
 
         ## DWKL
-        beta_dwkl_start=beta_dwkl_start,
-        beta_dwkl=beta_dwkl,
-        transition_steps_beta_dwkl=transition_steps_beta_dwkl,
-        warmup_steps_beta_dwkl=warmup_steps_beta_dwkl,
+        beta_dwkl_start=params["beta_dwkl_start"],
+        beta_dwkl=params["beta_dwkl"],
+        transition_steps_beta_dwkl=params["transition_steps_beta_dwkl"],
+        warmup_steps_beta_dwkl=params["warmup_steps_beta_dwkl"],
 
         # Mask
-        mask_pct_start=mask_pct_start,
-        max_mask_pct=max_mask_pct,
-        transition_steps_mask_pct=transition_steps_mask_pct,
-        warmup_steps_mask_pct=warmup_steps_mask_pct,
+        mask_pct_start=params["mask_pct_start"],
+        max_mask_pct=params["max_mask_pct"],
+        transition_steps_mask_pct=params["transition_steps_mask_pct"],
+        warmup_steps_mask_pct=params["warmup_steps_mask_pct"],
 
         # Residual scaling
-        residual_scaling_start=residual_scaling_start,
-        residual_scaling=residual_scaling,
-        transition_steps_residual_scaling=transition_steps_residual_scaling,
-        warmup_steps_residual_scaling=warmup_steps_residual_scaling,
+        residual_scaling_start=params["residual_scaling_start"],
+        residual_scaling=params["residual_scaling"],
+        transition_steps_residual_scaling=params["transition_steps_residual_scaling"],
+        warmup_steps_residual_scaling=params["warmup_steps_residual_scaling"],
 
         # Gumbel noise scale
-        gumbel_noise_scale_start=gumbel_noise_scale_start,
-        gumbel_noise_scale=gumbel_noise_scale,
-        transition_steps_gumbel_noise_scale=transition_steps_gumbel_noise_scale,
-        warmup_steps_gumbel_noise_scale=warmup_steps_gumbel_noise_scale,
+        gumbel_noise_scale_start=params["gumbel_noise_scale_start"],
+        gumbel_noise_scale=params["gumbel_noise_scale"],
+        transition_steps_gumbel_noise_scale=params["transition_steps_gumbel_noise_scale"],
+        warmup_steps_gumbel_noise_scale=params["warmup_steps_gumbel_noise_scale"],
         
         # Schedule parameters
-        tau_schedule_type=tau_schedule_type,
-        beta_schedule_type=beta_schedule_type,
-        mask_schedule_type=mask_schedule_type,
-        residual_scaling_schedule_type=residual_scaling_schedule_type,
-        gumbel_noise_scale_schedule_type=gumbel_noise_scale_schedule_type,
+        tau_schedule_type=params["tau_schedule_type"],
+        beta_schedule_type=params["beta_schedule_type"],
+        mask_schedule_type=params["mask_schedule_type"],
+        residual_scaling_schedule_type=params["residual_scaling_schedule_type"],
+        gumbel_noise_scale_schedule_type=params["gumbel_noise_scale_schedule_type"],
         
         # Schedule timing parameters
-        learning_rate=learning_rate,
-        lr_min=lr_min if lr_min is not None else learning_rate * 0.01,
-        warmup_steps_lr=warmup_steps_lr,
-        decay_steps_lr=decay_steps_lr,
+        learning_rate=params["learning_rate"],
+        lr_min=params["lr_min"] if params["lr_min"] is not None else params["learning_rate"] * 0.01,
+        warmup_steps_lr=params["warmup_steps_lr"],
+        decay_steps_lr=params["decay_steps_lr"],
 
         # Training parameters
-        batch_size=batch_size,
-        weight_decay=weight_decay,
-        max_steps=max_steps,
-        gradient_clip_val=gradient_clip_val,
-        accumulate_grad_batches=accumulate_grad_batches,
+        batch_size=params["batch_size"],
+        weight_decay=params["weight_decay"],
+        max_steps=params["max_steps"],
+        gradient_clip_val=params["gradient_clip_val"],
+        accumulate_grad_batches=params["accumulate_grad_batches"],
         
         # Dataset parameters
-        train_ds=train_ds,
-        val_ds=val_ds,
-        limit_training_samples=limit_training_samples,
-        permute_train=permute_train,
+        train_ds=params["train_ds"],
+        val_ds=params["val_ds"],
+        limit_training_samples=params["limit_training_samples"],
+        permute_train=params["permute_train"],
         
         # Other parameters
-        model_src=model_src,
-        tc_relu=tc_relu
+        model_src=params["model_src"],
+        tc_relu=params["tc_relu"]
     )
 
     print(experiment_config.to_dict())
     # Start training with the resolved settings
     train(
         experiment_config=experiment_config,
-        run_name=run_name,
-        project_name=project_name,
-        checkpoint_dir=checkpoint_dir,
-        debug_mode=debug,
-        lr_find=lr_find,
+        run_name=params["run_name"],
+        project_name=params["project_name"],
+        checkpoint_dir=params["checkpoint_dir"],
+        debug_mode=params["debug"],
+        lr_find=params["lr_find"],
         acceleration=acceleration,
-        val_check_interval=val_check_interval,
-        visualization_interval=viz_interval,
-        grad_log_interval=viz_interval,
-        wandb_logging=wandb_logging
+        val_check_interval=params["val_check_interval"],
+        visualization_interval=params["viz_interval"],
+        grad_log_interval=params["viz_interval"],
+        wandb_logging=params["wandb_logging"]
     )
 
 
