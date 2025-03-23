@@ -85,23 +85,23 @@ loss_weights:
     warmup_steps_beta_dwkl: 0
   diversity:
     entropy:
-      beta_diversity_entropy_start: 0.01
-      beta_diversity_entropy: 0.01
+      beta_diversity_entropy_start: 0.1
+      beta_diversity_entropy: 0.1
       transition_steps_beta_diversity_entropy: 10000
       warmup_steps_beta_diversity_entropy: 0
     sample:
-      beta_diversity_sample_start: 0.01
-      beta_diversity_sample: 0.01
+      beta_diversity_sample_start: 0.1
+      beta_diversity_sample: 0.1
       transition_steps_beta_diversity_sample: 10000
       warmup_steps_beta_diversity_sample: 0
     position:
-      beta_diversity_position_start: 0.01  
-      beta_diversity_position: 0.01
+      beta_diversity_position_start: 0.1  
+      beta_diversity_position: 0.1
       transition_steps_beta_diversity_position: 10000
       warmup_steps_beta_diversity_position: 0
     usage:
-      beta_diversity_usage_start: 0.01
-      beta_diversity_usage: 0.01
+      beta_diversity_usage_start: 0.1
+      beta_diversity_usage: 0.1
       transition_steps_beta_diversity_usage: 10000
       warmup_steps_beta_diversity_usage: 0
 logging:
