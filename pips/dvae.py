@@ -770,6 +770,7 @@ class GridDVAEConfig(Config):
     init_mode: str = "normal"
     skip_codebook: bool = False
     normalise_kq: bool = False
+    use_pure_logits_for_loss: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -831,7 +832,8 @@ class GridDVAEConfig(Config):
             'gamma': self.gamma,
             'init_mode': self.init_mode,
             'skip_codebook': self.skip_codebook,
-            'normalise_kq': self.normalise_kq
+            'normalise_kq': self.normalise_kq,
+            'use_pure_logits_for_loss': self.use_pure_logits_for_loss
         }
         
         # Add computed attributes if they exist
@@ -891,6 +893,7 @@ class GridDVAE(nn.Module):
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.pad_value = config.padding_idx  # Store padding value here
         self.mask_value = config.mask_idx
+        self.use_pure_logits_for_loss = config.use_pure_logits_for_loss
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         
 
@@ -1056,14 +1059,16 @@ class GridDVAE(nn.Module):
     
         quantized, log_alpha, log_alpha_tau, z = self.codebook(encoded_logits, tau=tau, residual_scaling=residual_scaling, positions=latent_pos_indices, gumbel_noise_scale=gumbel_noise_scale)
             
+        log_alpha_loss = log_alpha if self.use_pure_logits_for_loss else log_alpha_tau
+
         if self.use_monte_carlo_kld:
             kld_losses = monte_carlo_kld(log_alpha, tau=tau, reduction='mean', use_exp_relaxed=self.use_exp_relaxed)
             q_z_marg_updated = q_z_marg
         else:
-            kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha_tau, q_z_marg, reduction='mean')
+            kld_losses, q_z_marg_updated = compute_decomposed_kld(log_alpha_loss, q_z_marg, reduction='mean')
     
         # Calculate codebook-related losses efficiently
-        diversity_losses = self.compute_diversity_losses(log_alpha_tau)
+        diversity_losses = self.compute_diversity_losses(log_alpha_loss)
 
         if self.skip_codebook:
             decoded_logits = self.decode(encoded_logits, grid_pos_indices, latent_pos_indices)
