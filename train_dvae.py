@@ -1362,7 +1362,7 @@ def load_model_weights(
         checkpoint_path = artifact_manager.get_local_checkpoint(
             category=category,
             alias=alias,
-            checkpoint_dir=checkpoint_dir
+            checkpoint_dir=Path(checkpoint_dir)
         )
         
         # Load just the model weights
