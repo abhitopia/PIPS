@@ -1081,6 +1081,7 @@ class DVAETrainingModule(pl.LightningModule):
         scheduled = self.get_scheduled_values(self.global_step, device=x.device)
         
         mask_pct = torch.tensor(0.0, device=x.device) # No masking in validation
+        scheduled['gumbel_noise_scale']=0.0     # No gumbel noise in validation
 
         output_dict, _ = self(
              x,

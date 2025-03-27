@@ -1,4 +1,8 @@
 
+# 27th March 2025
+- [x] Gumbel Scaling should be zero for validation
+- [ ] Consider changing the rope base to lower value in future
+
 # 23rd March 2025
 - [x] Implement 4 different loss functions (divergence sample, batch, entropy, position)
 - [x] Implement ability to run CLI using configs
