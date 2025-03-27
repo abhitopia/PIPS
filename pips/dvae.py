@@ -989,7 +989,8 @@ class GridDVAE(nn.Module):
                                     codebook_size=config.codebook_size,
                                     use_exp_relaxed=config.use_exp_relaxed,
                                     rope=rope_codebook,
-                                    normalise_kq=config.normalise_kq)
+                                    normalise_kq=config.normalise_kq,
+                                    codebook_ema_update=config.codebook_ema_update)
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
