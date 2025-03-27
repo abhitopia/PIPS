@@ -13,6 +13,8 @@ model:
   init_mode: normal
   skip_codebook: false
   normalise_kq: false
+  use_pure_logits_for_loss: false
+  codebook_ema_update: false
 training:
   batch_size: 64
   weight_decay: 0.0001

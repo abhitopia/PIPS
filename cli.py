@@ -320,7 +320,7 @@ def export_config(
         "model": {k: v for k, v in config.items() if k in [
             "n_dim", "n_head", "n_grid_layer", "n_latent_layer", "n_codes", "codebook_size",
             "dropout", "gamma", "pad_weight", "use_exp_relaxed", "use_monte_carlo_kld",
-            "init_mode", "skip_codebook", "normalise_kq", "use_pure_logits_for_loss"
+            "init_mode", "skip_codebook", "normalise_kq", "use_pure_logits_for_loss", "codebook_ema_update"
         ]},
         "training": {k: v for k, v in config.items() if k in [
             "batch_size", "weight_decay", "max_steps",
@@ -417,6 +417,7 @@ def new(
     skip_codebook: bool = typer.Option(False, "--skip-codebook", "-sc", help="Skip the codebook", is_flag=True, flag_value=True),
     normalise_kq: bool = typer.Option(False, "--normalise-kq", "-nkq", help="Normalise the keys and queries", is_flag=True, flag_value=True),
     use_pure_logits_for_loss: bool = typer.Option(False, "--use-pure-logits-for-loss", "-uplf", help="Use pure logits for loss", is_flag=True, flag_value=True),
+    codebook_ema_update: bool = typer.Option(False, "--codebook-ema", "-cema", help="Update the codebook using EMA", is_flag=True, flag_value=True),
     
     # Training parameters
     batch_size: int = typer.Option(64, "--batch-size", "-bs", help="Training batch size"),
@@ -602,7 +603,8 @@ def new(
         init_mode=params["init_mode"],
         skip_codebook=params["skip_codebook"],
         normalise_kq=params["normalise_kq"],
-        use_pure_logits_for_loss=params["use_pure_logits_for_loss"]
+        use_pure_logits_for_loss=params["use_pure_logits_for_loss"],
+        codebook_ema_update=params["codebook_ema_update"]
     )
     
     # Create ExperimentConfig

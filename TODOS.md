@@ -1,6 +1,7 @@
 
 # 27th March 2025
 - [x] Gumbel Scaling should be zero for validation
+- [x] Implement EMA for the codebook
 - [ ] Consider changing the rope base to lower value in future
 
 # 23rd March 2025

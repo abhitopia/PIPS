@@ -497,7 +497,8 @@ class AttnCodebook(nn.Module):
         - codebook_keys: [d_model, codebook_size]
         - codebook_values: [codebook_size, d_model]
     """
-    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, dim_feedforward=None, rope=None, normalise_kq: bool = False):
+    def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, dim_feedforward=None, rope=None, normalise_kq: bool = False,
+                 decay: float = 0.99, epsilon: float = 1e-5, codebook_ema_update: bool = True):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
@@ -505,11 +506,18 @@ class AttnCodebook(nn.Module):
         self.rope = rope
         self.normalise_kq = normalise_kq
 
+        self.decay = decay
+        self.epsilon = epsilon
+        self.codebook_ema_update = codebook_ema_update
+
         self.norm_context = RMSNorm(dim=d_model)
         self.norm_queries = RMSNorm(dim=d_model)
 
         # Shared codebook embeddings: shape [codebook_size, d_model]
         self.codebook = nn.Parameter(torch.randn(codebook_size, d_model))
+        # EMA buffers to keep track of cluster sizes and the running average of codebook embeddings.
+        self.register_buffer("ema_cluster_size", torch.zeros(codebook_size), persistent=False)
+        self.register_buffer("ema_codebook", self.codebook.data.clone(), persistent=False)
 
         ## Attention Stuff
         # Projection layers to generate keys and values from the codebook.
@@ -611,7 +619,42 @@ class AttnCodebook(nn.Module):
 
         codebook_output = attn_output + self.ff(self.norm_ff(attn_output)) # Residual connection
 
+        # EMA update for the codebook
+        if self.training and self.codebook_ema_update:
+            self._update_codebook(latents, z)
+
         return codebook_output, log_alpha, log_alpha_tau, z
+    
+
+
+    def _update_codebook(self, latents: Tensor, z: Tensor):
+        """
+        Update the codebook embeddings using exponential moving average (EMA).
+        
+        Args:
+            latents (Tensor): Input latents of shape [B, N, d_model].
+            z (Tensor): Soft assignments (probabilities) of shape [B, N, codebook_size].
+        """
+        with torch.no_grad():
+            # Reshape to merge batch and token dimensions: [B*N, d_model] and [B*N, codebook_size]
+            flat_latents = latents.reshape(-1, self.d_model)
+            flat_z = z.reshape(-1, self.codebook_size)
+
+            # Compute the batch statistics: sum of assignment probabilities and weighted latent sums
+            cluster_size_batch = flat_z.sum(dim=0)  # [codebook_size]
+            codebook_update_batch = flat_z.t() @ flat_latents  # [codebook_size, d_model]
+
+            # Update the EMA buffers
+            self.ema_cluster_size.mul_(self.decay).add_(cluster_size_batch, alpha=1 - self.decay)
+            self.ema_codebook.mul_(self.decay).add_(codebook_update_batch, alpha=1 - self.decay)
+
+            # Normalize the EMA codebook
+            n = self.ema_cluster_size.sum()
+            # Avoid division by zero by adding a small constant epsilon
+            cluster_size = (self.ema_cluster_size + self.epsilon) / (n + self.codebook_size * self.epsilon) * n
+
+            # Update the codebook parameter (using .data to avoid gradient interference)
+            self.codebook.data.copy_(self.ema_codebook / cluster_size.unsqueeze(1))
 
 
 class GumbelCodebook(nn.Module):
@@ -771,6 +814,7 @@ class GridDVAEConfig(Config):
     skip_codebook: bool = False
     normalise_kq: bool = False
     use_pure_logits_for_loss: bool = False
+    codebook_ema_update: bool = True
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -833,7 +877,8 @@ class GridDVAEConfig(Config):
             'init_mode': self.init_mode,
             'skip_codebook': self.skip_codebook,
             'normalise_kq': self.normalise_kq,
-            'use_pure_logits_for_loss': self.use_pure_logits_for_loss
+            'use_pure_logits_for_loss': self.use_pure_logits_for_loss,
+            'codebook_ema_update': self.codebook_ema_update
         }
         
         # Add computed attributes if they exist
@@ -1024,6 +1069,9 @@ class GridDVAE(nn.Module):
                 else:
                     torch.nn.init.normal_(param, mean=0.0, std=0.02)
             param._initialized = True
+
+        # Update ema_codebook to match the codebook after parameter initialization.
+        self.codebook.ema_codebook.copy_(self.codebook.codebook.data)
 
     def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
         x_embd = self.embd(x)
