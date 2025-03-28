@@ -659,6 +659,8 @@ class AttnCodebook(nn.Module):
     def load_state_dict(self, state_dict, strict=True):
         # Call the parent method to load the state.
         super().load_state_dict(state_dict, strict=strict)
+
+        print("NOTE: Overwriting ema_codebook to match the current codebook. --------------------------------")
         # Now, update ema_codebook to match the current codebook.
         # This ensures that even if the checkpoint didn't save ema_codebook,
         # or if you want to reinitialize it, it will be set to codebook.data.

@@ -14,7 +14,7 @@ model:
   init_mode: normal
   skip_codebook: false
   normalise_kq: false ## changed
-  codebook_ema_update: false
+  codebook_ema_update: true
 training:
   batch_size: 64
   weight_decay: 0.00001 # changed
