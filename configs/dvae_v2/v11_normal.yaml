@@ -120,7 +120,7 @@ dataset:
   val_ds: val
 project:
   project_name: dvae-v2
-  run_name: v10_normal
+  run_name: v11_normal
   checkpoint_dir: runs
   model_src: v8_normal/best/51000
 misc:
