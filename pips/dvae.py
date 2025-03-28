@@ -441,6 +441,7 @@ class LatentTransformer(nn.Module):
         super().__init__()
         # Learnable latent tokens: shape (1, n_latent, d_model)
         self.latent_tokens = nn.Parameter(torch.randn(1, n_latent, d_model))
+        torch.nn.init.normal_(self.latent_tokens, mean=0.0, std=0.02)
         
         # Stack of cross-attn blocks
         self.blocks = nn.ModuleList([
@@ -498,7 +499,7 @@ class AttnCodebook(nn.Module):
         - codebook_values: [codebook_size, d_model]
     """
     def __init__(self, d_model: int, codebook_size: int, use_exp_relaxed=False, dim_feedforward=None, rope=None, normalise_kq: bool = False,
-                 decay: float = 0.99999, epsilon: float = 1e-5, codebook_ema_update: bool = True):
+                 decay: float = 0.99999, epsilon: float = 1e-5, codebook_ema_update: bool = False):
         super().__init__()
         self.d_model = d_model
         self.codebook_size = codebook_size
@@ -515,6 +516,8 @@ class AttnCodebook(nn.Module):
 
         # Shared codebook embeddings: shape [codebook_size, d_model]
         self.codebook = nn.Parameter(torch.randn(codebook_size, d_model))
+        torch.nn.init.normal_(self.codebook, mean=0.0, std=0.02)
+
         # EMA buffers to keep track of cluster sizes and the running average of codebook embeddings.
         self.register_buffer("ema_cluster_size", torch.zeros(codebook_size), persistent=False)
         self.register_buffer("ema_codebook", self.codebook.data.clone(), persistent=False)

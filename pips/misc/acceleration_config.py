@@ -83,3 +83,15 @@ class AccelerationConfig:
             f"matmul_precision='{self.matmul_precision}', "
             f"compile_model={self.compile_model})"
         )
+    
+    def to_dict(self):
+        return {
+            'device': self.device,
+            'precision': self.precision,
+            'matmul_precision': self.matmul_precision,
+            'compile_model': self.compile_model
+        }
+
+    @classmethod
+    def from_dict(cls, config_dict: dict):
+        return cls(**config_dict)

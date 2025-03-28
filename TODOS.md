@@ -1,3 +1,5 @@
+# 28th March 2025 (Add VQVAE)
+- [x] Add VQVAE and corresponding CLI
 
 # 27th March 2025
 - [x] Gumbel Scaling should be zero for validation
