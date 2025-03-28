@@ -2,8 +2,8 @@ experiment_config:
   model_config:
     n_dim: 256
     n_head: 4
-    n_grid_layer: 2
-    n_latent_layer: 2
+    n_grid_layer: 4
+    n_latent_layer: 4
     n_codes: 128
     codebook_size: 512
     rope_base_height: 10007
@@ -20,14 +20,14 @@ experiment_config:
     skip_codebook: false
     n_pos: 1024
   seed: 2274030480
-  batch_size: 64
+  batch_size: 256
   max_steps: 1000000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   mask_schedule_type: cosine
-  learning_rate: 0.0001
-  lr_min: 1.0e-06
-  warmup_steps_lr: 10000
+  learning_rate: 7.0e-06
+  lr_min: 1.0e-08
+  warmup_steps_lr: 1000
   decay_steps_lr: 990000
   weight_decay: 0.0001
   beta_commitment: 1.0
@@ -41,8 +41,8 @@ experiment_config:
   permute_train: true
   model_src: null
 acceleration_config:
-  device: cpu
-  precision: 32-true
+  device: auto
+  precision: bf16-true
   matmul_precision: high
   compile_model: true
 project_config:
