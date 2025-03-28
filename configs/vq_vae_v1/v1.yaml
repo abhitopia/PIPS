@@ -46,8 +46,8 @@ acceleration_config:
   matmul_precision: high
   compile_model: true
 project_config:
-  run_name: fair-lion-062
-  project_name: train-vq-vae
+  run_name: v1
+  project_name: train-vq-vae-v1
   checkpoint_dir: runs
   val_check_interval: 1000
   viz_interval: 1000
