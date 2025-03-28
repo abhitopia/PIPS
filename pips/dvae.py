@@ -656,6 +656,15 @@ class AttnCodebook(nn.Module):
             # Update the codebook parameter (using .data to avoid gradient interference)
             self.codebook.data.copy_(self.ema_codebook / cluster_size.unsqueeze(1))
 
+    def load_state_dict(self, state_dict, strict=True):
+        # Call the parent method to load the state.
+        super().load_state_dict(state_dict, strict=strict)
+        # Now, update ema_codebook to match the current codebook.
+        # This ensures that even if the checkpoint didn't save ema_codebook,
+        # or if you want to reinitialize it, it will be set to codebook.data.
+        self.ema_codebook.copy_(self.codebook.data)
+        # Optionally reset ema_cluster_size if needed
+        self.ema_cluster_size.zero_()
 
 class GumbelCodebook(nn.Module):
     def __init__(self, d_model, codebook_size, n_codes, position_dependent: bool = False, use_exp_relaxed=False, sampling: bool = True):
