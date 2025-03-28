@@ -466,10 +466,10 @@ class VQVAE(nn.Module):
         self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
         self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
 
-        # Apply weight initialization on registered modules.
-        self.apply(self._init_weights)
-        # Additionally, initialize any raw nn.Parameters.
-        self.initialize_all_parameters()
+        # # Apply weight initialization on registered modules.
+        # self.apply(self._init_weights)
+        # # Additionally, initialize any raw nn.Parameters.
+        # self.initialize_all_parameters()
 
     def _init_weights(self, module):
         # Get initialization mode from config (if present). Default is "normal".
