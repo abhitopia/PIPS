@@ -752,8 +752,6 @@ class VQVAEConfig(Config):
 
         # Calculate n_pos from grid dimensions
         self.n_pos = self.max_grid_height * self.max_grid_width
-
-        assert self.init_mode in ["normal", "xavier"], "Invalid initialization mode"
         
         assert is_power_of_two(self.n_pos), "Product of max_grid_height and max_grid_width must be a power of 2"
         # assert is_power_of_two(self.n_codes), "Number of codes must be a power of 2"

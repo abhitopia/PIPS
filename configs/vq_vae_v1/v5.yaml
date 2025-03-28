@@ -19,7 +19,6 @@ experiment_config:
     mask_idx: 14
     pad_weight: 0.1
     gamma: 2.0
-    init_mode: normal
     skip_codebook: true
     n_pos: 1024
   seed: 2274030480
