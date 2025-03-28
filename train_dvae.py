@@ -761,6 +761,15 @@ class DVAETrainingModule(pl.LightningModule):
         self.save_hyperparameters()
         # Initialize q_z_marg with correct size but all zeros
         self.register_buffer('q_z_marg', torch.zeros(self.model_config.n_codes, self.model_config.codebook_size), persistent=True)
+
+
+    def on_fit_start(self):
+        """
+        Overwrite ema_codebook to match the current codebook.
+        """
+        print("NOTE in ON_FIT_START: Overwriting ema_codebook to match the current codebook. --------------------------------")
+        self.model.codebook.ema_codebook.copy_(self.model.codebook.codebook.data)
+
     
     def configure_model(self):
         """
@@ -807,6 +816,7 @@ class DVAETrainingModule(pl.LightningModule):
                     else:
                         new_state_dict[key] = value
                 checkpoint["state_dict"] = new_state_dict
+
 
     def get_scheduled_values(self, step: int, device: torch.device = torch.device("cpu")) -> Dict[str, torch.Tensor]:
         """Returns all scheduled values for the current step as tensors on the specified device.
