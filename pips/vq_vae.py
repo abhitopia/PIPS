@@ -4,7 +4,7 @@ import torch
 from torch.autograd import Function
 from torch.nn import functional as F
 from torch import Tensor, nn
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 from torch.amp import autocast
 
 
