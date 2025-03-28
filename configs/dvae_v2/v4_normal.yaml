@@ -7,17 +7,17 @@ model:
   codebook_size: 512
   dropout: 0.0
   gamma: 2.0
-  pad_weight: 0.01
+  pad_weight: 0.1
   use_exp_relaxed: false
   use_monte_carlo_kld: false
-  init_mode: xavier
+  use_pure_logits_for_loss: false ## Changed
+  init_mode: normal
   skip_codebook: false
-  normalise_kq: false
-  use_pure_logits_for_loss: false
+  normalise_kq: false ## changed
   codebook_ema_update: false
 training:
   batch_size: 64
-  weight_decay: 0.0001
+  weight_decay: 0.00001 # changed
   max_steps: 100000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
@@ -39,9 +39,9 @@ schedules:
     decay_steps_lr: null
   tau:
     tau_schedule_type: cosine
-    tau_start: 1.0
-    tau: 1.0
-    transition_steps_tau: 5000
+    tau_start: 1.0  # changed
+    tau: 1.0        # changed
+    transition_steps_tau: 20000
     warmup_steps_tau: 0
   mask:
     mask_pct_start: 0.0
@@ -49,16 +49,15 @@ schedules:
     transition_steps_mask_pct: 5000
     warmup_steps_mask_pct: 0
   residual:
-    residual_scaling_start: 1.0
-    residual_scaling: 0.0
-    transition_steps_residual_scaling: 10000
+    residual_scaling_start: 1.0       # changed
+    residual_scaling: 0.0             # changed
+    transition_steps_residual_scaling: 5000 # changed
     warmup_steps_residual_scaling: 0
   gumbel:
-    gumbel_noise_scale_schedule_type: cosine
     gumbel_noise_scale_start: 0.0
     gumbel_noise_scale: 0.0
     transition_steps_gumbel_noise_scale: 10000
-    warmup_steps_gumbel_noise_scale: 0
+    warmup_steps_gumbel_noise_scale: 0 
 loss_weights:
   ce:
     beta_ce_start: 1.0
@@ -88,18 +87,18 @@ loss_weights:
     warmup_steps_beta_dwkl: 0
   diversity:
     entropy:
-      beta_diversity_entropy_start: 0.14
+      beta_diversity_entropy_start: 0.01
       beta_diversity_entropy: 0.14
       transition_steps_beta_diversity_entropy: 10000
-      warmup_steps_beta_diversity_entropy: 0
+      warmup_steps_beta_diversity_entropy: 5000
     sample:
-      beta_diversity_sample_start: 0.14
+      beta_diversity_sample_start: 0.01
       beta_diversity_sample: 0.14
       transition_steps_beta_diversity_sample: 10000
-      warmup_steps_beta_diversity_sample: 0
+      warmup_steps_beta_diversity_sample: 5000
     position:
-      beta_diversity_position_start: 0.14
-      beta_diversity_position: 0.14
+      beta_diversity_position_start: 0.0  
+      beta_diversity_position: 0.0
       transition_steps_beta_diversity_position: 10000
       warmup_steps_beta_diversity_position: 0
     usage:
@@ -122,7 +121,7 @@ dataset:
   val_ds: val
 project:
   project_name: dvae-v2
-  run_name: v2_xavier
+  run_name: v4_normal
   checkpoint_dir: runs
   model_src: null
 misc:
