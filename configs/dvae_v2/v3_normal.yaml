@@ -1,0 +1,128 @@
+model:
+  n_dim: 256
+  n_head: 4
+  n_grid_layer: 2
+  n_latent_layer: 2
+  n_codes: 128
+  codebook_size: 512
+  dropout: 0.0
+  gamma: 2.0
+  pad_weight: 0.1
+  use_exp_relaxed: false
+  use_monte_carlo_kld: false
+  use_pure_logits_for_loss: false ## Changed
+  init_mode: normal
+  skip_codebook: false
+  normalise_kq: false ## changed
+  codebook_ema_update: false
+training:
+  batch_size: 64
+  weight_decay: 0.00001 # changed
+  max_steps: 100000
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  seed: null
+  limit_training_samples: null
+  permute_train: true
+  lr_find: false
+schedules:
+  types:
+    tau_schedule_type: cosine
+    beta_schedule_type: cosine
+    mask_schedule_type: cosine
+    residual_scaling_schedule_type: cosine
+    gumbel_noise_scale_schedule_type: cosine
+  lr:
+    learning_rate: 4.0e-05
+    lr_min: null
+    warmup_steps_lr: 100
+    decay_steps_lr: null
+  tau:
+    tau_schedule_type: cosine
+    tau_start: 1.0  # changed
+    tau: 1.0        # changed
+    transition_steps_tau: 20000
+    warmup_steps_tau: 0
+  mask:
+    mask_pct_start: 0.0
+    max_mask_pct: 0.0
+    transition_steps_mask_pct: 5000
+    warmup_steps_mask_pct: 0
+  residual:
+    residual_scaling_start: 1.0       # changed
+    residual_scaling: 0.0             # changed
+    transition_steps_residual_scaling: 5000 # changed
+    warmup_steps_residual_scaling: 0
+  gumbel:
+    gumbel_noise_scale_start: 0.0
+    gumbel_noise_scale: 0.0
+    transition_steps_gumbel_noise_scale: 10000
+    warmup_steps_gumbel_noise_scale: 0 
+loss_weights:
+  ce:
+    beta_ce_start: 1.0
+    beta_ce: 1.0
+    transition_steps_beta_ce: 10000
+    warmup_steps_beta_ce: 0
+  kl:
+    beta_kl_start: 0.0
+    beta_kl: 0.0
+    transition_steps_beta_kl: 10000
+    warmup_steps_beta_kl: 0
+  mi:
+    beta_mi_start: 0.0
+    beta_mi: 0.0
+    transition_steps_beta_mi: 10000
+    warmup_steps_beta_mi: 0
+  tc:
+    beta_tc_start: 0.0
+    beta_tc: 0.0
+    transition_steps_beta_tc: 10000
+    warmup_steps_beta_tc: 0
+    tc_relu: false
+  dwkl:
+    beta_dwkl_start: 0.0
+    beta_dwkl: 0.0
+    transition_steps_beta_dwkl: 10000
+    warmup_steps_beta_dwkl: 0
+  diversity:
+    entropy:
+      beta_diversity_entropy_start: 0.0
+      beta_diversity_entropy: 0.0
+      transition_steps_beta_diversity_entropy: 100000
+      warmup_steps_beta_diversity_entropy: 10000
+    sample:
+      beta_diversity_sample_start: 0.0
+      beta_diversity_sample: 0.0
+      transition_steps_beta_diversity_sample: 10000
+      warmup_steps_beta_diversity_sample: 0
+    position:
+      beta_diversity_position_start: 0.0  
+      beta_diversity_position: 0.0
+      transition_steps_beta_diversity_position: 10000
+      warmup_steps_beta_diversity_position: 0
+    usage:
+      beta_diversity_usage_start: 0.0
+      beta_diversity_usage: 0.0
+      transition_steps_beta_diversity_usage: 10000
+      warmup_steps_beta_diversity_usage: 0
+logging:
+  viz_interval: 1000
+  val_check_interval: 1000
+  debug: false
+  wandb_logging: true
+acceleration:
+  matmul_precision: high
+  precision: bf16-true
+  compile_model: true
+  device: auto
+dataset:
+  train_ds: train
+  val_ds: val
+project:
+  project_name: dvae-v2
+  run_name: v3_normal
+  checkpoint_dir: runs
+  model_src: null
+misc:
+  config_file: null
