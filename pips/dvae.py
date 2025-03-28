@@ -516,8 +516,8 @@ class AttnCodebook(nn.Module):
         # Shared codebook embeddings: shape [codebook_size, d_model]
         self.codebook = nn.Parameter(torch.randn(codebook_size, d_model))
         # EMA buffers to keep track of cluster sizes and the running average of codebook embeddings.
-        self.register_buffer("ema_cluster_size", torch.zeros(codebook_size), persistent=False)
-        self.register_buffer("ema_codebook", self.codebook.data.clone(), persistent=False)
+        self.register_buffer("ema_cluster_size", torch.zeros(codebook_size), persistent=True)
+        self.register_buffer("ema_codebook", self.codebook.data.clone(), persistent=True)
 
         ## Attention Stuff
         # Projection layers to generate keys and values from the codebook.
