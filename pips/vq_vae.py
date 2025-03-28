@@ -552,13 +552,15 @@ class VQVAE(nn.Module):
 
         if self.skip_codebook:
             decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
+            vq_loss = torch.tensor(0.0, device=x.device)
+            commitment_loss = torch.tensor(0.0, device=x.device)
         else:
             decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
+            vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
+            commitment_loss = F.mse_loss(z_e_x, z_q_x.detach())
     
         ce_loss = self.reconstruction_loss(decoded_logits, x, pad_value=self.pad_value, gamma=self.gamma)
-        vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
-        commitment_loss = F.mse_loss(z_e_x, z_q_x.detach())
-    
+
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
              "vq_loss": vq_loss,
