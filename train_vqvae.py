@@ -211,36 +211,69 @@ class LoggingCallback(pl.Callback):
         
         plt.close(fig)  # Close the figure to free memory
 
-    def _create_metric_suffix(self, outputs, current_step):
+    def calculate_codebook_usage(self, indices: Tensor, codebook_size: int) -> dict:
         """
-        Creates a standardized suffix for metrics with consistent formatting.
+        Calculate codebook usage statistics from quantization indices.
         
         Args:
-            outputs: Dictionary containing model outputs
-            current_step: Current global step
-            
+            indices (Tensor): Quantization indices of shape [B, n_codes]
+            codebook_size (int): Size of the codebook
         Returns:
-            String suffix to append to metric keys
+            dict: Dictionary containing prefixed codebook usage statistics ready for logging
         """
-        suffix_parts = []
-        
-        # Add tau if available
-        if 'tau' in outputs:
-            suffix_parts.append(f"tau_{outputs['tau'].item():.4f}")
-            
-        # Add global step
-        suffix_parts.append(f"step_{current_step}")
-        
-        # Add gumbel noise scale if available
-        if 'gumbel_noise_scale' in outputs:
-            suffix_parts.append(f"gns_{outputs['gumbel_noise_scale'].item():.4f}")
-            
-        # Combine parts with underscores and add a leading underscore
-        return "_" + "_".join(suffix_parts) if suffix_parts else ""
 
+        assert indices.dim() == 2, "Indices must be a 2D tensor"
+        flat_indices = indices.reshape(-1)
+            
+        # Count unique indices
+        unique_indices, counts = torch.unique(flat_indices, return_counts=True)
+        
+        # Calculate percentage of codebook being used
+        unique_count = unique_indices.size(0)
+        usage_percent = unique_count / codebook_size
+        
+        # Calculate usage per position
+        B, n_codes = indices.size()
+        
+        # Calculate entropy of the usage distribution (overall)
+        normalized_counts = counts.float() / counts.sum()
+        entropy = -torch.sum(normalized_counts * torch.log2(normalized_counts + 1e-10))
+        max_entropy = torch.log2(torch.tensor(codebook_size, dtype=torch.float32))
+        entropy_percent = entropy / max_entropy
+        
+        # Initialize the results dictionary with prefixed keys
+        results = {
+            "CodebookUsage/codebook_usage:": usage_percent,
+            "CodebookUsage/codebook_entropy": entropy_percent.item(),
+        }
+        
+        # Add per-position metrics with appropriate prefixes
+        for pos in range(n_codes):
+            pos_indices = indices[:, pos]  # [B]
+            
+            # Position usage
+            pos_unique = torch.unique(pos_indices).size(0)
+            pos_usage_percent = pos_unique / codebook_size
+            results[f"Codebook/pos_{pos}_usage"] = pos_usage_percent
+            
+            # Position entropy
+            pos_unique, pos_counts = torch.unique(pos_indices, return_counts=True)
+            pos_normalized = pos_counts.float() / pos_counts.sum()
+            pos_entropy = -torch.sum(pos_normalized * torch.log2(pos_normalized + 1e-10))
+            pos_entropy_percent = pos_entropy / max_entropy
+            results[f"Codebook/pos_{pos}_entropy"] = pos_entropy_percent.item()
+            
+        return results
+    
+    
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         x = outputs.pop('input')
         logits = outputs.pop('logits')
+        
+        # Extract and process codebook indices if they exist
+        codebook_indices = outputs.pop('codebook_indices')
+        # Get pre-formatted codebook metrics and add to outputs
+        outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
 
         # Instead of using an exact modulo, check if it's time to log.
         current_step = pl_module.global_step
@@ -293,12 +326,16 @@ class LoggingCallback(pl.Callback):
     def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         x = outputs.pop('input')
         logits = outputs.pop('logits')
+        
+        # Extract and process codebook indices if they exist
+        codebook_indices = outputs.pop('codebook_indices')
+        # Get pre-formatted codebook metrics and add to outputs
+        outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
 
         # Visualize reconstructions only for the randomly selected batch.
         if batch_idx == self.val_batch_to_visualize:
             self.visualize_reconstructions(pl_module, x, logits, 'val')
         
-
         # Calculate tokens per second for the validation batch.
         if self.val_batch_start_time is not None:
             tokens_per_sec, time_per_batch_ms = self._calculate_tokens_per_sec(self.val_batch_start_time, batch)
@@ -310,18 +347,11 @@ class LoggingCallback(pl.Callback):
         self._log_metrics(pl_module, 'val', outputs, batch[0].size(0), on_step=False, on_epoch=True)
 
     def _log_metrics(self, pl_module: pl.LightningModule, phase: str, outputs: Dict[str, torch.Tensor], batch_size: int, on_step: bool, on_epoch: bool):
-        """Helper method to log loss metrics."""
+        """
+        Helper method to log metrics to WandB.
+        """
+        # Process each metric in the outputs dictionary
         for key, value in outputs.items():
-            # Handle the figure separately.
-            if key.startswith('CodebookUsage/latent_distribution'):
-                if isinstance(pl_module.logger, WandbLogger) and pl_module.global_rank == 0:
-                    log_key = f'{key}_{phase}'
-                    pl_module.logger.experiment.log({
-                        log_key: wandb.Image(value)
-                    })
-                plt.close(value)  # Close the figure to free memory
-                continue
-
             # Handle the main loss separately.
             if key == 'loss':
                 metric_name = f'TotalLoss/{key}_{phase}'  # Default format.
@@ -568,7 +598,7 @@ class VQVAETrainingModule(pl.LightningModule):
                 mask_pct: Tensor = torch.tensor(0.0)):
         
         # Forward pass with provided scheduled parameters.
-        logits, losses = self.model.forward(x, mask_percentage=mask_pct)
+        logits, losses, codebook_indices = self.model.forward(x, mask_percentage=mask_pct)
         
         # Calculate token accuracy excluding padding tokens.
         non_padding_mask = (x != self.padding_idx)
@@ -606,6 +636,7 @@ class VQVAETrainingModule(pl.LightningModule):
             'accuracy(SAMPLES)': sample_accuracy,
             'logits': logits,  # Add logits to the output dictionary.
             'input': x,        # Add input to the output dictionary.
+            'codebook_indices': codebook_indices
         }
 
     def training_step(self, batch, batch_idx):

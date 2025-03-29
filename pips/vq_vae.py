@@ -532,6 +532,9 @@ class VectorQuantization(Function):
         raise RuntimeError("Backward pass is not defined for VectorQuantization. "
                            "Use VQStraightThrough instead.")
 
+VQ = VectorQuantization.apply
+
+
 class VQStraightThrough(Function):
     """
     Custom autograd Function implementing the straight-through estimator for vector quantization.
@@ -553,7 +556,7 @@ class VQStraightThrough(Function):
         B, N, C = inputs.shape
         
         # Get nearest codebook indices using VectorQuantization.
-        idx = VectorQuantization.apply(inputs, codebook)  # idx has shape [B, N]
+        idx = VQ(inputs, codebook)  # idx has shape [B, N]
         
         # Flatten indices to shape [B*N] for later use.
         flat_idx = idx.reshape(B * N)
@@ -569,20 +572,19 @@ class VQStraightThrough(Function):
         # Reshape back to hard dimensions [B, N, C].
         codes = codes_flat.reshape(B, N, C)
         
-        return codes, flat_idx
+        # Return both the codes and the original indices (not flattened)
+        return codes, flat_idx, idx
 
     @staticmethod
-    def backward(ctx, grad_outputs, grad_indices):
+    def backward(ctx, grad_outputs, grad_flat_idx, grad_idx):
         grad_inputs, grad_codebook = None, None
         
         # Pass the gradients to the encoder inputs directly using the straight-through method.
         if ctx.needs_input_grad[0]:
             grad_inputs = grad_outputs.clone()
         
-        
         # Compute gradients with respect to the codebook.
         if ctx.needs_input_grad[1]:
-            
             # grad_outputs: gradient with respect to the quantized codes, shape [B, N, C]
             flat_idx, codebook = ctx.saved_tensors
         
@@ -601,7 +603,6 @@ class VQStraightThrough(Function):
         return grad_inputs, grad_codebook
 
 
-VQ = VectorQuantization.apply
 VQ_ST =  VQStraightThrough.apply
 
 
@@ -670,22 +671,20 @@ class VQEmbedding(nn.Module):
             - z_q_x: Quantized vectors with shape (B, N, C).
             - zqx_tilde: An alternative quantized representation derived directly by index selection,
                          also with shape (B, N, C).
+            - idx: Quantization indices with shape (B, N).
         
         Args:
             z_e_x (Tensor): The continuous encoded output from the transformer.
                             Expected shape: (B, N, C), where C equals the embedding dimension D.
         
         Returns:
-            tuple: (z_q_x, zqx_tilde)
+            tuple: (z_q_x, zqx_tilde, idx)
         """
         # Input shape: (B, N, C)
         # Apply the straight-through vector quantization.
         # VQ_ST is the straight-through variant (VQStraightThrough.apply) that allows gradient flow.
-        # It returns quantized codes (z_q_x) and indices (idx) with shapes (B, N, C) and (B, N), respectively.
-        z_q_x, idx = VQ_ST(z_e_x, self.vq_embs.weight.detach())
-        
-        # Flatten the indices for alternative representation computation.
-        flat_idx = idx.view(-1)  # New shape: (B*N,)
+        # It now returns quantized codes (z_q_x), flat indices (flat_idx), and original indices (idx)
+        z_q_x, flat_idx, idx = VQ_ST(z_e_x, self.vq_embs.weight.detach())
         
         # Directly index the codebook using flat_idx to obtain the alternative quantized representation.
         # This returns a tensor of shape (B*N, D)
@@ -694,11 +693,8 @@ class VQEmbedding(nn.Module):
         # Reshape the flat tensor back to the input shape: (B, N, C)
         zqx_tilde = flat_zqx_tilde.view_as(z_e_x)  # New shape: (B, N, C)
         
-
-        # The first output is the quantized codes and the second is the alternative quantized representation.
-        # The first is straight-through and passed to the decoder.
-        # The second has un-detached codebook weights and is used for the codebook/commitment loss.
-        return z_q_x, zqx_tilde
+        # Return the quantized codes, the alternative quantized representation, and the indices
+        return z_q_x, zqx_tilde, idx
 
 
 
@@ -969,7 +965,6 @@ class VQVAE(nn.Module):
         x.masked_fill_(mask, self.mask_value)
         return x
     
-
     def forward(self, x: Tensor, mask_percentage: Tensor = torch.tensor(0.0)) -> Tuple[Tensor, dict, Tensor]:
         B, S = x.size()
         x_masked = self.apply_mask(x, mask_percentage)
@@ -978,22 +973,15 @@ class VQVAE(nn.Module):
     
         z_e_x = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
         
-        # Calculate and print the L2 norm of z_e_x
-        # z_e_x_norm = torch.norm(z_e_x, p=2, dim=-1).mean().item()
-        # print(f"Encoder output (z_e_x) norm: {z_e_x_norm:.4f}")
-                
+        usage_stats = None
+        
         if self.skip_codebook:
             decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
             vq_loss = torch.tensor(0.0, device=x.device)
             commitment_loss = torch.tensor(0.0, device=x.device)
         else:
-            z_q_x_st, z_q_x = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
-            
-            # Calculate and print the L2 norms of z_q_x and z_q_x_st
-            # z_q_x_norm = torch.norm(z_q_x, p=2, dim=-1).mean().item()
-            # z_q_x_st_norm = torch.norm(z_q_x_st, p=2, dim=-1).mean().item()
-            # print(f"Quantized vectors (z_q_x) norm: {z_q_x_norm:.4f}")
-            # print(f"Straight-through quantized vectors (z_q_x_st) norm: {z_q_x_st_norm:.4f}")
+            # Get quantized vectors and indices
+            z_q_x_st, z_q_x, indices = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
             
             decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
             vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
@@ -1006,7 +994,9 @@ class VQVAE(nn.Module):
              "vq_loss": vq_loss,
              "commitment_loss": commitment_loss
         }
-        return decoded_logits, losses
+        
+        # Return usage_stats as a third return value
+        return decoded_logits, losses, indices
 
 
     def reconstruction_loss(self, decoded_logits: Tensor, x: Tensor, pad_value: int = -1, pad_weight: float = 1.0, gamma: float = 0.0) -> Tensor:
