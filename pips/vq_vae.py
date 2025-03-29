@@ -927,7 +927,7 @@ class VQVAE(nn.Module):
         self.apply(self._init_weights)
 
     def _init_weights(self, module):
-        """Initialize weights like in Llama."""
+        """Initialize weights like in Llama, but preserve VQEmbedding initialization."""
         if isinstance(module, nn.Linear):
             # For most linear layers, use standard normal initialization
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -936,7 +936,8 @@ class VQVAE(nn.Module):
             # # Special scaling for the output projection after attention
             # if hasattr(module, 'RESCALE_INIT'):
             #     module.weight.data.div_(math.sqrt(2 * self.config.n_layer))
-        elif isinstance(module, nn.Embedding):
+        elif isinstance(module, nn.Embedding) and not isinstance(module, VQEmbedding) and module is not self.codebook.vq_embs:
+            # Skip VQEmbedding modules and the codebook specifically
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
         elif isinstance(module, RMSNorm):
             torch.nn.init.ones_(module.scale)
