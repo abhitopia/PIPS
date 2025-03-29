@@ -47,7 +47,7 @@ acceleration_config:
   matmul_precision: high
   compile_model: true
 project_config:
-  run_name: v6
+  run_name: v7
   project_name: train-vq-vae-v1
   checkpoint_dir: runs
   val_check_interval: 1000
