@@ -634,8 +634,14 @@ class VQEmbedding(nn.Module):
         super(VQEmbedding, self).__init__()
         # Create an embedding layer (the codebook) with K embeddings of dimension D.
         self.vq_embs = nn.Embedding(K, D)
-        # Initialize the codebook weights uniformly in the range [-1/K, 1/K]
-        self.vq_embs.weight.data.uniform_(-1.0 / K, 1.0 / K)
+        
+        # Initialize with normal distribution
+        self.vq_embs.weight.data.normal_(0, 1.0)
+        
+        # Scale to match expected norm from RMSNorm (approximately sqrt(D))
+        expected_norm = math.sqrt(D)
+        current_norm = torch.norm(self.vq_embs.weight.data, dim=1, keepdim=True).mean()
+        self.vq_embs.weight.data *= (expected_norm / current_norm)
         
     def forward(self, z_e_x):
         """
@@ -888,7 +894,7 @@ class VQVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=True,
+            out_norm=True,   # This seems to work even when skipping codebook so let's keep it.
             rope=rope_1d
         )
 
@@ -971,6 +977,10 @@ class VQVAE(nn.Module):
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
     
         z_e_x = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
+        
+        # Calculate and print the L2 norm of z_e_x
+        # z_e_x_norm = torch.norm(z_e_x, p=2, dim=-1).mean().item()
+        # print(f"Encoder output (z_e_x) norm: {z_e_x_norm:.4f}")
                 
         if self.skip_codebook:
             decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
@@ -978,6 +988,13 @@ class VQVAE(nn.Module):
             commitment_loss = torch.tensor(0.0, device=x.device)
         else:
             z_q_x_st, z_q_x = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
+            
+            # Calculate and print the L2 norms of z_q_x and z_q_x_st
+            # z_q_x_norm = torch.norm(z_q_x, p=2, dim=-1).mean().item()
+            # z_q_x_st_norm = torch.norm(z_q_x_st, p=2, dim=-1).mean().item()
+            # print(f"Quantized vectors (z_q_x) norm: {z_q_x_norm:.4f}")
+            # print(f"Straight-through quantized vectors (z_q_x_st) norm: {z_q_x_st_norm:.4f}")
+            
             decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
             vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
             commitment_loss = F.mse_loss(z_e_x, z_q_x.detach())

@@ -1117,13 +1117,9 @@ def export_default_train_args(output_path: Path = typer.Argument(..., help="Path
     # Get default ExperimentConfig
     default_config = ExperimentConfig()
     config_dict = default_config.to_dict()
-
-    acceleration_config = AccelerationConfig()
-    acceleration_dict = acceleration_config.to_dict()
     
     # Add experiment config as a nested dictionary
     defaults['experiment_config'] = config_dict
-    defaults['acceleration_config'] = acceleration_dict
     
     # Add 'run_name', 'project_name', 'checkpoint_dir' under project_config
     defaults['project_config'] = {
@@ -1147,6 +1143,7 @@ def new_train(
     config_path: Path = typer.Argument(..., help="Path to the config YAML file"),
     debug_mode: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode"),
     lr_find: bool = typer.Option(False, "--lr-find", "-L", help="Enable learning rate finder"),
+    compile_model: bool = typer.Option(True, "--no-compile", help="Disable model compilation", is_flag=True, flag_value=False),
 ):
     """Train a model using configuration from a YAML file.
     
@@ -1163,8 +1160,12 @@ def new_train(
     experiment_config = ExperimentConfig.from_dict(experiment_config_dict)
 
     # Extract acceleration config and create AccelerationConfig instance
-    acceleration_config_dict = config_dict.pop('acceleration_config')
-    acceleration_config = AccelerationConfig.from_dict(acceleration_config_dict)
+    acceleration_config = AccelerationConfig(
+        device='auto',
+        precision='bf16-true',
+        matmul_precision='high',
+        compile_model=compile_model
+    )
     
     project_config = config_dict.pop('project_config')
     project_name = project_config['project_name']
