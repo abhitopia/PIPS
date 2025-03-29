@@ -971,13 +971,12 @@ class VQVAE(nn.Module):
     
         z_e_x = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
                 
-        z_q_x_st, z_q_x = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
-
         if self.skip_codebook:
             decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
             vq_loss = torch.tensor(0.0, device=x.device)
             commitment_loss = torch.tensor(0.0, device=x.device)
         else:
+            z_q_x_st, z_q_x = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
             decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
             vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
             commitment_loss = F.mse_loss(z_e_x, z_q_x.detach())
