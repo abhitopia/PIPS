@@ -755,20 +755,36 @@ class VQEmbedding(nn.Module):
             normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1)).to(weights_dtype)
 
             # ----- NEW: Reset unused codebook entries -----
-            # Identify codebook entries with very low usage (threshold < 1)
+            # Identify codebook entries with very low usage (threshold defined by self.unused_reset_threshold)
+            # Here, self.cluster_size is an EMA (floating-point) value that decays when not updated.
             unused_mask = self.cluster_size < self.unused_reset_threshold  # Boolean mask of shape [K]
-            if unused_mask.any():
-                # Reshape encoder outputs to a flat [B*N, D] tensor
-                flat_z_e = z_e_x.reshape(-1, D)
-                # Sample a random encoder vector for each unused codebook entry
-                num_unused = int(unused_mask.sum().item())
-                random_idx = torch.randint(0, flat_z_e.shape[0], (num_unused,), device=z_e_x.device)
-                random_codes = flat_z_e[random_idx]
-                # Replace normalized embeddings for unused entries with the random encoder outputs
-                normalized_embeddings[unused_mask] = random_codes
-                # Also reset the corresponding EMA buffers for these entries
-                self.cluster_size[unused_mask] = 1.0
-                self.embed_sum[unused_mask] = random_codes
+
+            # To avoid dynamic control flow, sample a random code for every codebook entry,
+            # then use torch.where to replace only the unused entries.
+            flat_z_e = z_e_x.reshape(-1, D)  # [B*N, D]
+            # Sample random indices for every entry (only those selected by the mask will be used)
+            rand_idx = torch.randint(0, flat_z_e.shape[0], (codebook_size,), device=z_e_x.device)
+            random_codes = flat_z_e[rand_idx]  # shape: [codebook_size, D]
+
+            # Use torch.where: if an entry is unused, replace it with a random code.
+            normalized_embeddings = torch.where(
+                unused_mask.unsqueeze(1),  # shape: [K, 1]
+                random_codes,
+                normalized_embeddings
+            )
+            # Also update the EMA buffers for these entries.
+            new_cluster_size = torch.where(
+                unused_mask,
+                torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+                self.cluster_size
+            )
+            new_embed_sum = torch.where(
+                unused_mask.unsqueeze(1),
+                random_codes,
+                self.embed_sum
+            )
+            self.cluster_size.copy_(new_cluster_size)
+            self.embed_sum.copy_(new_embed_sum)
             # ----- End reset -----
             
             # Update the codebook weights
