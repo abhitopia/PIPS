@@ -40,7 +40,7 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: null
+  model_src: v11_encoder_out_norm_v2/best/9000
   kmeans_init_codebook: false
   kmeans_init_max_datapoints: 500000
 acceleration_config:
