@@ -1115,7 +1115,7 @@ class VQVAE(nn.Module):
             n_clusters=self.config.codebook_size,
             random_state=0,
             verbose=1,
-            batch_size=1000  # Process in smaller batches
+            batch_size=50000  # Process in smaller batches
         )
         
         # Make sure the tensor is in float32 before converting to numpy
