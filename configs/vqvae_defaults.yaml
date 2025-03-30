@@ -19,8 +19,8 @@ experiment_config:
     skip_codebook: false
     use_ema: false
     ema_decay: 0.99
-    n_pos: 1024
-  seed: 4086443001
+    unused_reset_threshold: 1.0
+  seed: 3984890710
   batch_size: 64
   max_steps: 1000000
   gradient_clip_val: 1.0
@@ -44,7 +44,7 @@ experiment_config:
   kmeans_init_codebook: false
   kmeans_init_max_datapoints: 500000
 project_config:
-  run_name: keen-bear-318
+  run_name: kind-falcon-021
   project_name: train-vq-vae
   checkpoint_dir: runs
   val_check_interval: 1000

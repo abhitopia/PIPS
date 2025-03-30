@@ -1,3 +1,8 @@
+# EMA Codeboook
+- [x] Add codebook resets
+- [ ] Measure peplexity/entropy
+- [ ] log the norm of the encoder vs codebook
+
 # 28th March 2025 (Add VQVAE)
 - [x] Add VQVAE and corresponding CLI
 

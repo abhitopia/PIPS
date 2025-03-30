@@ -625,7 +625,7 @@ class VQEmbedding(nn.Module):
             N = Number of tokens (discrete codes),
             C = Embedding dimension (should equal D).
     """
-    def __init__(self, K: int, D: int, decay: float = 0.99):
+    def __init__(self, K: int, D: int, decay: float = 0.99, unused_reset_threshold: float = 1.0):
         """
         Initialize the VQEmbedding module.
         
@@ -638,7 +638,7 @@ class VQEmbedding(nn.Module):
         # Create an embedding layer (the codebook) with K embeddings of dimension D.
         self.vq_embs = nn.Embedding(K, D)
         self.decay = decay
-        
+        self.unused_reset_threshold = unused_reset_threshold
         # Initialize with normal distribution
         self.vq_embs.weight.data.normal_(0, 1.0)
         
@@ -753,6 +753,23 @@ class VQEmbedding(nn.Module):
             # effective_cluster_size.unsqueeze(1): [codebook_size, 1]
             # Result: [codebook_size, embedding_dim]
             normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1)).to(weights_dtype)
+
+            # ----- NEW: Reset unused codebook entries -----
+            # Identify codebook entries with very low usage (threshold < 1)
+            unused_mask = self.cluster_size < self.unused_reset_threshold  # Boolean mask of shape [K]
+            if unused_mask.any():
+                # Reshape encoder outputs to a flat [B*N, D] tensor
+                flat_z_e = z_e_x.reshape(-1, D)
+                # Sample a random encoder vector for each unused codebook entry
+                num_unused = int(unused_mask.sum().item())
+                random_idx = torch.randint(0, flat_z_e.shape[0], (num_unused,), device=z_e_x.device)
+                random_codes = flat_z_e[random_idx]
+                # Replace normalized embeddings for unused entries with the random encoder outputs
+                normalized_embeddings[unused_mask] = random_codes
+                # Also reset the corresponding EMA buffers for these entries
+                self.cluster_size[unused_mask] = 1.0
+                self.embed_sum[unused_mask] = random_codes
+            # ----- End reset -----
             
             # Update the codebook weights
             self.vq_embs.weight.copy_(normalized_embeddings)
@@ -846,6 +863,7 @@ class VQVAEConfig(Config):
     skip_codebook: bool = False
     use_ema: bool = False
     ema_decay: float = 0.99
+    unused_reset_threshold: float = 1.0
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -904,6 +922,7 @@ class VQVAEConfig(Config):
             'skip_codebook': self.skip_codebook,
             'use_ema': self.use_ema,
             'ema_decay': self.ema_decay,
+            'unused_reset_threshold': self.unused_reset_threshold,
         }
          
         return base_dict
@@ -996,7 +1015,10 @@ class VQVAE(nn.Module):
         )
 
 
-        self.codebook = VQEmbedding(config.codebook_size, config.n_dim, decay=config.ema_decay)    
+        self.codebook = VQEmbedding(config.codebook_size,
+                                    config.n_dim, 
+                                    decay=config.ema_decay, 
+                                    unused_reset_threshold=config.unused_reset_threshold)    
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
