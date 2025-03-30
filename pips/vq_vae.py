@@ -510,13 +510,11 @@ class VectorQuantization(Function):
         
         # Compute squared Euclidean distance between each input and each codebook vector.
         # Using the identity: ||x - e||^2 = ||x||^2 + ||e||^2 - 2*(x · e)
-        # Here, torch.addmm computes: (codebook_sq + inputs_sq) + 2 * (flat_input @ codebook.T)
-        # Since we're only selecting the minimum, the sign is unimportant.
         # Resulting shape: [B*N, K]
         l2_dis = torch.addmm(input=codebook_sq + inputs_sq,
                              mat1=flat_input,
                              mat2=codebook.t(),
-                             alpha=2.0, beta=1.0)
+                             alpha=-2.0, beta=1.0)
         
         # For each input vector, find the index of the codebook vector with minimum distance.
         # idx_flat: shape [B*N]
