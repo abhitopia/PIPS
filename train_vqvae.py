@@ -277,9 +277,7 @@ class LoggingCallback(pl.Callback):
         
         # Extract and process codebook indices if they exist
         codebook_indices = outputs.pop('codebook_indices')
-        # Get pre-formatted codebook metrics and add to outputs
-        outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
-
+       
         # Instead of using an exact modulo, check if it's time to log.
         current_step = pl_module.global_step
         should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
@@ -288,6 +286,8 @@ class LoggingCallback(pl.Callback):
         if should_visualize:
             self.visualize_reconstructions(pl_module, x, logits, 'train')
             self.last_logged_visualization = current_step
+            # Get pre-formatted codebook metrics and add to outputs
+            outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
 
         # Calculate tokens per second for the training batch.
         if self.train_batch_start_time is not None:
