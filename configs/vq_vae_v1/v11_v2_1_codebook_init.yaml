@@ -42,7 +42,7 @@ experiment_config:
   permute_train: true
   model_src: v11_encoder_out_norm_v2/best/9000
   kmeans_init_codebook: true
-  kmeans_init_max_datapoints: 500000
+  kmeans_init_max_datapoints: 1000000
 acceleration_config:
   device: auto
   precision: bf16-true
