@@ -1,10 +1,12 @@
+# Trying to reproduce the results without codebook, change the dataset to TRAIN
+# Fixed the codebook size to 512  in the code
 experiment_config:
   model_config:
     n_dim: 256
     n_head: 4
-    n_grid_layer: 2
-    n_latent_layer: 2
-    n_codes: 128
+    n_grid_layer: 4
+    n_latent_layer: 4
+    n_codes: 64
     codebook_size: 512
     rope_base_height: 10007
     rope_base_width: 5003
@@ -17,21 +19,24 @@ experiment_config:
     pad_weight: 0.1
     gamma: 2.0
     skip_codebook: false
-    use_ema: false
+    use_ema: true
     ema_decay: 0.99
     n_pos: 1024
-  seed: 4086443001
-  batch_size: 64
+
+  kmeans_init_codebook: true
+  kmeans_init_max_datapoints: 1000000
+  seed: 2274030480
+  batch_size: 196
   max_steps: 1000000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   mask_schedule_type: cosine
-  learning_rate: 0.0001
-  lr_min: 1.0e-06
-  warmup_steps_lr: 10000
+  learning_rate: 0.0000575
+  lr_min: 0.000000575 
+  warmup_steps_lr: 100
   decay_steps_lr: 990000
   weight_decay: 0.0001
-  beta_commitment: 1.0
+  beta_commitment: 0.25
   mask_pct_start: 0.0
   max_mask_pct: 0.0
   transition_steps_mask_pct: 50000
@@ -40,12 +45,15 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: null
-  kmeans_init_codebook: false
-  kmeans_init_max_datapoints: 500000
+  model_src: v11_encoder_out_norm_v2/best/9000
+acceleration_config:
+  device: auto
+  precision: bf16-true
+  matmul_precision: high
+  compile_model: true
 project_config:
-  run_name: keen-bear-318
-  project_name: train-vq-vae
+  run_name: v11_v2_1_codebook_init_ema
+  project_name: train-vq-vae-v1
   checkpoint_dir: runs
-  val_check_interval: 1000
+  val_check_interval: 1050
   viz_interval: 1000

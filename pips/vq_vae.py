@@ -627,17 +627,19 @@ class VQEmbedding(nn.Module):
             N = Number of tokens (discrete codes),
             C = Embedding dimension (should equal D).
     """
-    def __init__(self, K: int, D: int):
+    def __init__(self, K: int, D: int, decay: float = 0.99):
         """
         Initialize the VQEmbedding module.
         
         Args:
             K (int): Total number of embeddings in the codebook (codebook_size).
             D (int): Dimensionality of each embedding.
+            decay (float): EMA decay rate (default: 0.99)
         """
         super(VQEmbedding, self).__init__()
         # Create an embedding layer (the codebook) with K embeddings of dimension D.
         self.vq_embs = nn.Embedding(K, D)
+        self.decay = decay
         
         # Initialize with normal distribution
         self.vq_embs.weight.data.normal_(0, 1.0)
@@ -646,6 +648,11 @@ class VQEmbedding(nn.Module):
         expected_norm = math.sqrt(D)
         current_norm = torch.norm(self.vq_embs.weight.data, dim=1, keepdim=True).mean()
         self.vq_embs.weight.data *= (expected_norm / current_norm)
+        
+        # Register buffers for EMA updates
+        self.register_buffer('cluster_size', torch.zeros(K), persistent=False)
+        self.register_buffer('embed_sum', torch.zeros(K, D), persistent=False)
+        self.register_buffer('ema_initialized', torch.tensor(0, dtype=torch.bool), persistent=False)
         
     def forward(self, z_e_x):
         """
@@ -665,9 +672,90 @@ class VQEmbedding(nn.Module):
         latents = VQ(z_e_x, self.vq_embs.weight)  # Resulting shape: (B, N)
         return latents
     
-    def straight_through_forward(self, z_e_x):
+    def update_codebook_ema(self, z_e_x, indices):
         """
-        Forward pass with a straight-through estimator.
+        Update codebook vectors using Exponential Moving Average (EMA).
+        
+        This method implements codebook updates using EMA as described in the VQ-VAE-2 paper.
+        Rather than using gradient-based updates, it directly moves codebook vectors toward
+        the encoder outputs that mapped to them, using an exponential decay to maintain stability.
+        
+        Args:
+            z_e_x (Tensor): Encoder output vectors [B, N, C]
+                B = batch size
+                N = number of codes per sample 
+                C = embedding dimension
+            indices (Tensor): Indices of nearest codebook entries [B, N]
+        """
+        # Detach from the computation graph to avoid in-place operation errors
+        with torch.no_grad():
+            # Get shapes
+            B, N, D = z_e_x.shape  # [batch_size, n_codes, embedding_dim]
+            flat_idx = indices.reshape(B * N)  # [batch_size * n_codes]
+            codebook_size = self.vq_embs.weight.shape[0]
+            
+            # Create one-hot encodings of the indices
+            # This gives a binary matrix where each row has a single 1 at the index position
+            # Shape: [batch_size * n_codes, codebook_size]
+            encodings = F.one_hot(flat_idx, num_classes=codebook_size).float()
+            
+            # Count how many times each codebook entry is used in this batch
+            # Sum along batch dimension (dim=0)
+            # Shape: [codebook_size]
+            new_cluster_size = encodings.sum(0)
+            
+            # Compute sum of encoder outputs for each codebook entry
+            # encodings.t(): [codebook_size, batch_size * n_codes]
+            # z_e_x.reshape(-1, D): [batch_size * n_codes, embedding_dim]
+            # Result: [codebook_size, embedding_dim]
+            dw = encodings.t() @ z_e_x.detach().reshape(-1, D)  # Detach encoder outputs
+            
+            # ------------ TORCH.COMPILE FRIENDLY CODE ------------
+            # Instead of using if/else which creates dynamic control flow,
+            # we compute both paths and use torch.where to select the right one statically
+            
+            # Get initialization status 
+            is_first_batch = ~self.ema_initialized  # [scalar boolean tensor]
+            
+            # For first batch: just use the current batch values
+            initialized_cluster_size = new_cluster_size  # [codebook_size]
+            initialized_embed_sum = dw  # [codebook_size, embedding_dim]
+            
+            # For subsequent batches: apply EMA update formula
+            # decay * old_value + (1 - decay) * new_value
+            updated_cluster_size = self.cluster_size * self.decay + new_cluster_size * (1 - self.decay)  # [codebook_size]
+            updated_embed_sum = self.embed_sum * self.decay + dw * (1 - self.decay)  # [codebook_size, embedding_dim]
+            
+            # Statically select which values to use based on initialization status
+            # For first batch, use initialized values; for later batches, use updated values
+            new_cluster_size = torch.where(is_first_batch, initialized_cluster_size, updated_cluster_size)
+            new_embed_sum = torch.where(is_first_batch.unsqueeze(-1), initialized_embed_sum, updated_embed_sum)
+            
+            # Update buffers
+            self.cluster_size.copy_(new_cluster_size)
+            self.embed_sum.copy_(new_embed_sum)
+            
+            # Always set ema_initialized to True after processing
+            self.ema_initialized.copy_(torch.tensor(True, dtype=torch.bool, device=self.ema_initialized.device))
+            # ------------ END TORCH.COMPILE FRIENDLY CODE ------------
+            
+            # Prevent division by zero by adding a small constant
+            # Shape: [codebook_size]
+            effective_cluster_size = self.cluster_size + 1e-5
+            
+            # Update codebook weights with normalized embedding sums
+            # Make sure we're working with fully detached values
+            # embed_sum: [codebook_size, embedding_dim]
+            # effective_cluster_size.unsqueeze(1): [codebook_size, 1]
+            # Result: [codebook_size, embedding_dim]
+            normalized_embeddings = self.embed_sum / effective_cluster_size.unsqueeze(1)
+            
+            # Update the codebook weights
+            self.vq_embs.weight.copy_(normalized_embeddings)
+    
+    def straight_through_forward(self, z_e_x, use_ema=False):
+        """
+        Forward pass with a straight-through estimator, optionally using EMA updates.
         
         This method quantizes the input vectors and allows gradients to flow through
         the quantization process by using the straight-through approach. It returns:
@@ -679,7 +767,8 @@ class VQEmbedding(nn.Module):
         Args:
             z_e_x (Tensor): The continuous encoded output from the transformer.
                             Expected shape: (B, N, C), where C equals the embedding dimension D.
-        
+            use_ema (bool): Whether to use EMA updates for codebook
+            
         Returns:
             tuple: (z_q_x, zqx_tilde, idx)
         """
@@ -695,6 +784,10 @@ class VQEmbedding(nn.Module):
         
         # Reshape the flat tensor back to the input shape: (B, N, C)
         zqx_tilde = flat_zqx_tilde.view_as(z_e_x)  # New shape: (B, N, C)
+        
+        # Apply EMA updates if enabled and in training mode
+        if use_ema and self.training:
+            self.update_codebook_ema(z_e_x, idx)
         
         # Return the quantized codes, the alternative quantized representation, and the indices
         return z_q_x, zqx_tilde, idx
@@ -726,6 +819,9 @@ class VQVAEConfig(Config):
         pad_weight (float): Weight for pad token loss (default: 0.01)
         gamma (float): Focal loss gamma parameter. With \(\gamma=0\) there is no focal modulation, defaulting to 2.0.
         n_layer (int): Total number of transformer layers (grid + latent)
+        skip_codebook (bool): Whether to skip the codebook and use continuous latents (default: False)
+        use_ema (bool): Whether to use EMA updates for codebook (default: False)
+        ema_decay (float): Decay rate for EMA updates (default: 0.99)
     """
     n_dim: int = 256
     n_head: int = 4
@@ -744,6 +840,8 @@ class VQVAEConfig(Config):
     pad_weight: float = 0.1
     gamma: float = 2.0
     skip_codebook: bool = False
+    use_ema: bool = False
+    ema_decay: float = 0.99
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -800,14 +898,10 @@ class VQVAEConfig(Config):
             'pad_weight': self.pad_weight,
             'gamma': self.gamma,
             'skip_codebook': self.skip_codebook,
+            'use_ema': self.use_ema,
+            'ema_decay': self.ema_decay,
         }
-        
-        # Add computed attributes if they exist
-        computed_attrs = ['n_pos']
-        for attr in computed_attrs:
-            if hasattr(self, attr):
-                base_dict[attr] = getattr(self, attr)
-                
+         
         return base_dict
 
     @classmethod
@@ -898,7 +992,7 @@ class VQVAE(nn.Module):
         )
 
 
-        self.codebook = VQEmbedding(config.codebook_size, config.n_dim)    
+        self.codebook = VQEmbedding(config.codebook_size, config.n_dim, decay=config.ema_decay)    
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
@@ -983,9 +1077,11 @@ class VQVAE(nn.Module):
             indices = None
         else:
             # Get quantized vectors and indices
-            z_q_x_st, z_q_x, indices = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
+            z_q_x_st, z_q_x, indices = self.codebook.straight_through_forward(z_e_x, use_ema=self.config.use_ema) # [B, n_codes, n_dim]
             
             decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
+            
+            # Always calculate both losses for monitoring
             vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
             commitment_loss = F.mse_loss(z_e_x, z_q_x.detach())
     
@@ -993,7 +1089,7 @@ class VQVAE(nn.Module):
 
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
-             "vq_loss": vq_loss,
+             "vq_loss": vq_loss.detach() if self.config.use_ema else vq_loss, # Detach to prevent gradients when using EMA
              "commitment_loss": commitment_loss
         }
         
