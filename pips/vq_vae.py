@@ -694,21 +694,26 @@ class VQEmbedding(nn.Module):
             flat_idx = indices.reshape(B * N)  # [batch_size * n_codes]
             codebook_size = self.vq_embs.weight.shape[0]
             
+            # Force the codebook and z_e_x to the same dtype
+            # This is crucial when using mixed precision
+            weights_dtype = self.vq_embs.weight.dtype
+            z_e_x_detached = z_e_x.detach().to(weights_dtype)
+            
             # Create one-hot encodings of the indices
             # This gives a binary matrix where each row has a single 1 at the index position
             # Shape: [batch_size * n_codes, codebook_size]
-            encodings = F.one_hot(flat_idx, num_classes=codebook_size).float()
+            encodings = F.one_hot(flat_idx, num_classes=codebook_size).to(weights_dtype)
             
             # Count how many times each codebook entry is used in this batch
             # Sum along batch dimension (dim=0)
             # Shape: [codebook_size]
             new_cluster_size = encodings.sum(0)
             
-            # Compute sum of encoder outputs for each codebook entry
+            # Compute sum of encoder outputs for each codebook entry - ensure consistent dtype
             # encodings.t(): [codebook_size, batch_size * n_codes]
-            # z_e_x.reshape(-1, D): [batch_size * n_codes, embedding_dim]
+            # z_e_x_detached.reshape(-1, D): [batch_size * n_codes, embedding_dim]
             # Result: [codebook_size, embedding_dim]
-            dw = encodings.t() @ z_e_x.detach().reshape(-1, D)  # Detach encoder outputs
+            dw = encodings.t() @ z_e_x_detached.reshape(-1, D)
             
             # ------------ TORCH.COMPILE FRIENDLY CODE ------------
             # Instead of using if/else which creates dynamic control flow,
@@ -723,32 +728,33 @@ class VQEmbedding(nn.Module):
             
             # For subsequent batches: apply EMA update formula
             # decay * old_value + (1 - decay) * new_value
-            updated_cluster_size = self.cluster_size * self.decay + new_cluster_size * (1 - self.decay)  # [codebook_size]
-            updated_embed_sum = self.embed_sum * self.decay + dw * (1 - self.decay)  # [codebook_size, embedding_dim]
+            # Ensure all tensors are same dtype
+            updated_cluster_size = self.cluster_size.to(weights_dtype) * self.decay + new_cluster_size * (1 - self.decay)
+            updated_embed_sum = self.embed_sum.to(weights_dtype) * self.decay + dw * (1 - self.decay)
             
             # Statically select which values to use based on initialization status
             # For first batch, use initialized values; for later batches, use updated values
             new_cluster_size = torch.where(is_first_batch, initialized_cluster_size, updated_cluster_size)
             new_embed_sum = torch.where(is_first_batch.unsqueeze(-1), initialized_embed_sum, updated_embed_sum)
             
-            # Update buffers
-            self.cluster_size.copy_(new_cluster_size)
-            self.embed_sum.copy_(new_embed_sum)
+            # Update buffers - match dtype of the buffer
+            self.cluster_size.copy_(new_cluster_size.to(self.cluster_size.dtype))
+            self.embed_sum.copy_(new_embed_sum.to(self.embed_sum.dtype))
             
             # Always set ema_initialized to True after processing
             self.ema_initialized.copy_(torch.tensor(True, dtype=torch.bool, device=self.ema_initialized.device))
             # ------------ END TORCH.COMPILE FRIENDLY CODE ------------
             
             # Prevent division by zero by adding a small constant
-            # Shape: [codebook_size]
-            effective_cluster_size = self.cluster_size + 1e-5
+            # Use a larger epsilon for bfloat16 for better stability
+            effective_cluster_size = self.cluster_size + 1e-3  # Larger value for bfloat16
             
             # Update codebook weights with normalized embedding sums
             # Make sure we're working with fully detached values
             # embed_sum: [codebook_size, embedding_dim]
             # effective_cluster_size.unsqueeze(1): [codebook_size, 1]
             # Result: [codebook_size, embedding_dim]
-            normalized_embeddings = self.embed_sum / effective_cluster_size.unsqueeze(1)
+            normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1)).to(weights_dtype)
             
             # Update the codebook weights
             self.vq_embs.weight.copy_(normalized_embeddings)
