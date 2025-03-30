@@ -243,11 +243,13 @@ class LoggingCallback(pl.Callback):
         entropy = -torch.sum(normalized_counts * torch.log2(normalized_counts + 1e-10))
         max_entropy = torch.log2(torch.tensor(codebook_size, dtype=torch.float32))
         entropy_percent = entropy / max_entropy
+        perplexity = 2 ** entropy
         
         # Initialize the results dictionary with prefixed keys
         results = {
             "CodebookUsage/codebook_usage:": usage_percent,
             "CodebookUsage/codebook_entropy": entropy_percent.item(),
+            "CodebookUsage/codebook_perplexity": perplexity.item(),
         }
         
         # Add per-position metrics with appropriate prefixes
