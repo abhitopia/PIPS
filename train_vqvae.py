@@ -222,6 +222,9 @@ class LoggingCallback(pl.Callback):
             dict: Dictionary containing prefixed codebook usage statistics ready for logging
         """
 
+        if indices is None:
+            return {}
+        
         assert indices.dim() == 2, "Indices must be a 2D tensor"
         flat_indices = indices.reshape(-1)
             

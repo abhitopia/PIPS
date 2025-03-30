@@ -973,13 +973,12 @@ class VQVAE(nn.Module):
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
     
         z_e_x = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
-        
-        usage_stats = None
-        
+                
         if self.skip_codebook:
             decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
             vq_loss = torch.tensor(0.0, device=x.device)
             commitment_loss = torch.tensor(0.0, device=x.device)
+            indices = None
         else:
             # Get quantized vectors and indices
             z_q_x_st, z_q_x, indices = self.codebook.straight_through_forward(z_e_x) # [B, n_codes, n_dim]
