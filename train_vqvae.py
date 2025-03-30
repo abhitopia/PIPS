@@ -561,12 +561,26 @@ class VQVAETrainingModule(pl.LightningModule):
             # By this point, train_dataloader is available
             train_dataloader = self.trainer.train_dataloader
             
-            # Initialize codebook with k-means
-            self.model.initialize_codebook_with_kmeans(
+            # Get the original uncompiled model
+            target_model = self.model._orig_mod if hasattr(self.model, "_orig_mod") else self.model
+            
+            # Initialize codebook with k-means on the original model
+            target_model.initialize_codebook_with_kmeans(
                 data_loader=train_dataloader,
                 device=self.device,
                 max_datapoints=self.experiment_config.kmeans_init_max_datapoints
             )
+            
+            # If using compilation, recompile to ensure optimizations work with new weights
+            if self.compile_model and hasattr(self.model, "_orig_mod"):
+                # Reapply compilation to ensure optimizations work with new weights
+                print("Recompiling model with initialized codebook...")
+                self.model = torch.compile(
+                    target_model,
+                    fullgraph=True,
+                    mode="reduce-overhead",
+                    backend="inductor"
+                )
             
             print("Codebook initialization complete!")
 

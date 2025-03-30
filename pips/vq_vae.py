@@ -7,6 +7,8 @@ from torch import Tensor, nn
 from typing import List, Optional, Tuple
 from torch.amp import autocast
 from tqdm import tqdm
+from sklearn.cluster import MiniBatchKMeans
+
 
 
 
@@ -1109,8 +1111,12 @@ class VQVAE(nn.Module):
         
         # Perform k-means clustering with progress bar
         print(f"Running k-means clustering with {self.config.codebook_size} centroids...")
-        from sklearn.cluster import KMeans
-        kmeans = KMeans(n_clusters=self.config.codebook_size, random_state=0, verbose=1)
+        kmeans = MiniBatchKMeans(
+            n_clusters=self.config.codebook_size,
+            random_state=0,
+            verbose=1,
+            batch_size=1000  # Process in smaller batches
+        )
         
         # Make sure the tensor is in float32 before converting to numpy
         kmeans.fit(latent_vectors.numpy())
