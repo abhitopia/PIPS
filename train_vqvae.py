@@ -1142,7 +1142,7 @@ def train(
         # Load weights if a model source is specified
         if experiment_config.model_src:
             load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
-        wandb_logger.watch(model, log='all', log_graph=True, log_freq=100)
+        # wandb_logger.watch(model, log='parameters', log_graph=True, log_freq=100)
 
     if lr_find:
         tuner = Tuner(trainer)
