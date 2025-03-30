@@ -1085,7 +1085,8 @@ class VQVAE(nn.Module):
                 z_e_x = self.encode(x, grid_pos_indices, latent_pos_indices)
                 
                 # Collect latent vectors and update total count
-                batch_vectors = z_e_x.reshape(-1, self.config.n_dim).cpu()
+                # Convert to float32 here to ensure compatibility with scikit-learn
+                batch_vectors = z_e_x.reshape(-1, self.config.n_dim).to(torch.float32).cpu()
                 latent_vectors.append(batch_vectors)
                 total_vectors += batch_vectors.size(0)
                 
@@ -1110,6 +1111,8 @@ class VQVAE(nn.Module):
         print(f"Running k-means clustering with {self.config.codebook_size} centroids...")
         from sklearn.cluster import KMeans
         kmeans = KMeans(n_clusters=self.config.codebook_size, random_state=0, verbose=1)
+        
+        # Make sure the tensor is in float32 before converting to numpy
         kmeans.fit(latent_vectors.numpy())
         
         # Initialize codebook with cluster centroids
