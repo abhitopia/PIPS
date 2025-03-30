@@ -648,9 +648,9 @@ class VQEmbedding(nn.Module):
         self.vq_embs.weight.data *= (expected_norm / current_norm)
         
         # Register buffers for EMA updates
-        self.register_buffer('cluster_size', torch.zeros(K), persistent=False)
-        self.register_buffer('embed_sum', torch.zeros(K, D), persistent=False)
-        self.register_buffer('ema_initialized', torch.tensor(0, dtype=torch.bool), persistent=False)
+        self.register_buffer('cluster_size', torch.zeros(K), persistent=True)
+        self.register_buffer('embed_sum', torch.zeros(K, D), persistent=True)
+        self.register_buffer('ema_initialized', torch.tensor(0, dtype=torch.bool), persistent=True)
         
     def forward(self, z_e_x):
         """
