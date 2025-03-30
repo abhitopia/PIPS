@@ -421,6 +421,8 @@ class ExperimentConfig:
     
     # Other parameters
     model_src: str | None = None
+    kmeans_init_codebook: bool = False
+    kmeans_init_max_datapoints: int = 5_00_000
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -541,6 +543,29 @@ class VQVAETrainingModule(pl.LightningModule):
             )
         else:
             print("Model compilation disabled; skipping torch.compile.")
+    
+    def on_train_start(self):
+        """
+        Called at the beginning of training after dataloaders are initialized.
+        Initialize codebook with k-means clustering if enabled in config.
+        """
+        super().on_train_start()
+        
+        # Initialize codebook with k-means if enabled
+        if self.experiment_config.kmeans_init_codebook:
+            print(f"Initializing codebook with k-means clustering...")
+            
+            # By this point, train_dataloader is available
+            train_dataloader = self.trainer.train_dataloader
+            
+            # Initialize codebook with k-means
+            self.model.initialize_codebook_with_kmeans(
+                data_loader=train_dataloader,
+                device=self.device,
+                max_datapoints=self.experiment_config.kmeans_init_max_datapoints
+            )
+            
+            print("Codebook initialization complete!")
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys."""

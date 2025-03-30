@@ -6,6 +6,7 @@ from torch.nn import functional as F
 from torch import Tensor, nn
 from typing import List, Optional, Tuple
 from torch.amp import autocast
+from tqdm import tqdm
 
 
 
@@ -629,7 +630,7 @@ class VQEmbedding(nn.Module):
         Initialize the VQEmbedding module.
         
         Args:
-            K (int): Total number of embeddings in the codebook.
+            K (int): Total number of embeddings in the codebook (codebook_size).
             D (int): Dimensionality of each embedding.
         """
         super(VQEmbedding, self).__init__()
@@ -895,7 +896,7 @@ class VQVAE(nn.Module):
         )
 
 
-        self.codebook = VQEmbedding(config.n_codes, config.n_dim)    
+        self.codebook = VQEmbedding(config.codebook_size, config.n_dim)    
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,
@@ -1049,3 +1050,73 @@ class VQVAE(nn.Module):
         normalized_loss = total_loss / total_weight
         return normalized_loss
     
+    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=5_00_000):
+        """
+        Initialize codebook using k-means clustering on encoder outputs from a pre-trained model.
+        
+        Args:
+            data_loader: DataLoader containing representative data samples
+            device: Device to run computation on
+            max_datapoints: Maximum number of data points to use for k-means clustering
+        """
+ 
+        print(f"Collecting latent vectors for codebook initialization (max: {max_datapoints} points)...")
+        latent_vectors = []
+        total_vectors = 0
+        
+        # Set model to eval mode
+        self.eval()
+
+        batch_size = data_loader.batch_size
+        num_codes = self.config.n_codes
+
+        num_iters = max_datapoints // (batch_size * num_codes)
+        
+        with torch.no_grad():
+            # Wrap data_loader with progress bar
+            pbar = tqdm(data_loader, total=num_iters)
+            for batch in pbar:
+                x = batch[0].to(device)  # Adjust depending on your dataloader format
+                B, S = x.size()
+                
+                grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
+                latent_pos_indices = self.latent_pos_indices.expand(B, -1)
+                
+                # Get encoder outputs
+                z_e_x = self.encode(x, grid_pos_indices, latent_pos_indices)
+                
+                # Collect latent vectors and update total count
+                batch_vectors = z_e_x.reshape(-1, self.config.n_dim).cpu()
+                latent_vectors.append(batch_vectors)
+                total_vectors += batch_vectors.size(0)
+                
+                # Update progress bar description
+                pbar.set_description(f"Collected {total_vectors}/{max_datapoints} vectors")
+                
+                # Break if we've exceeded the maximum
+                if total_vectors >= max_datapoints:
+                    pbar.close()
+                    print(f"Reached maximum number of datapoints ({max_datapoints})")
+                    break
+        
+        # Concatenate all batches
+        latent_vectors = torch.cat(latent_vectors, dim=0)
+        
+        if total_vectors < max_datapoints:
+            print(f"Dataloader exhausted. Using all available {total_vectors} latent vectors for clustering")
+        else:
+            print(f"Using {total_vectors} latent vectors for k-means clustering")
+        
+        # Perform k-means clustering with progress bar
+        print(f"Running k-means clustering with {self.config.codebook_size} centroids...")
+        from sklearn.cluster import KMeans
+        kmeans = KMeans(n_clusters=self.config.codebook_size, random_state=0, verbose=1)
+        kmeans.fit(latent_vectors.numpy())
+        
+        # Initialize codebook with cluster centroids
+        centroids = torch.from_numpy(kmeans.cluster_centers_).float()
+        self.codebook.vq_embs.weight.data.copy_(centroids)
+        
+        # Return to training mode
+        self.train()
+        print("Codebook initialized with k-means centroids!")
