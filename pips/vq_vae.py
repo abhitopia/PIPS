@@ -1235,7 +1235,7 @@ class VQVAE(nn.Module):
         normalized_loss = total_loss / total_weight
         return normalized_loss
     
-    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=5_00_000):
+    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=2_000_000):
         """
         Initialize codebook using k-means clustering on encoder outputs from a pre-trained model.
         
@@ -1299,7 +1299,9 @@ class VQVAE(nn.Module):
             n_clusters=self.config.codebook_size,
             random_state=0,
             verbose=1,
-            batch_size=50000  # Process in smaller batches
+            max_iter=300,
+            batch_size=100000,  # Process in smaller batches
+            max_no_improvement=50
         )
         
         # Make sure the tensor is in float32 before converting to numpy
