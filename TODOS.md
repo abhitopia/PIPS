@@ -1,9 +1,12 @@
+# 31st March 2025 (Serious Training)
+- [ ] Train without Masking (No Codebook)
+- [ ] Train with Masking (No Codebook)
+
 # 31st March 2025 (Milestone 1)
 - VQ VAE with EMA and codebook resets seems to be working finally!!!!!!!!
 - [x] Add distance reset to the codebook
 - [x] Visualise codebook usage
-- [ ] Add ARC-AGI-2 dataset
-- [ ] Plot norms? 
+- [x] Add ARC-AGI-2 dataset
 
 # EMA Codeboook
 - [x] Add codebook resets
