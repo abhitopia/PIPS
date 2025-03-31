@@ -1,0 +1,60 @@
+# Trying to reproduce the results without codebook, change the dataset to TRAIN
+# Fixed the codebook size to 512  in the code
+experiment_config:
+  model_config:
+    n_dim: 256
+    n_head: 4
+    n_grid_layer: 4
+    n_latent_layer: 4
+    n_codes: 128
+    codebook_size: 512
+    rope_base_height: 10007
+    rope_base_width: 5003
+    dropout: 0.0
+    max_grid_height: 32
+    max_grid_width: 32
+    n_vocab: 16
+    padding_idx: 15
+    mask_idx: 14
+    pad_weight: 0.1
+    gamma: 2.0
+    skip_codebook: false
+    use_ema: true
+    ema_decay: 0.99
+    unused_reset_threshold: 1.0
+    n_pos: 1024
+
+  kmeans_init_codebook: true
+  kmeans_init_max_datapoints: 1000000
+  seed: 2274030480
+  batch_size: 128
+  max_steps: 1000000
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  mask_schedule_type: cosine
+  learning_rate: 0.0000575
+  lr_min: 0.000000575 
+  warmup_steps_lr: 100
+  decay_steps_lr: 990000
+  weight_decay: 0.0001
+  beta_commitment: 0.25
+  mask_pct_start: 0.0
+  max_mask_pct: 0.0
+  transition_steps_mask_pct: 50000
+  warmup_steps_mask_pct: 0
+  train_ds: TRAIN
+  val_ds: VAL
+  limit_training_samples: null
+  permute_train: true
+  model_src: v1_no_codebook.yaml/best/15750
+acceleration_config:
+  device: auto
+  precision: bf16-true
+  matmul_precision: high
+  compile_model: true
+project_config:
+  run_name: v2_with_init_ckpt.yaml
+  project_name: vq_vae_ema
+  checkpoint_dir: runs
+  val_check_interval: 1050
+  viz_interval: 1000
