@@ -1,6 +1,9 @@
 # 31st March 2025 (Milestone 1)
 - VQ VAE with EMA and codebook resets seems to be working finally!!!!!!!!
 - [x] Add distance reset to the codebook
+- [ ] Visualise codebook usage
+- [ ] Add ARC-AGI-2 dataset
+- [ ] Plot norms? 
 
 # EMA Codeboook
 - [x] Add codebook resets
