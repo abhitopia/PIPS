@@ -252,42 +252,239 @@ class LoggingCallback(pl.Callback):
             "CodebookUsage/codebook_perplexity": perplexity.item(),
         }
         
-        # Add per-position metrics with appropriate prefixes
-        for pos in range(n_codes):
-            pos_indices = indices[:, pos]  # [B]
+        # # Add per-position metrics with appropriate prefixes
+        # for pos in range(n_codes):
+        #     pos_indices = indices[:, pos]  # [B]
             
-            # Position usage
-            pos_unique = torch.unique(pos_indices).size(0)
-            pos_usage_percent = pos_unique / codebook_size
-            results[f"Codebook/pos_{pos}_usage"] = pos_usage_percent
+        #     # Position usage
+        #     pos_unique = torch.unique(pos_indices).size(0)
+        #     pos_usage_percent = pos_unique / codebook_size
+        #     results[f"Codebook/pos_{pos}_usage"] = pos_usage_percent
             
-            # Position entropy
-            pos_unique, pos_counts = torch.unique(pos_indices, return_counts=True)
-            pos_normalized = pos_counts.float() / pos_counts.sum()
-            pos_entropy = -torch.sum(pos_normalized * torch.log2(pos_normalized + 1e-10))
-            pos_entropy_percent = pos_entropy / max_entropy
-            results[f"Codebook/pos_{pos}_entropy"] = pos_entropy_percent.item()
+        #     # Position entropy
+        #     pos_unique, pos_counts = torch.unique(pos_indices, return_counts=True)
+        #     pos_normalized = pos_counts.float() / pos_counts.sum()
+        #     pos_entropy = -torch.sum(pos_normalized * torch.log2(pos_normalized + 1e-10))
+        #     pos_entropy_percent = pos_entropy / max_entropy
+        #     results[f"Codebook/pos_{pos}_entropy"] = pos_entropy_percent.item()
             
         return results
     
-    
+    def _create_visualization(self, data, title, xlabel, ylabel, threshold=None, stats_func=None, colors=None, title_suffix=""):
+        """
+        Helper method to create bar chart visualizations with consistent styling.
+        
+        Args:
+            data (Tensor): Data to visualize as a bar chart
+            title (str): Title of the chart
+            xlabel (str): Label for x-axis
+            ylabel (str): Label for y-axis
+            threshold (float, optional): Value to draw as horizontal threshold line
+            stats_func (callable, optional): Function to generate stats text
+            colors (list, optional): Colors for each bar
+            title_suffix (str): Additional text to append to the title
+            
+        Returns:
+            matplotlib.figure.Figure: A figure containing the visualization
+        """
+        import matplotlib.pyplot as plt
+        import numpy as np
+        
+        # Create a low-res figure
+        fig, ax = plt.subplots(figsize=(8, 4), dpi=80)
+        
+        # Convert data to numpy array if it's a tensor
+        if torch.is_tensor(data):
+            data = data.cpu().numpy()
+        
+        # Create x-axis positions
+        positions = np.arange(len(data))
+        
+        # Create bar plot
+        ax.bar(positions, data, width=1.0, alpha=0.7, color=colors)
+        
+        # Add threshold line if provided
+        if threshold is not None:
+            ax.axhline(y=threshold, color='r', linestyle='--', 
+                       label=f'Threshold ({threshold})')
+        
+        # Add title and labels
+        full_title = f"{title}{' ' + title_suffix if title_suffix else ''}"
+        ax.set_title(full_title)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        
+        # Add stats text if provided
+        if stats_func is not None:
+            stats_text = stats_func(data)
+            ax.text(0.95, 0.95, stats_text, transform=ax.transAxes, 
+                    verticalalignment='top', horizontalalignment='right',
+                    bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+        
+        # Add legend if we have a threshold or colors with actual labels
+        if threshold is not None:
+            ax.legend()
+        
+        # Make layout tight
+        fig.tight_layout()
+        
+        return fig
+
+    def visualize_cluster_sizes(self, vq_embedding, title_suffix=""):
+        """
+        Create a visualization of the cluster size distribution.
+        
+        Args:
+            vq_embedding: The VQEmbedding module instance
+            title_suffix (str): Additional text to append to the visualization title
+            
+        Returns:
+            matplotlib.figure.Figure: A figure containing the visualization
+        """
+        import numpy as np
+        
+        def cluster_stats(data):
+            """Generate cluster size statistics text"""
+            return (
+                f"Mean: {np.mean(data):.2f}\n"
+                f"Max: {np.max(data):.2f}\n"
+                f"Min: {np.min(data):.2f}\n"
+                f"Unused: {(data < vq_embedding.unused_reset_threshold).sum()}/{len(data)}"
+            )
+        
+        return self._create_visualization(
+            data=vq_embedding.cluster_size,
+            title="Codebook Usage Distribution",
+            xlabel="Codebook Entry Index",
+            ylabel="Cluster Size",
+            threshold=vq_embedding.unused_reset_threshold,
+            stats_func=cluster_stats,
+            title_suffix=title_suffix
+        )
+
+    def visualize_update_magnitudes(self, vq_embedding, title_suffix=""):
+        """
+        Create a visualization of the update magnitude distribution.
+        
+        Args:
+            vq_embedding: The VQEmbedding module instance
+            title_suffix (str): Additional text to append to the visualization title
+            
+        Returns:
+            matplotlib.figure.Figure: A figure containing the visualization
+        """
+        import numpy as np
+        from matplotlib.patches import Patch
+        
+        # Color bars by whether the entry is below the reset threshold
+        is_below_threshold = vq_embedding.cluster_size.cpu().numpy() < vq_embedding.unused_reset_threshold
+        colors = ['red' if below else 'blue' for below in is_below_threshold]
+        
+        def magnitude_stats(data):
+            """Generate update magnitude statistics text"""
+            return (
+                f"Mean: {np.mean(data):.5f}\n"
+                f"Max: {np.max(data):.5f}\n"
+                f"Min: {np.min(data):.5f}\n"
+                f"Top entries updated: {np.argsort(data)[-5:][::-1]}"
+            )
+        
+        fig = self._create_visualization(
+            data=vq_embedding.update_magnitudes,
+            title="Codebook Update Magnitudes",
+            xlabel="Codebook Entry Index",
+            ylabel="Update Magnitude (L2 Norm)",
+            stats_func=magnitude_stats,
+            colors=colors,
+            title_suffix=title_suffix
+        )
+        
+        # Add custom legend
+        ax = fig.axes[0]
+        legend_elements = [
+            Patch(facecolor='blue', alpha=0.7, label='Active Entries'),
+            Patch(facecolor='red', alpha=0.7, label='Below Reset Threshold')
+        ]
+        ax.legend(handles=legend_elements)
+        
+        return fig
+
+    def visualize_codebook_state(self, pl_module, step=None, phase='train'):
+        """
+        Create visualizations for both cluster sizes and update magnitudes if model uses EMA codebook.
+        Also handles logging to WandB if logger is available.
+        
+        Args:
+            pl_module: The Lightning module with the model
+            step (int, optional): Current training step to include in visualization titles
+            phase (str): 'train' or 'val' to specify which phase we're in
+        """
+        # Only visualize codebook if using EMA and not skipping codebook
+        if not (pl_module.model_config.use_ema and not pl_module.model_config.skip_codebook):
+            return
+        
+        # Only visualize during training phase, not validation
+        if phase != 'train':
+            return
+        
+        # Get the VQEmbedding instance directly
+        vq_embedding = pl_module.model.codebook
+        if vq_embedding is None:
+            return
+        
+        suffix = f" (Step {step})" if step is not None else ""
+        
+        # Create visualizations
+        cluster_fig = self.visualize_cluster_sizes(vq_embedding, title_suffix=suffix)
+        update_fig = self.visualize_update_magnitudes(vq_embedding, title_suffix=suffix)
+        
+        # Save to disk if requested
+        if self.save_to_disk:
+            cluster_filename = f"cluster_sizes_{phase}_step_{step:07d}.png"
+            update_filename = f"update_magnitudes_{phase}_step_{step:07d}.png"
+            cluster_fig.savefig(self.visualization_dir / cluster_filename)
+            update_fig.savefig(self.visualization_dir / update_filename)
+        
+        # Log directly to WandB if available
+        if isinstance(pl_module.logger, WandbLogger):
+            viz_data = {
+                f'VQEmbedding/cluster_sizes_{phase}': wandb.Image(cluster_fig),
+                f'VQEmbedding/update_magnitudes_{phase}': wandb.Image(update_fig)
+            }
+            pl_module.logger.experiment.log(viz_data, step=step)
+        
+        # Close figures to avoid memory leaks
+        plt.close(cluster_fig)
+        plt.close(update_fig)
+
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=None):
         x = outputs.pop('input')
         logits = outputs.pop('logits')
         
         # Extract and process codebook indices if they exist
         codebook_indices = outputs.pop('codebook_indices')
-       
+        
+        # Get lightweight codebook metrics and add to outputs for logging
+        codebook_metrics = self.log_codebook_metrics(pl_module)
+        outputs.update(codebook_metrics)
+
+        # Get pre-formatted codebook usage metrics
+        codebook_usage_metrics = self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size)
+        outputs.update(codebook_usage_metrics)
+        
         # Instead of using an exact modulo, check if it's time to log.
         current_step = pl_module.global_step
         should_visualize = (current_step - self.last_logged_visualization) >= self.visualization_interval
 
-        # Visualize reconstructions if the time interval has been reached.
+        # Visualize if the time interval has been reached.
         if should_visualize:
+            # Visualize reconstructions
             self.visualize_reconstructions(pl_module, x, logits, 'train')
+            
+            # Create and log codebook visualizations (visualization and logging now handled inside this method)
+            self.visualize_codebook_state(pl_module, step=current_step, phase='train')
+            
             self.last_logged_visualization = current_step
-            # Get pre-formatted codebook metrics and add to outputs
-            outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
 
         # Calculate tokens per second for the training batch.
         if self.train_batch_start_time is not None:
@@ -334,8 +531,14 @@ class LoggingCallback(pl.Callback):
         
         # Extract and process codebook indices if they exist
         codebook_indices = outputs.pop('codebook_indices')
-        # Get pre-formatted codebook metrics and add to outputs
-        outputs.update(self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size))
+        
+        # Get lightweight codebook metrics and add to outputs for logging
+        codebook_metrics = self.log_codebook_metrics(pl_module)
+        outputs.update(codebook_metrics)
+        
+        # Get pre-formatted codebook usage metrics
+        codebook_usage_metrics = self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size)
+        outputs.update(codebook_usage_metrics)
 
         # Visualize reconstructions only for the randomly selected batch.
         if batch_idx == self.val_batch_to_visualize:
@@ -357,6 +560,7 @@ class LoggingCallback(pl.Callback):
         """
         # Process each metric in the outputs dictionary
         for key, value in outputs.items():
+            # Skip WandB Images since we handle them separately
             # Handle the main loss separately.
             if key == 'loss':
                 metric_name = f'TotalLoss/{key}_{phase}'  # Default format.
@@ -385,6 +589,51 @@ class LoggingCallback(pl.Callback):
         if pl_module.global_rank == 0 and trainer.global_step % self.grad_log_interval == 0:
             norms = grad_norm(pl_module.model, norm_type=2)
             pl_module.log_dict(norms)
+
+    def log_codebook_metrics(self, pl_module):
+        """
+        Calculate lightweight numeric metrics about codebook state for every batch.
+        Args:
+            pl_module: The Lightning module with the model            
+        Returns:
+            dict: Dictionary containing metrics for logging
+        """
+        # Only track metrics if using EMA and not skipping codebook
+        if not (pl_module.model_config.use_ema and not pl_module.model_config.skip_codebook):
+            return {}
+        
+        # Get the VQEmbedding instance
+        vq_embedding = pl_module.model.codebook
+        if vq_embedding is None:
+            return {}
+        
+        # Calculate metrics while keeping tensors on their original device
+        with torch.no_grad():
+            # Get cluster size metrics
+            cluster_sizes = vq_embedding.cluster_size
+            max_cluster_size = cluster_sizes.max().item()
+            mean_cluster_size = cluster_sizes.mean().item()
+            min_cluster_size = cluster_sizes.min().item()
+            unused_count = (cluster_sizes < vq_embedding.unused_reset_threshold).sum().item()
+            unused_percent = unused_count / len(cluster_sizes) * 100.0
+            
+            # Get update magnitude metrics (if available)
+            update_magnitudes = vq_embedding.update_magnitudes
+            mean_update = update_magnitudes.mean().item()
+            min_update = update_magnitudes.min().item()
+            max_update = update_magnitudes.max().item()
+        
+        # Create metrics dictionary
+        return {
+            f'CodebookMetrics/cluster_size_mean': mean_cluster_size,
+            f'CodebookMetrics/cluster_size_min': min_cluster_size,
+            f'CodebookMetrics/cluster_size_max': max_cluster_size,
+            f'CodebookMetrics/unused_count': unused_count,
+            f'CodebookMetrics/unused_percent': unused_percent,
+            f'CodebookMetrics/update_magnitude_mean': mean_update,
+            f'CodebookMetrics/update_magnitude_min': min_update,
+            f'CodebookMetrics/update_magnitude_max': max_update,
+        }
 
 @dataclass
 class ExperimentConfig:

@@ -649,6 +649,10 @@ class VQEmbedding(nn.Module):
         self.register_buffer('embed_sum', torch.zeros(K, D), persistent=True)
         self.register_buffer('ema_initialized', torch.tensor(0, dtype=torch.bool), persistent=True)
         
+        # Register buffer for tracking codebook changes
+        self.register_buffer('previous_codebook', torch.zeros(K, D), persistent=True)
+        self.register_buffer('update_magnitudes', torch.zeros(K), persistent=True)
+        
     def forward(self, z_e_x):
         """
         Forward pass that maps continuous encoder outputs to discrete latent indices.
@@ -793,6 +797,9 @@ class VQEmbedding(nn.Module):
             distances (Tensor): Quantization errors, shape [B, N].
         """
         with torch.no_grad():
+            # Store the current codebook for computing update magnitudes later
+            self.previous_codebook.copy_(self.vq_embs.weight.data)
+            
             # Get shapes
             B, N, D = z_e_x.shape  # [B, N, D]
             flat_idx = indices.reshape(B * N)  # [B*N]
@@ -836,9 +843,13 @@ class VQEmbedding(nn.Module):
             
             # Update the codebook weights.
             self.vq_embs.weight.copy_(normalized_embeddings)
+            
+            # Compute update magnitudes (L2 norm of the difference)
+            with torch.no_grad():
+                updates = self.vq_embs.weight.data - self.previous_codebook
+                self.update_magnitudes.copy_(torch.norm(updates, dim=1))
 
 
-    
     def straight_through_forward(self, z_e_x, use_ema=False):
         """
         Forward pass with a straight-through estimator, optionally using EMA updates.
