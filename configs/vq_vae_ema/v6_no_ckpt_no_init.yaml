@@ -24,8 +24,8 @@ experiment_config:
     unused_reset_threshold: 0.1
     distance_reset: true
 
-  kmeans_init_codebook: true
-  kmeans_init_max_datapoints: 2000000
+  kmeans_init_codebook: false
+  kmeans_init_max_datapoints: 1000000
   seed: 2274030480
   batch_size: 128
   max_steps: 1000000
@@ -46,14 +46,14 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: v1_no_codebook.yaml/best/15750
+  model_src: null
 acceleration_config:
   device: auto
   precision: bf16-true
   matmul_precision: high
   compile_model: true
 project_config:
-  run_name: v5_low_reset_thresh_fast_decay.yaml
+  run_name: v6_no_ckpt_no_init.yaml
   project_name: vq_vae_ema
   checkpoint_dir: runs
   val_check_interval: 1050
