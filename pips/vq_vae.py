@@ -481,11 +481,12 @@ class LatentTransformer(nn.Module):
 class VectorQuantization(Function):
     """
     Custom autograd Function for vector quantization in a VQ-VAE.
-    
+
     This function maps each input vector (of shape [B, N, C]) to the index of its closest
     embedding in the codebook (of shape [K, C]) using a squared L2 distance.
     
-    Note: This function is non-differentiable; its backward pass is disabled.
+    Now, in addition to returning the indices, it also returns the corresponding minimum
+    squared L2 distances (quantization errors) for each input vector.
     
     Expected input shape: [B, N, C]
       B = Batch size
@@ -494,20 +495,18 @@ class VectorQuantization(Function):
     """
     @staticmethod
     def forward(ctx, inputs, codebook):
-        # Hard dimensions: inputs is expected to be [B, N, C]
+        # Expected shape: inputs is [B, N, C]
         B, N, C = inputs.shape
-        
-        # Flatten the inputs to shape [B*N, C]
+
+        # Flatten inputs to shape [B*N, C]
         flat_input = inputs.reshape(B * N, C)
-        
-        # Compute squared L2 norm of each codebook vector.
-        # codebook: shape [K, C] --> codebook_sq: shape [K]
+
+        # Compute squared L2 norm of each codebook vector. Shape: [K]
         codebook_sq = torch.sum(codebook * codebook, dim=1)
-        
-        # Compute squared L2 norm of each input vector.
-        # flat_input: [B*N, C] --> inputs_sq: [B*N, 1]
+
+        # Compute squared L2 norm of each input vector. Shape: [B*N, 1]
         inputs_sq = torch.sum(flat_input * flat_input, dim=1, keepdim=True)
-        
+
         # Compute squared Euclidean distance between each input and each codebook vector.
         # Using the identity: ||x - e||^2 = ||x||^2 + ||e||^2 - 2*(x · e)
         # Resulting shape: [B*N, K]
@@ -515,23 +514,24 @@ class VectorQuantization(Function):
                              mat1=flat_input,
                              mat2=codebook.t(),
                              alpha=-2.0, beta=1.0)
-        
-        # For each input vector, find the index of the codebook vector with minimum distance.
-        # idx_flat: shape [B*N]
-        _, idx_flat = torch.min(l2_dis, dim=1)
-        
-        # Reshape indices back to hard dimensions [B, N]
+
+        # For each input, find the index of the codebook vector with minimum distance.
+        # Also retrieve the corresponding minimum distance.
+        min_vals, idx_flat = torch.min(l2_dis, dim=1)
+
+        # Reshape indices and distances back to shape [B, N]
         idx = idx_flat.reshape(B, N)
-        
-        # Mark these indices as non-differentiable.
+        distances = min_vals.reshape(B, N)
+
+        # Mark these outputs as non-differentiable.
         ctx.mark_non_differentiable(idx)
-        
-        return idx
+        ctx.mark_non_differentiable(distances)
+
+        return idx, distances
 
     @staticmethod
     def backward(ctx, grad_outputs):
-        raise RuntimeError("Backward pass is not defined for VectorQuantization. "
-                           "Use VQStraightThrough instead.")
+        raise RuntimeError("Backward pass is not defined for VectorQuantization. Use VQStraightThrough instead.")
 
 VQ = VectorQuantization.apply
 
@@ -540,10 +540,11 @@ class VQStraightThrough(Function):
     """
     Custom autograd Function implementing the straight-through estimator for vector quantization.
     
-    In the forward pass, it uses the above VectorQuantization (VQ) to get the nearest codebook
-    indices, then retrieves the corresponding codebook embeddings (quantized vectors). In the
-    backward pass, gradients are passed directly (straight-through) to the encoder, while gradients
-    for the codebook are accumulated based on the quantization indices.
+    In the forward pass, it uses the updated VectorQuantization (VQ) to get the nearest codebook
+    indices and the corresponding minimum distances (quantization errors). It then retrieves the 
+    corresponding codebook embeddings (quantized vectors). In the backward pass, gradients are passed 
+    directly (straight-through) to the encoder, while gradients for the codebook are accumulated 
+    based on the quantization indices.
     
     Expected input shape: [B, N, C]
       B = Batch size
@@ -553,79 +554,72 @@ class VQStraightThrough(Function):
     """
     @staticmethod
     def forward(ctx, inputs, codebook):
-        # Hard dimensions: inputs is expected to be [B, N, C]
+        # Expected shape: inputs is [B, N, C]
         B, N, C = inputs.shape
         
-        # Get nearest codebook indices using VectorQuantization.
-        idx = VQ(inputs, codebook)  # idx has shape [B, N]
+        # Get nearest codebook indices and corresponding quantization errors using updated VQ.
+        # VQ now returns a tuple: (indices, distances)
+        idx, distances = VQ(inputs, codebook)  # idx, distances: both shape [B, N]
         
-        # Flatten indices to shape [B*N] for later use.
+        # Flatten indices to shape [B*N] for later use in the backward pass.
         flat_idx = idx.reshape(B * N)
         
-        # Save the flattened indices and the codebook for use in the backward pass.
+        # Save flat indices and codebook for the backward pass.
         ctx.save_for_backward(flat_idx, codebook)
         ctx.mark_non_differentiable(flat_idx)
+        ctx.mark_non_differentiable(idx)
+        ctx.mark_non_differentiable(distances)
         
         # Retrieve quantized embeddings via index selection.
         # This gives a tensor of shape [B*N, C].
         codes_flat = torch.index_select(codebook, dim=0, index=flat_idx)
         
-        # Reshape back to hard dimensions [B, N, C].
+        # Reshape back to [B, N, C].
         codes = codes_flat.reshape(B, N, C)
         
-        # Return both the codes and the original indices (not flattened)
-        return codes, flat_idx, idx
+        # Return the quantized codes, flattened indices, original indices, and the distances.
+        return codes, flat_idx, idx, distances
 
     @staticmethod
-    def backward(ctx, grad_outputs, grad_flat_idx, grad_idx):
+    def backward(ctx, grad_outputs, grad_flat_idx, grad_idx, grad_distances):
         grad_inputs, grad_codebook = None, None
         
-        # Pass the gradients to the encoder inputs directly using the straight-through method.
+        # Pass gradients straight-through to the encoder.
         if ctx.needs_input_grad[0]:
             grad_inputs = grad_outputs.clone()
         
         # Compute gradients with respect to the codebook.
         if ctx.needs_input_grad[1]:
-            # grad_outputs: gradient with respect to the quantized codes, shape [B, N, C]
             flat_idx, codebook = ctx.saved_tensors
-        
-            # Get the embedding dimension from the codebook.
             C = codebook.shape[1]
-
-            # Flatten grad_outputs to shape [B*N, C] to match flat_idx.
             flat_grad_output = grad_outputs.reshape(-1, C)
-            
-            # Initialize gradient for the codebook with zeros.
             grad_codebook = torch.zeros_like(codebook)
-            
-            # Accumulate gradients for each codebook vector using the saved indices.
             grad_codebook.index_add_(0, flat_idx, flat_grad_output)
         
         return grad_inputs, grad_codebook
 
-
-VQ_ST =  VQStraightThrough.apply
+VQ_ST = VQStraightThrough.apply
 
 
 class VQEmbedding(nn.Module):
     """
     VQEmbedding class for managing the codebook in a VQ-VAE when the encoder output
     comes from a transformer, i.e. with shape [B, N, C].
-    
+
     This module creates a learnable embedding table (codebook) with K embeddings,
     each of dimension D. It provides two forward methods:
       - forward: Returns the discrete latent indices for a given encoded input.
       - straight_through_forward: Returns both the quantized vectors (using a
         straight-through estimator) and an alternative quantized representation
         obtained directly via index selection.
-    
+
     Expected input shape:
       - z_e_x: (B, N, C), where:
             B = Batch size,
             N = Number of tokens (discrete codes),
             C = Embedding dimension (should equal D).
     """
-    def __init__(self, K: int, D: int, decay: float = 0.99, unused_reset_threshold: float = 1.0):
+    def __init__(self, K: int, D: int, decay: float = 0.99, unused_reset_threshold: float = 1.0, distance_reset: bool = False):
         """
         Initialize the VQEmbedding module.
         
@@ -633,12 +627,15 @@ class VQEmbedding(nn.Module):
             K (int): Total number of embeddings in the codebook (codebook_size).
             D (int): Dimensionality of each embedding.
             decay (float): EMA decay rate (default: 0.99)
+            unused_reset_threshold (float): Threshold below which a code is considered unused.
+            distance_reset (bool): Whether to use distance-based codebook resets.
         """
         super(VQEmbedding, self).__init__()
         # Create an embedding layer (the codebook) with K embeddings of dimension D.
         self.vq_embs = nn.Embedding(K, D)
         self.decay = decay
         self.unused_reset_threshold = unused_reset_threshold
+        self.distance_reset = distance_reset
         # Initialize with normal distribution
         self.vq_embs.weight.data.normal_(0, 1.0)
         
@@ -664,19 +661,128 @@ class VQEmbedding(nn.Module):
             Tensor: Discrete latent indices with shape (B, N), where each element is an index
                     pointing to the closest embedding in the codebook.
         """
-        # For transformer output, the shape is already (B, N, C) so no permutation is needed.
+        # For transformer output, the shape is already (B, N, C).
         # Use the vector quantization function (VQ) to get the nearest codebook indices.
-        # VQ is the custom autograd function (VectorQuantization.apply).
-        latents = VQ(z_e_x, self.vq_embs.weight)  # Resulting shape: (B, N)
+        latents, _ = VQ(z_e_x, self.vq_embs.weight)  # VQ now returns (idx, distances)
         return latents
     
-    def update_codebook_ema(self, z_e_x, indices):
+    def reset_unused_codes_random(self, z_e_x, normalized_embeddings, D, codebook_size):
+        """
+        Reset unused codebook entries based on low EMA counts.
+        
+        Args:
+            z_e_x (Tensor): Encoder outputs, shape [B, N, D].
+            normalized_embeddings (Tensor): The current normalized codebook embeddings, shape [K, D].
+            D (int): Embedding dimension.
+            codebook_size (int): Total number of codes (K).
+            
+        Returns:
+            Tensor: Updated normalized_embeddings with unused entries replaced.
+        """
+        # Identify codebook entries with low usage.
+        unused_mask = self.cluster_size < self.unused_reset_threshold  # Shape: [K]
+        
+        # Flatten encoder outputs to shape [B*N, D].
+        flat_z_e = z_e_x.reshape(-1, D)
+        
+        # Sample random encoder outputs for all codebook entries.
+        rand_idx = torch.randint(0, flat_z_e.shape[0], (codebook_size,), device=z_e_x.device)
+        random_codes = flat_z_e[rand_idx]  # Shape: [K, D]
+        
+        # Replace normalized embeddings for unused entries using torch.where.
+        normalized_embeddings = torch.where(
+            unused_mask.unsqueeze(1),  # [K, 1]
+            random_codes,
+            normalized_embeddings
+        )
+        # Also update the EMA buffers for these entries.
+        new_cluster_size = torch.where(
+            unused_mask,
+            torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+            self.cluster_size
+        )
+        new_embed_sum = torch.where(
+            unused_mask.unsqueeze(1),
+            random_codes,
+            self.embed_sum
+        )
+        self.cluster_size.copy_(new_cluster_size)
+        self.embed_sum.copy_(new_embed_sum)
+        return normalized_embeddings
+    
+    def reset_unused_codes_distance(self, z_e_x, normalized_embeddings, D, distances):
+        """
+        Reset unused codebook entries using quantization errors (distances) in a fully vectorized manner.
+        For each codebook entry (of fixed size K), if its EMA count is below the threshold, it is updated
+        with a candidate encoder output selected from those with the highest quantization error.
+        
+        Args:
+            z_e_x (Tensor): Encoder outputs, shape [B, N, D].
+            normalized_embeddings (Tensor): Normalized codebook embeddings, shape [K, D].
+            D (int): Embedding dimension.
+            distances (Tensor): Quantization errors, shape [B, N].
+            
+        Returns:
+            Tensor: Updated normalized_embeddings.
+        """
+        # Fixed codebook size K.
+        K = normalized_embeddings.shape[0]
+        # Flatten encoder outputs and distances.
+        flat_z_e = z_e_x.reshape(-1, D)      # [B*N, D]
+        flat_dists = distances.reshape(-1)     # [B*N]
+        # Sort encoder outputs by descending quantization error.
+        sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
+        
+        # Compute a fixed-size unused mask (K is fixed).
+        unused_mask = self.cluster_size < self.unused_reset_threshold  # [K] boolean
+        
+        # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
+        # Since K is fixed, this produces a fixed-shape tensor.
+        unused_int = unused_mask.to(torch.int64)           # [K]
+        ranks = torch.cumsum(unused_int, dim=0) - 1           # [K]
+        # For used entries, force the rank to 0 (these values won't be used).
+        ranks = torch.where(unused_mask, ranks, torch.zeros_like(ranks))
+        
+        # For each codebook entry i, candidate_codes[i] is taken from:
+        # flat_z_e[ sorted_indices[ranks[i]] ]
+        candidate_codes = flat_z_e[sorted_indices[ranks]]     # [K, D]
+        
+        # Update only unused entries in normalized_embeddings.
+        updated_normalized_embeddings = torch.where(
+            unused_mask.unsqueeze(1),  # shape [K, 1]
+            candidate_codes,
+            normalized_embeddings
+        )
+        
+        # Update EMA buffers for the unused entries in a vectorized way.
+        updated_cluster_size = torch.where(
+            unused_mask,
+            torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+            self.cluster_size
+        )
+        updated_embed_sum = torch.where(
+            unused_mask.unsqueeze(1),
+            candidate_codes,
+            self.embed_sum
+        )
+        
+        self.cluster_size.copy_(updated_cluster_size)
+        self.embed_sum.copy_(updated_embed_sum)
+        
+        return updated_normalized_embeddings
+    
+    def reset_unused_codes(self, z_e_x, normalized_embeddings, D, codebook_size, distances):
+        if self.distance_reset:
+            return self.reset_unused_codes_distance(z_e_x, normalized_embeddings, D, distances)
+        else:
+            return self.reset_unused_codes_random(z_e_x, normalized_embeddings, D, codebook_size)
+
+    def update_codebook_ema(self, z_e_x, indices, distances):
         """
         Update codebook vectors using Exponential Moving Average (EMA).
         
         This method implements codebook updates using EMA as described in the VQ-VAE-2 paper.
-        Rather than using gradient-based updates, it directly moves codebook vectors toward
-        the encoder outputs that mapped to them, using an exponential decay to maintain stability.
+        It then calls reset_unused_codes to reinitialize codes with low usage.
         
         Args:
             z_e_x (Tensor): Encoder output vectors [B, N, C]
@@ -684,111 +790,54 @@ class VQEmbedding(nn.Module):
                 N = number of codes per sample 
                 C = embedding dimension
             indices (Tensor): Indices of nearest codebook entries [B, N]
+            distances (Tensor): Quantization errors, shape [B, N].
         """
-        # Detach from the computation graph to avoid in-place operation errors
         with torch.no_grad():
             # Get shapes
-            B, N, D = z_e_x.shape  # [batch_size, n_codes, embedding_dim]
-            flat_idx = indices.reshape(B * N)  # [batch_size * n_codes]
+            B, N, D = z_e_x.shape  # [B, N, D]
+            flat_idx = indices.reshape(B * N)  # [B*N]
             codebook_size = self.vq_embs.weight.shape[0]
             
-            # Force the codebook and z_e_x to the same dtype
-            # This is crucial when using mixed precision
+            # Ensure same dtype for codebook and z_e_x.
             weights_dtype = self.vq_embs.weight.dtype
             z_e_x_detached = z_e_x.detach().to(weights_dtype)
             
-            # Create one-hot encodings of the indices
-            # This gives a binary matrix where each row has a single 1 at the index position
-            # Shape: [batch_size * n_codes, codebook_size]
+            # Create one-hot encodings for indices.
             encodings = F.one_hot(flat_idx, num_classes=codebook_size).to(weights_dtype)
             
-            # Count how many times each codebook entry is used in this batch
-            # Sum along batch dimension (dim=0)
-            # Shape: [codebook_size]
-            new_cluster_size = encodings.sum(0)
-            
-            # Compute sum of encoder outputs for each codebook entry - ensure consistent dtype
-            # encodings.t(): [codebook_size, batch_size * n_codes]
-            # z_e_x_detached.reshape(-1, D): [batch_size * n_codes, embedding_dim]
-            # Result: [codebook_size, embedding_dim]
-            dw = encodings.t() @ z_e_x_detached.reshape(-1, D)
+            # Compute the new cluster size and sum of encoder outputs for each code.
+            new_cluster_size = encodings.sum(0)  # [K]
+            dw = encodings.t() @ z_e_x_detached.reshape(-1, D)  # [K, D]
             
             # ------------ TORCH.COMPILE FRIENDLY CODE ------------
-            # Instead of using if/else which creates dynamic control flow,
-            # we compute both paths and use torch.where to select the right one statically
+            is_first_batch = ~self.ema_initialized  # scalar boolean tensor
+            initialized_cluster_size = new_cluster_size  # [K]
+            initialized_embed_sum = dw  # [K, D]
             
-            # Get initialization status 
-            is_first_batch = ~self.ema_initialized  # [scalar boolean tensor]
-            
-            # For first batch: just use the current batch values
-            initialized_cluster_size = new_cluster_size  # [codebook_size]
-            initialized_embed_sum = dw  # [codebook_size, embedding_dim]
-            
-            # For subsequent batches: apply EMA update formula
-            # decay * old_value + (1 - decay) * new_value
-            # Ensure all tensors are same dtype
             updated_cluster_size = self.cluster_size.to(weights_dtype) * self.decay + new_cluster_size * (1 - self.decay)
             updated_embed_sum = self.embed_sum.to(weights_dtype) * self.decay + dw * (1 - self.decay)
             
-            # Statically select which values to use based on initialization status
-            # For first batch, use initialized values; for later batches, use updated values
             new_cluster_size = torch.where(is_first_batch, initialized_cluster_size, updated_cluster_size)
             new_embed_sum = torch.where(is_first_batch.unsqueeze(-1), initialized_embed_sum, updated_embed_sum)
             
-            # Update buffers - match dtype of the buffer
             self.cluster_size.copy_(new_cluster_size.to(self.cluster_size.dtype))
             self.embed_sum.copy_(new_embed_sum.to(self.embed_sum.dtype))
-            
-            # Always set ema_initialized to True after processing
             self.ema_initialized.copy_(torch.tensor(True, dtype=torch.bool, device=self.ema_initialized.device))
             # ------------ END TORCH.COMPILE FRIENDLY CODE ------------
             
-            # Prevent division by zero by adding a small constant
-            # Use a larger epsilon for bfloat16 for better stability
-            effective_cluster_size = self.cluster_size + 1e-3  # Larger value for bfloat16
+            # Prevent division by zero.
+            effective_cluster_size = self.cluster_size + 1e-3
             
-            # Update codebook weights with normalized embedding sums
-            # Make sure we're working with fully detached values
-            # embed_sum: [codebook_size, embedding_dim]
-            # effective_cluster_size.unsqueeze(1): [codebook_size, 1]
-            # Result: [codebook_size, embedding_dim]
+            # Compute normalized embeddings.
             normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1)).to(weights_dtype)
-
-            # ----- NEW: Reset unused codebook entries -----
-            # Identify codebook entries with very low usage (threshold defined by self.unused_reset_threshold)
-            # Here, self.cluster_size is an EMA (floating-point) value that decays when not updated.
-            unused_mask = self.cluster_size < self.unused_reset_threshold  # Boolean mask of shape [K]
-
-            # To avoid dynamic control flow, sample a random code for every codebook entry,
-            # then use torch.where to replace only the unused entries.
-            flat_z_e = z_e_x.reshape(-1, D)  # [B*N, D]
-            # Sample random indices for every entry (only those selected by the mask will be used)
-            rand_idx = torch.randint(0, flat_z_e.shape[0], (codebook_size,), device=z_e_x.device)
-            random_codes = flat_z_e[rand_idx]  # shape: [codebook_size, D]
-
-            # Use torch.where: if an entry is unused, replace it with a random code.
-            normalized_embeddings = torch.where(
-                unused_mask.unsqueeze(1),  # shape: [K, 1]
-                random_codes,
-                normalized_embeddings
-            )
-            # Also update the EMA buffers for these entries.
-            new_cluster_size = torch.where(
-                unused_mask,
-                torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
-                self.cluster_size
-            )
-            new_embed_sum = torch.where(
-                unused_mask.unsqueeze(1),
-                random_codes,
-                self.embed_sum
-            )
-            self.cluster_size.copy_(new_cluster_size)
-            self.embed_sum.copy_(new_embed_sum)
-            # ----- End reset -----
             
-            # Update the codebook weights
+            # Call the reset method to update unused codebook entries.
+            normalized_embeddings = self.reset_unused_codes(z_e_x, normalized_embeddings, D, codebook_size, distances)
+            
+            # Update the codebook weights.
             self.vq_embs.weight.copy_(normalized_embeddings)
+
+
     
     def straight_through_forward(self, z_e_x, use_ema=False):
         """
@@ -804,32 +853,24 @@ class VQEmbedding(nn.Module):
         Args:
             z_e_x (Tensor): The continuous encoded output from the transformer.
                             Expected shape: (B, N, C), where C equals the embedding dimension D.
-            use_ema (bool): Whether to use EMA updates for codebook
+            use_ema (bool): Whether to use EMA updates for codebook.
             
         Returns:
             tuple: (z_q_x, zqx_tilde, idx)
         """
         # Input shape: (B, N, C)
-        # Apply the straight-through vector quantization.
-        # VQ_ST is the straight-through variant (VQStraightThrough.apply) that allows gradient flow.
-        # It now returns quantized codes (z_q_x), flat indices (flat_idx), and original indices (idx)
-        z_q_x, flat_idx, idx = VQ_ST(z_e_x, self.vq_embs.weight.detach())
+        # Capture all outputs from the straight-through estimator.
+        z_q_x, flat_idx, idx, distances = VQ_ST(z_e_x, self.vq_embs.weight.detach())
         
-        # Directly index the codebook using flat_idx to obtain the alternative quantized representation.
-        # This returns a tensor of shape (B*N, D)
+        # Retrieve alternative quantized representation using flat_idx.
         flat_zqx_tilde = torch.index_select(self.vq_embs.weight, dim=0, index=flat_idx)
+        zqx_tilde = flat_zqx_tilde.view_as(z_e_x)
         
-        # Reshape the flat tensor back to the input shape: (B, N, C)
-        zqx_tilde = flat_zqx_tilde.view_as(z_e_x)  # New shape: (B, N, C)
-        
-        # Apply EMA updates if enabled and in training mode
+        # Optionally update the codebook via EMA if enabled.
         if use_ema and self.training:
-            self.update_codebook_ema(z_e_x, idx)
+            self.update_codebook_ema(z_e_x, idx, distances)
         
-        # Return the quantized codes, the alternative quantized representation, and the indices
         return z_q_x, zqx_tilde, idx
-
-
 
 
 @dataclass
@@ -859,6 +900,8 @@ class VQVAEConfig(Config):
         skip_codebook (bool): Whether to skip the codebook and use continuous latents (default: False)
         use_ema (bool): Whether to use EMA updates for codebook (default: False)
         ema_decay (float): Decay rate for EMA updates (default: 0.99)
+        unused_reset_threshold (float): Threshold below which a code is considered unused (default: 1.0)
+        distance_reset (bool): Whether to use distance-based codebook resets (default: False)
     """
     n_dim: int = 256
     n_head: int = 4
@@ -880,6 +923,7 @@ class VQVAEConfig(Config):
     use_ema: bool = False
     ema_decay: float = 0.99
     unused_reset_threshold: float = 1.0
+    distance_reset: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -939,6 +983,7 @@ class VQVAEConfig(Config):
             'use_ema': self.use_ema,
             'ema_decay': self.ema_decay,
             'unused_reset_threshold': self.unused_reset_threshold,
+            'distance_reset': self.distance_reset,
         }
          
         return base_dict
@@ -1034,7 +1079,8 @@ class VQVAE(nn.Module):
         self.codebook = VQEmbedding(config.codebook_size,
                                     config.n_dim, 
                                     decay=config.ema_decay, 
-                                    unused_reset_threshold=config.unused_reset_threshold)    
+                                    unused_reset_threshold=config.unused_reset_threshold,
+                                    distance_reset=config.distance_reset)    
 
         self.latent_decoder = LatentTransformer(
             n_latent=config.n_pos,

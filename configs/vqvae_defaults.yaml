@@ -20,7 +20,8 @@ experiment_config:
     use_ema: false
     ema_decay: 0.99
     unused_reset_threshold: 1.0
-  seed: 3984890710
+    distance_reset: false
+  seed: 2347367944
   batch_size: 64
   max_steps: 1000000
   gradient_clip_val: 1.0
@@ -44,7 +45,7 @@ experiment_config:
   kmeans_init_codebook: false
   kmeans_init_max_datapoints: 500000
 project_config:
-  run_name: kind-falcon-021
+  run_name: bold-whale-556
   project_name: train-vq-vae
   checkpoint_dir: runs
   val_check_interval: 1000
