@@ -1214,7 +1214,7 @@ class VQVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=True,   # This seems to work even when skipping codebook so let's keep it.
+            out_norm=False,   # This seems to work even when skipping codebook so let's keep it.
             rope=rope_1d,
             return_attn_entropy=config.return_attn_entropy
         )
