@@ -541,8 +541,8 @@ class LoggingCallback(pl.Callback):
         codebook_indices = outputs.pop('codebook_indices')
         
         # Get lightweight codebook metrics and add to outputs for logging
-        codebook_metrics = self.log_codebook_metrics(pl_module)
-        outputs.update(codebook_metrics)
+        # codebook_metrics = self.log_codebook_metrics(pl_module)
+        # outputs.update(codebook_metrics)
         
         # Get pre-formatted codebook usage metrics
         codebook_usage_metrics = self.calculate_codebook_usage(codebook_indices, pl_module.model_config.codebook_size)
