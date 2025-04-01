@@ -380,7 +380,11 @@ class LoggingCallback(pl.Callback):
         from matplotlib.patches import Patch
         
         # Color bars by whether the entry is below the reset threshold
-        is_below_threshold = vq_embedding.cluster_size.cpu().numpy() < vq_embedding.unused_reset_threshold
+        # Convert to float32 first if it's BFloat16
+        cluster_size = vq_embedding.cluster_size
+        if cluster_size.dtype == torch.bfloat16:
+            cluster_size = cluster_size.to(torch.float32)
+        is_below_threshold = cluster_size.cpu().numpy() < vq_embedding.unused_reset_threshold
         colors = ['red' if below else 'blue' for below in is_below_threshold]
         
         def magnitude_stats(data):
