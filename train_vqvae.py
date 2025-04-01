@@ -295,6 +295,9 @@ class LoggingCallback(pl.Callback):
         
         # Convert data to numpy array if it's a tensor
         if torch.is_tensor(data):
+            # Convert to float32 first if it's BFloat16 or other unsupported dtype
+            if data.dtype == torch.bfloat16:
+                data = data.to(torch.float32)
             data = data.cpu().numpy()
         
         # Create x-axis positions
