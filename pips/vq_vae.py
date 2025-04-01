@@ -259,6 +259,121 @@ class RMSNorm(nn.Module):
         return x_normed * self.scale
 
 
+class MultiHeadAttentionWithEntropy(nn.Module):
+    def __init__(self, n_dim, n_head, dropout, rope=None):
+        super().__init__()
+        self.rope = rope
+        self.n_dim = n_dim
+        self.n_head = n_head
+        self.dropout = dropout
+        assert n_dim % n_head == 0
+        # key, query, value projections for all heads, but in a batch
+        self.q_proj = nn.Linear(n_dim, n_dim, bias=False)
+        self.k_proj = nn.Linear(n_dim, n_dim, bias=False)
+        self.v_proj = nn.Linear(n_dim, n_dim, bias=False)
+        # output projection
+        self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
+        self.c_proj.RESCALE_INIT = True
+    
+    def forward(self, q: Tensor, k: Tensor, v: Tensor, positions: Optional[Tensor] = None, attn_mask: Optional[Tensor] = None, kv_cache: Optional[Tuple[Tensor, Tensor]] = None, return_kv_cache: bool = False) -> Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]:
+        """
+        Computes multi-head self-attention on the input tensor using vanilla PyTorch operations.
+        This is functionally equivalent to the regular forward method but without using F.scaled_dot_product_attention.
+
+        Args:
+            q (Tensor): Query tensor of shape [B, Tq, D].
+            k (Tensor): Key tensor of shape [B, Tk, D].
+            v (Tensor): Value tensor of shape [B, Tv, D].
+            positions (Optional[Tensor]): The positions to use for RoPE encoding.
+            attn_mask (Optional[Tensor]): The attention mask to apply. Expected shape [B, Tq, Tk].
+            kv_cache (Optional[Tuple[Tensor, Tensor]]): The cached key and value tensors.
+            return_kv_cache (bool): Whether to return the updated key and value cache.
+
+        Returns:
+            Tuple[Tensor, Optional[Tuple[Tensor, Tensor]]]: The output tensor after self-attention and optionally the updated key and value cache.
+        """
+        qB, qT, qD = q.size()
+        kB, kT, kD = k.size()
+        vB, vT, vD = v.size()
+
+        assert qB == kB == vB, "Batch size mismatch"
+        assert kT == vT, "Sequence length mismatch"
+        assert qD == kD == vD, "Dimension mismatch"
+
+        B = qB
+        D = qD
+        head_dim = D // self.n_head
+
+        # Apply projection layers
+        q = self.q_proj(q)
+        k = self.k_proj(k)
+        v = self.v_proj(v)
+
+        # Reshape for multi-head attention, but do not transpose yet!
+        q = q.view(B, qT, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, Tq, head_dim)
+        k = k.view(B, kT, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, Tk, head_dim)
+        v = v.view(B, vT, self.n_head, head_dim).transpose(1, 2)  # (B, n_head, Tv, head_dim)
+
+        # Apply RoPE2D to q and k
+        if self.rope is not None and positions is not None:
+            k = self.rope(k, positions[:, :kT].unsqueeze(1))
+            q = self.rope(q, positions[:, :qT].unsqueeze(1))
+
+        # If kv_cache is present, concatenate past keys and values
+        if kv_cache is not None and torch.jit.isinstance(kv_cache, Tuple[Tensor, Tensor]):
+            past_k, past_v = kv_cache  # K: (B, n_head, T_past, head_dim)
+            k = torch.cat([past_k, k], dim=2)  # Concatenate along sequence length dimension
+            v = torch.cat([past_v, v], dim=2)
+
+        # Update new_kv_cache
+        new_kv_cache: Optional[Tuple[Tensor, Tensor]] = (k, v) if return_kv_cache else None
+
+        # --------- VANILLA ATTENTION IMPLEMENTATION ---------
+        # Calculate attention scores
+        # q: [B, n_head, Tq, head_dim]
+        # k: [B, n_head, Tk, head_dim]
+        # scores: [B, n_head, Tq, Tk]
+        scores = torch.matmul(q, k.transpose(-2, -1)) / math.sqrt(head_dim)
+        
+        # Apply attention mask if provided
+        if attn_mask is not None:
+            # Expand attn_mask to match scores dimensions: [B, 1, Tq, Tk] -> [B, n_head, Tq, Tk]
+            expanded_mask = attn_mask.unsqueeze(1)
+            scores = scores.masked_fill(expanded_mask == 0, -1e9)
+        
+        # Apply softmax to get attention weights
+        attn_weights = F.softmax(scores, dim=-1)
+        
+        # Calculate entropy of attention distribution if requested
+        # Add a small epsilon to avoid log(0)
+        eps = 1e-10
+        # Entropy calculation: -sum(p * log(p)) for each attention distribution
+        # Shape: [B, n_head, Tq]
+        entropy = -torch.sum(
+            attn_weights * torch.log(attn_weights + eps), 
+            dim=-1
+        )
+        entropy = entropy.mean()
+        
+        # Apply dropout if training
+        if self.training and self.dropout > 0.0:
+            attn_weights = F.dropout(attn_weights, p=self.dropout)
+        
+        # Apply attention weights to values
+        # attn_weights: [B, n_head, Tq, Tk]
+        # v: [B, n_head, Tv, head_dim]
+        # attn_output: [B, n_head, Tq, head_dim]
+        attn_output = torch.matmul(attn_weights, v)
+        
+        # Reshape back to [B, Tq, D]
+        attn_output = attn_output.transpose(1, 2).contiguous().view(B, qT, D)
+        
+        # Output projection
+        y = self.c_proj(attn_output)
+        
+        return y, new_kv_cache, entropy
+
+
 class MultiHeadAttention(nn.Module):
     def __init__(self, n_dim, n_head, dropout, rope=None):
         super().__init__()
@@ -355,14 +470,18 @@ class MultiHeadAttention(nn.Module):
         # y = torch.nan_to_num(y, nan=0.0)
 
         return y, new_kv_cache
-    
+
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model, n_head, rope=None, dim_feedforward=None, dropout=0.0):
+    def __init__(self, d_model, n_head, rope=None, dim_feedforward=None, dropout=0.0, return_entropy: bool = False):
         super().__init__()
-        self.mha = MultiHeadAttention(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
+        if return_entropy:
+            self.mha = MultiHeadAttentionWithEntropy(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
+        else:
+            self.mha = MultiHeadAttention(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
         self.dropout = nn.Dropout(dropout)
 
+        self.return_entropy = return_entropy
         self.norm_context = RMSNorm(dim=d_model)
         self.norm_queries = RMSNorm(dim=d_model)
         self.ff = SwiGLUFFN(dim=d_model, hidden_dim=dim_feedforward if dim_feedforward is not None else 4*d_model)
@@ -379,19 +498,23 @@ class TransformerBlock(nn.Module):
         normed_queries = self.norm_queries(queries)
 
         # Multi-head attention
-        attn_out, new_kv_cache = self.mha(normed_queries, normed_context, normed_context, positions=positions, attn_mask=attn_mask, kv_cache=kv_cache, return_kv_cache=return_kv_cache)  # shape (B, Tq, D)
+        if self.return_entropy:
+            attn_out, new_kv_cache, attn_entropy = self.mha(q=normed_queries, k=normed_context, v=normed_context, positions=positions, attn_mask=attn_mask, kv_cache=kv_cache, return_kv_cache=return_kv_cache)  # shape (B, Tq, D)
+        else:
+            attn_entropy = torch.tensor(0.0, device=queries.device)
+            attn_out, new_kv_cache = self.mha(q=normed_queries, k=normed_context, v=normed_context, positions=positions, attn_mask=attn_mask, kv_cache=kv_cache, return_kv_cache=return_kv_cache)  # shape (B, Tq, D)
         queries = queries + self.dropout(attn_out)
 
         # Feed-forward
         queries = queries + self.dropout(self.ff(self.norm_ff(queries)))  # shape (B, Tq, D)
-        return queries, new_kv_cache
+        return queries, new_kv_cache, attn_entropy
 
     
 class Transformer(nn.Module):
-    def __init__(self, d_model, n_head, n_layer, dim_feedforward=None, rope=None, out_norm=True):
+    def __init__(self, d_model, n_head, n_layer, dim_feedforward=None, rope=None, out_norm=True, return_attn_entropy: bool = False):
         super().__init__()
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope)
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope, return_entropy=return_attn_entropy)
             for _ in range(n_layer)
         ])
 
@@ -407,20 +530,24 @@ class Transformer(nn.Module):
 
         loop_kv_caches: List[Tuple[Tensor, Tensor]] = []
 
+        total_attn_entropy = torch.tensor(0.0, device=x.device)
+
         for i, block in enumerate(self.blocks):
-            x, new_kv_cache = block(queries=x,
+            x, new_kv_cache, attn_entropy = block(queries=x,
                         context=x, 
                         positions=positions, 
                         attn_mask=attn_mask,
                         kv_cache=kv_cache[i] if kv_cache is not None else None,
                         return_kv_cache=return_kv_caches)
             
+            total_attn_entropy += attn_entropy
+            
             # Ensure new_kv_cache is not None before appending
             if return_kv_caches and new_kv_cache is not None:
                 loop_kv_caches.append(new_kv_cache)
 
         x = self.rms_out(x)
-        return x, loop_kv_caches
+        return x, loop_kv_caches, total_attn_entropy
 
 
 class LatentTransformer(nn.Module):
@@ -431,7 +558,8 @@ class LatentTransformer(nn.Module):
                  n_layer,
                  dim_feedforward=None,
                  rope=None,
-                 out_norm=True):
+                 out_norm=True,
+                 return_attn_entropy: bool = False):
         super().__init__()
         # Learnable latent tokens: shape (1, n_latent, d_model)
         self.latent_tokens = nn.Parameter(torch.randn(1, n_latent, d_model))
@@ -439,7 +567,7 @@ class LatentTransformer(nn.Module):
         
         # Stack of cross-attn blocks
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope)
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope, return_entropy=return_attn_entropy)
             for _ in range(n_layer)
         ])
 
@@ -458,21 +586,22 @@ class LatentTransformer(nn.Module):
         latents = self.latent_tokens.expand(B, -1, -1)  # (B, n_latent, d_model)
 
         loop_kv_caches: List[Tuple[Tensor, Tensor]] = []
+        total_attn_entropy = torch.tensor(0.0, device=x.device)
 
-        # positions = self.positions.expand(B, -1)
         for i, block in enumerate(self.blocks):
-            latents, new_kv_cache = block(queries=latents,
+            latents, new_kv_cache, attn_entropy = block(queries=latents,
                                     context=x, 
                                     positions=positions, 
                                     attn_mask=attn_mask, 
                                     kv_cache=kv_cache[i] if kv_cache is not None else None, 
                                     return_kv_cache=return_kv_caches)
             
+            total_attn_entropy += attn_entropy
             if return_kv_caches and new_kv_cache is not None:
                 loop_kv_caches.append(new_kv_cache)
 
         latents = self.rms_norm(latents)
-        return latents, loop_kv_caches
+        return latents, loop_kv_caches, total_attn_entropy
 
 
 
@@ -935,6 +1064,7 @@ class VQVAEConfig(Config):
     ema_decay: float = 0.99
     unused_reset_threshold: float = 1.0
     distance_reset: bool = False
+    return_attn_entropy: bool = False
 
     def __post_init__(self):
         if self.n_dim % self.n_head != 0:
@@ -995,6 +1125,7 @@ class VQVAEConfig(Config):
             'ema_decay': self.ema_decay,
             'unused_reset_threshold': self.unused_reset_threshold,
             'distance_reset': self.distance_reset,
+            'return_attn_entropy': self.return_attn_entropy,
         }
          
         return base_dict
@@ -1074,7 +1205,8 @@ class VQVAE(nn.Module):
             n_head=config.n_head,
             n_layer=config.n_grid_layer,
             out_norm=False,
-            rope=rope_2d
+            rope=rope_2d,
+            return_attn_entropy=config.return_attn_entropy
         )
 
         self.latent_encoder = LatentTransformer(
@@ -1083,9 +1215,9 @@ class VQVAE(nn.Module):
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
             out_norm=True,   # This seems to work even when skipping codebook so let's keep it.
-            rope=rope_1d
+            rope=rope_1d,
+            return_attn_entropy=config.return_attn_entropy
         )
-
 
         self.codebook = VQEmbedding(config.codebook_size,
                                     config.n_dim, 
@@ -1099,7 +1231,8 @@ class VQVAE(nn.Module):
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
             out_norm=False,
-            rope=rope_1d
+            rope=rope_1d,
+            return_attn_entropy=config.return_attn_entropy
         )
 
         self.grid_decoder = Transformer(
@@ -1107,7 +1240,8 @@ class VQVAE(nn.Module):
             n_head=config.n_head,
             n_layer=config.n_grid_layer,
             out_norm=True,
-            rope=rope_2d
+            rope=rope_2d,
+            return_attn_entropy=config.return_attn_entropy
         )
 
         self.decoder_head = nn.Linear(config.n_dim, config.n_vocab, bias=False)
@@ -1142,16 +1276,16 @@ class VQVAE(nn.Module):
 
     def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
         x_embd = self.embd(x) # [B, S, n_dim]
-        grid_encoded, _ = self.grid_encoder(x_embd, positions=grid_pos_indices) # [B, S, n_dim]
-        latent_encoded, _ = self.latent_encoder(grid_encoded, positions=latent_pos_indices) # [B, n_codes, n_dim]
-        return latent_encoded
+        grid_encoded, _, grid_attn_entropy = self.grid_encoder(x_embd, positions=grid_pos_indices) # [B, S, n_dim]
+        latent_encoded, _, latent_attn_entropy = self.latent_encoder(grid_encoded, positions=latent_pos_indices) # [B, n_codes, n_dim]
+        return latent_encoded, grid_attn_entropy + latent_attn_entropy
 
 
     def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:    
-        latent_decoded, _ = self.latent_decoder(x, positions=latent_pos_indices)        
-        grid_decoded, _ = self.grid_decoder(latent_decoded, positions=grid_pos_indices)        
+        latent_decoded, _ , latent_attn_entropy = self.latent_decoder(x, positions=latent_pos_indices)        
+        grid_decoded, _ , grid_attn_entropy = self.grid_decoder(latent_decoded, positions=grid_pos_indices)        
         grid_decoded_logits = self.decoder_head(grid_decoded)
-        return grid_decoded_logits
+        return grid_decoded_logits, latent_attn_entropy + grid_attn_entropy
     
 
     def apply_mask(self, x: Tensor, mask_percentage: Tensor) -> Tensor:
@@ -1167,10 +1301,10 @@ class VQVAE(nn.Module):
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
     
-        z_e_x = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
+        z_e_x, encoder_attn_entropy = self.encode(x_masked, grid_pos_indices, latent_pos_indices) # [B, n_codes, n_dim]
                 
         if self.skip_codebook:
-            decoded_logits = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
+            decoded_logits, decoder_attn_entropy = self.decode(z_e_x, grid_pos_indices, latent_pos_indices)
             vq_loss = torch.tensor(0.0, device=x.device)
             commitment_loss = torch.tensor(0.0, device=x.device)
             indices = None
@@ -1178,7 +1312,7 @@ class VQVAE(nn.Module):
             # Get quantized vectors and indices
             z_q_x_st, z_q_x, indices = self.codebook.straight_through_forward(z_e_x, use_ema=self.config.use_ema) # [B, n_codes, n_dim]
             
-            decoded_logits = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
+            decoded_logits, decoder_attn_entropy = self.decode(z_q_x_st, grid_pos_indices, latent_pos_indices)
             
             # Always calculate both losses for monitoring
             vq_loss = F.mse_loss(z_q_x, z_e_x.detach())
@@ -1189,7 +1323,8 @@ class VQVAE(nn.Module):
         losses = {
              "ce_loss": ce_loss,  # Weight normalized loss
              "vq_loss": vq_loss.detach() if self.config.use_ema else vq_loss, # Detach to prevent gradients when using EMA
-             "commitment_loss": commitment_loss
+             "commitment_loss": commitment_loss,
+             "attn_entropy_loss": encoder_attn_entropy + decoder_attn_entropy
         }
         
         # Return usage_stats as a third return value

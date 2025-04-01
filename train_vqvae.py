@@ -668,6 +668,7 @@ class ExperimentConfig:
     
     # Commitment loss parameters
     beta_commitment: float = 1.0
+    beta_attn_entropy: float = 0.0
     
     # Mask percentage parameters
     mask_pct_start: float = 0.0
@@ -896,6 +897,7 @@ class VQVAETrainingModule(pl.LightningModule):
 
     def forward(self, x: Tensor,
                 beta_commitment: Tensor = torch.tensor(1.0),
+                beta_attn_entropy: Tensor = torch.tensor(0.0),
                 mask_pct: Tensor = torch.tensor(0.0)):
         
         # Forward pass with provided scheduled parameters.
@@ -918,13 +920,15 @@ class VQVAETrainingModule(pl.LightningModule):
             'loss(CE)': losses['ce_loss'],
             'loss(VQ)': losses['vq_loss'],
             'loss(Commitment)': losses['commitment_loss'],
+            'loss(AttnEntropy)': losses['attn_entropy_loss']
         }
         
         # Compute weighted losses for total loss.
         weighted_losses = {
             'loss(CE)': raw_losses['loss(CE)'],
             'loss(VQ)': raw_losses['loss(VQ)'],
-            'loss(Commitment)': raw_losses['loss(Commitment)'] * beta_commitment
+            'loss(Commitment)': raw_losses['loss(Commitment)'] * beta_commitment,
+            'loss(AttnEntropy)': raw_losses['loss(AttnEntropy)'] * beta_attn_entropy
         }
         
         total_loss = sum(weighted_losses.values())
@@ -948,17 +952,20 @@ class VQVAETrainingModule(pl.LightningModule):
         scheduled = self.get_scheduled_values(self.global_step, device=x.device)
 
         beta_commitment = torch.tensor(self.experiment_config.beta_commitment, device=x.device)
+        beta_attn_entropy = torch.tensor(self.experiment_config.beta_attn_entropy, device=x.device)
         # Sample mask percentage for this batch; set max_pct_mask to 0 in validation for no masking.
         mask_pct = torch.empty(1, device=x.device).uniform_(0.0, scheduled['max_pct(MASK)'])[0]
 
         output_dict = self(
              x,
              beta_commitment=beta_commitment,
+             beta_attn_entropy=beta_attn_entropy,
              mask_pct=mask_pct
         )
 
         output_dict['percent(MASK)'] = mask_pct
         output_dict['beta(Commitment)'] = beta_commitment
+        output_dict['beta(AttnEntropy)'] = beta_attn_entropy
         output_dict.update(scheduled)
         
         return output_dict
@@ -970,16 +977,19 @@ class VQVAETrainingModule(pl.LightningModule):
         # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).
         scheduled = self.get_scheduled_values(self.global_step, device=x.device)
         beta_commitment = torch.tensor(self.experiment_config.beta_commitment, device=x.device)
+        beta_attn_entropy = torch.tensor(self.experiment_config.beta_attn_entropy, device=x.device)
         mask_pct = torch.tensor(0.0, device=x.device) # No masking in validation
 
         output_dict = self(
              x,
              beta_commitment=beta_commitment,
+             beta_attn_entropy=beta_attn_entropy,
              mask_pct=mask_pct
         )
 
         output_dict.update(scheduled)
         output_dict['beta(Commitment)'] = beta_commitment
+        output_dict['beta(AttnEntropy)'] = beta_attn_entropy
         output_dict.pop('max_pct(MASK)') # Remove max_pct(MASK) from output_dict
 
         return output_dict
