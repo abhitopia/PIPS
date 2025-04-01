@@ -458,7 +458,8 @@ class LoggingCallback(pl.Callback):
                 f'VQEmbedding/cluster_sizes_{phase}': wandb.Image(cluster_fig),
                 f'VQEmbedding/update_magnitudes_{phase}': wandb.Image(update_fig)
             }
-            pl_module.logger.experiment.log(viz_data, step=step)
+            # Remove the step parameter to let WandB use its internal step counter
+            pl_module.logger.experiment.log(viz_data)  # Remove the step parameter
         
         # Close figures to avoid memory leaks
         plt.close(cluster_fig)
