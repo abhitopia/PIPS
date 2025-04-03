@@ -28,8 +28,8 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 50000
   batch_size: 64  
-  learning_rate: 0.0000575
-  lr_min: 5.75e-07
+  learning_rate: 1.1e-7
+  lr_min: 1.1e-9
   seed: 42
   max_steps: 1000000
   gradient_clip_val: 1.0
