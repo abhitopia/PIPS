@@ -1,6 +1,14 @@
+# 2nd April 2025
+- [x] Add mixed precision training
+- [ ] Implement positional encoding sans RoPE
+- [ ] Implement Rope with resampling
+- [ ] Remove attn entropy from the code
+- [ ] Add ability to monitor codebook along with reconstruction
+
+
 # 31st March 2025 (Serious Training)
-- [ ] Train without Masking (No Codebook)
-- [ ] Train with Masking (No Codebook)
+- [x] Train without Masking (No Codebook)
+- [x] Train with Masking (No Codebook)
 
 # 31st March 2025 (Milestone 1)
 - VQ VAE with EMA and codebook resets seems to be working finally!!!!!!!!

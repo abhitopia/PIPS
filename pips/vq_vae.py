@@ -245,18 +245,24 @@ class RMSNorm(nn.Module):
 
     def forward(self, x: Tensor) -> Tensor:
         """
+        Apply RMSNorm with higher precision.
+
         Args:
             x (Tensor): input tensor to normalize
 
         Returns:
             Tensor: The output tensor after applying RMSNorm.
         """
-        # computation is in fp32
-        x_fp32 = x.float()
-        x_normed = (
-            x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)
-        ).type_as(x)
-        return x_normed * self.scale
+        with autocast(device_type='cuda', enabled=False):
+            # Computation is in fp32
+            x_fp32 = x.float()
+            x_normed = (
+                x_fp32 * torch.rsqrt(x_fp32.pow(2).mean(-1, keepdim=True) + self.eps)
+            )
+            # Apply scale parameter
+            x_normed = x_normed * self.scale
+            # Convert back to original dtype
+            return x_normed.type_as(x)
 
 
 class MultiHeadAttentionWithEntropy(nn.Module):
@@ -345,15 +351,17 @@ class MultiHeadAttentionWithEntropy(nn.Module):
         attn_weights = F.softmax(scores, dim=-1)
         
         # Calculate entropy of attention distribution if requested
-        # Add a small epsilon to avoid log(0)
-        eps = 1e-10
-        # Entropy calculation: -sum(p * log(p)) for each attention distribution
-        # Shape: [B, n_head, Tq]
-        entropy = -torch.sum(
-            attn_weights * torch.log(attn_weights + eps), 
-            dim=-1
-        )
-        entropy = entropy.mean()
+        with autocast(device_type='cuda', enabled=False):
+            # Add a small epsilon to avoid log(0)
+            eps = 1e-10
+            # Cast to float32 for precise entropy calculation
+            attn_weights_fp32 = attn_weights.float()
+            # Entropy calculation: -sum(p * log(p)) for each attention distribution
+            entropy = -torch.sum(
+                attn_weights_fp32 * torch.log(attn_weights_fp32 + eps), 
+                dim=-1
+            )
+            entropy = entropy.mean()
         
         # Apply dropout if training
         if self.training and self.dropout > 0.0:
@@ -624,38 +632,47 @@ class VectorQuantization(Function):
     """
     @staticmethod
     def forward(ctx, inputs, codebook):
-        # Expected shape: inputs is [B, N, C]
-        B, N, C = inputs.shape
+        # Disable autocast to ensure full precision for distance calculations
+        with autocast(device_type='cuda', enabled=False):
+            # Cast to float32 explicitly for precise distance calculation
+            inputs_fp32 = inputs.float()
+            codebook_fp32 = codebook.float()
+            
+            # Expected shape: inputs is [B, N, C]
+            B, N, C = inputs.shape
 
-        # Flatten inputs to shape [B*N, C]
-        flat_input = inputs.reshape(B * N, C)
+            # Flatten inputs to shape [B*N, C]
+            flat_input = inputs_fp32.reshape(B * N, C)
 
-        # Compute squared L2 norm of each codebook vector. Shape: [K]
-        codebook_sq = torch.sum(codebook * codebook, dim=1)
+            # Compute squared L2 norm of each codebook vector. Shape: [K]
+            codebook_sq = torch.sum(codebook_fp32 * codebook_fp32, dim=1)
 
-        # Compute squared L2 norm of each input vector. Shape: [B*N, 1]
-        inputs_sq = torch.sum(flat_input * flat_input, dim=1, keepdim=True)
+            # Compute squared L2 norm of each input vector. Shape: [B*N, 1]
+            inputs_sq = torch.sum(flat_input * flat_input, dim=1, keepdim=True)
 
-        # Compute squared Euclidean distance between each input and each codebook vector.
-        # Using the identity: ||x - e||^2 = ||x||^2 + ||e||^2 - 2*(x · e)
-        # Resulting shape: [B*N, K]
-        l2_dis = torch.addmm(input=codebook_sq + inputs_sq,
-                             mat1=flat_input,
-                             mat2=codebook.t(),
-                             alpha=-2.0, beta=1.0)
+            # Compute squared Euclidean distance between each input and each codebook vector.
+            # Using the identity: ||x - e||^2 = ||x||^2 + ||e||^2 - 2*(x · e)
+            # Resulting shape: [B*N, K]
+            l2_dis = torch.addmm(input=codebook_sq + inputs_sq,
+                                mat1=flat_input,
+                                mat2=codebook_fp32.t(),
+                                alpha=-2.0, beta=1.0)
 
-        # For each input, find the index of the codebook vector with minimum distance.
-        # Also retrieve the corresponding minimum distance.
-        min_vals, idx_flat = torch.min(l2_dis, dim=1)
+            # For each input, find the index of the codebook vector with minimum distance.
+            # Also retrieve the corresponding minimum distance.
+            min_vals, idx_flat = torch.min(l2_dis, dim=1)
 
-        # Reshape indices and distances back to shape [B, N]
-        idx = idx_flat.reshape(B, N)
-        distances = min_vals.reshape(B, N)
+            # Reshape indices and distances back to shape [B, N]
+            idx = idx_flat.reshape(B, N)
+            distances = min_vals.reshape(B, N)
 
         # Mark these outputs as non-differentiable.
         ctx.mark_non_differentiable(idx)
         ctx.mark_non_differentiable(distances)
 
+        # Convert distances back to original dtype to maintain compatibility
+        distances = distances.to(inputs.dtype)
+        
         return idx, distances
 
     @staticmethod
@@ -683,30 +700,35 @@ class VQStraightThrough(Function):
     """
     @staticmethod
     def forward(ctx, inputs, codebook):
-        # Expected shape: inputs is [B, N, C]
-        B, N, C = inputs.shape
+        # Since VQ now handles precision internally, we just need to ensure
+        # that the subsequent operations also maintain appropriate precision
         
         # Get nearest codebook indices and corresponding quantization errors using updated VQ.
-        # VQ now returns a tuple: (indices, distances)
-        idx, distances = VQ(inputs, codebook)  # idx, distances: both shape [B, N]
+        idx, distances = VQ(inputs, codebook)  # This now runs in full precision
         
-        # Flatten indices to shape [B*N] for later use in the backward pass.
-        flat_idx = idx.reshape(B * N)
+        # The following code should also be run in full precision
+        with autocast(device_type='cuda', enabled=False):
+            # Cast to float32 explicitly
+            inputs_fp32 = inputs.float()
+            codebook_fp32 = codebook.float()
+            
+            B, N, C = inputs.shape
+            flat_idx = idx.reshape(B * N)
+            
+            # Save tensors for the backward pass
+            ctx.save_for_backward(flat_idx, codebook_fp32)
+            
+            # Retrieve quantized embeddings via index selection
+            codes_flat = torch.index_select(codebook_fp32, dim=0, index=flat_idx)
+            codes = codes_flat.reshape(B, N, C)
+            
+            # Convert back to original dtype
+            codes = codes.to(inputs.dtype)
         
-        # Save flat indices and codebook for the backward pass.
-        ctx.save_for_backward(flat_idx, codebook)
         ctx.mark_non_differentiable(flat_idx)
         ctx.mark_non_differentiable(idx)
         ctx.mark_non_differentiable(distances)
         
-        # Retrieve quantized embeddings via index selection.
-        # This gives a tensor of shape [B*N, C].
-        codes_flat = torch.index_select(codebook, dim=0, index=flat_idx)
-        
-        # Reshape back to [B, N, C].
-        codes = codes_flat.reshape(B, N, C)
-        
-        # Return the quantized codes, flattened indices, original indices, and the distances.
         return codes, flat_idx, idx, distances
 
     @staticmethod
@@ -858,51 +880,58 @@ class VQEmbedding(nn.Module):
         Returns:
             Tensor: Updated normalized_embeddings.
         """
-        # Fixed codebook size K.
-        K = normalized_embeddings.shape[0]
-        # Flatten encoder outputs and distances.
-        flat_z_e = z_e_x.reshape(-1, D)      # [B*N, D]
-        flat_dists = distances.reshape(-1)     # [B*N]
-        # Sort encoder outputs by descending quantization error.
-        sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
+
+        with autocast(device_type='cuda', enabled=False):
+
+            z_e_x_fp32 = z_e_x.float()
+            normalized_embeddings_fp32 = normalized_embeddings.float()
+            distances_fp32 = distances.float()
+            # Fixed codebook size K.
+            K = normalized_embeddings_fp32.shape[0]
+            # Flatten encoder outputs and distances.
+            flat_z_e = z_e_x_fp32.reshape(-1, D)      # [B*N, D]
+            flat_dists = distances_fp32.reshape(-1)     # [B*N]
         
-        # Compute a fixed-size unused mask (K is fixed).
-        unused_mask = self.cluster_size < self.unused_reset_threshold  # [K] boolean
+            # Sort encoder outputs by descending quantization error.
+            sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
         
-        # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
-        # Since K is fixed, this produces a fixed-shape tensor.
-        unused_int = unused_mask.to(torch.int64)           # [K]
-        ranks = torch.cumsum(unused_int, dim=0) - 1           # [K]
-        # For used entries, force the rank to 0 (these values won't be used).
-        ranks = torch.where(unused_mask, ranks, torch.zeros_like(ranks))
+            # Compute a fixed-size unused mask (K is fixed).
+            unused_mask = self.cluster_size < self.unused_reset_threshold  # [K] boolean
         
-        # For each codebook entry i, candidate_codes[i] is taken from:
-        # flat_z_e[ sorted_indices[ranks[i]] ]
-        candidate_codes = flat_z_e[sorted_indices[ranks]]     # [K, D]
+            # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
+            # Since K is fixed, this produces a fixed-shape tensor.
+            unused_int = unused_mask.to(torch.int64)           # [K]
+            ranks = torch.cumsum(unused_int, dim=0) - 1           # [K]
+            # For used entries, force the rank to 0 (these values won't be used).
+            ranks = torch.where(unused_mask, ranks, torch.zeros_like(ranks))
         
-        # Update only unused entries in normalized_embeddings.
-        updated_normalized_embeddings = torch.where(
-            unused_mask.unsqueeze(1),  # shape [K, 1]
-            candidate_codes,
-            normalized_embeddings
-        )
+            # For each codebook entry i, candidate_codes[i] is taken from:
+            # flat_z_e[ sorted_indices[ranks[i]] ]
+            candidate_codes = flat_z_e[sorted_indices[ranks]]     # [K, D]
         
-        # Update EMA buffers for the unused entries in a vectorized way.
-        updated_cluster_size = torch.where(
-            unused_mask,
-            torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
-            self.cluster_size
-        )
-        updated_embed_sum = torch.where(
-            unused_mask.unsqueeze(1),
-            candidate_codes,
-            self.embed_sum
-        )
+            # Update only unused entries in normalized_embeddings.
+            updated_normalized_embeddings = torch.where(
+                unused_mask.unsqueeze(1),  # shape [K, 1]
+                candidate_codes,
+                normalized_embeddings_fp32
+            )
         
-        self.cluster_size.copy_(updated_cluster_size)
-        self.embed_sum.copy_(updated_embed_sum)
+            # Update EMA buffers for the unused entries in a vectorized way.
+            updated_cluster_size = torch.where(
+                unused_mask,
+                torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+                self.cluster_size
+            )
+            updated_embed_sum = torch.where(
+                unused_mask.unsqueeze(1),
+                candidate_codes,
+                self.embed_sum
+            )
         
-        return updated_normalized_embeddings
+            self.cluster_size.copy_(updated_cluster_size)
+            self.embed_sum.copy_(updated_embed_sum)
+        
+            return updated_normalized_embeddings.to(normalized_embeddings.dtype)
     
     def reset_unused_codes(self, z_e_x, normalized_embeddings, D, codebook_size, distances):
         if self.distance_reset:
@@ -925,7 +954,7 @@ class VQEmbedding(nn.Module):
             indices (Tensor): Indices of nearest codebook entries [B, N]
             distances (Tensor): Quantization errors, shape [B, N].
         """
-        with torch.no_grad():
+        with torch.no_grad(), autocast(device_type='cuda', enabled=False):
             # Store the current codebook for computing update magnitudes later
             self.previous_codebook.copy_(self.vq_embs.weight.data)
             
@@ -935,11 +964,10 @@ class VQEmbedding(nn.Module):
             codebook_size = self.vq_embs.weight.shape[0]
             
             # Ensure same dtype for codebook and z_e_x.
-            weights_dtype = self.vq_embs.weight.dtype
-            z_e_x_detached = z_e_x.detach().to(weights_dtype)
+            z_e_x_detached = z_e_x.detach().float()
             
             # Create one-hot encodings for indices.
-            encodings = F.one_hot(flat_idx, num_classes=codebook_size).to(weights_dtype)
+            encodings = F.one_hot(flat_idx, num_classes=codebook_size).float()
             
             # Compute the new cluster size and sum of encoder outputs for each code.
             new_cluster_size = encodings.sum(0)  # [K]
@@ -950,8 +978,8 @@ class VQEmbedding(nn.Module):
             initialized_cluster_size = new_cluster_size  # [K]
             initialized_embed_sum = dw  # [K, D]
             
-            updated_cluster_size = self.cluster_size.to(weights_dtype) * self.decay + new_cluster_size * (1 - self.decay)
-            updated_embed_sum = self.embed_sum.to(weights_dtype) * self.decay + dw * (1 - self.decay)
+            updated_cluster_size = self.cluster_size.float() * self.decay + new_cluster_size * (1 - self.decay)
+            updated_embed_sum = self.embed_sum.float() * self.decay + dw * (1 - self.decay)
             
             new_cluster_size = torch.where(is_first_batch, initialized_cluster_size, updated_cluster_size)
             new_embed_sum = torch.where(is_first_batch.unsqueeze(-1), initialized_embed_sum, updated_embed_sum)
@@ -965,18 +993,17 @@ class VQEmbedding(nn.Module):
             effective_cluster_size = self.cluster_size + 1e-3
             
             # Compute normalized embeddings.
-            normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1)).to(weights_dtype)
+            normalized_embeddings = (self.embed_sum / effective_cluster_size.unsqueeze(1))
             
             # Call the reset method to update unused codebook entries.
             normalized_embeddings = self.reset_unused_codes(z_e_x, normalized_embeddings, D, codebook_size, distances)
-            
+        
             # Update the codebook weights.
-            self.vq_embs.weight.copy_(normalized_embeddings)
-            
+            self.vq_embs.weight.copy_(normalized_embeddings.to(self.vq_embs.weight.dtype))
+        
             # Compute update magnitudes (L2 norm of the difference)
-            with torch.no_grad():
-                updates = self.vq_embs.weight.data - self.previous_codebook
-                self.update_magnitudes.copy_(torch.norm(updates, dim=1))
+            updates = self.vq_embs.weight.data - self.previous_codebook
+            self.update_magnitudes.copy_(torch.norm(updates, dim=1))
 
 
     def straight_through_forward(self, z_e_x, use_ema=False):
@@ -1413,12 +1440,12 @@ class VQVAE(nn.Module):
                 grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
                 latent_pos_indices = self.latent_pos_indices.expand(B, -1)
                 
-                # Get encoder outputs
-                z_e_x = self.encode(x, grid_pos_indices, latent_pos_indices)
+                # Ensure encoder outputs are in full precision for k-means
+                with autocast(device_type='cuda', enabled=False):
+                    z_e_x, _ = self.encode(x, grid_pos_indices, latent_pos_indices)
+                    # Convert to float32 for scikit-learn compatibility
+                    batch_vectors = z_e_x.float().reshape(-1, self.config.n_dim).cpu()
                 
-                # Collect latent vectors and update total count
-                # Convert to float32 here to ensure compatibility with scikit-learn
-                batch_vectors = z_e_x.reshape(-1, self.config.n_dim).to(torch.float32).cpu()
                 latent_vectors.append(batch_vectors)
                 total_vectors += batch_vectors.size(0)
                 
