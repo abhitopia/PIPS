@@ -97,7 +97,7 @@ class LoggingCallback(pl.Callback):
             return tokens_per_sec, time_per_batch_ms
         return 0, 0
 
-    def visualize_reconstructions(self, pl_module, x, logits, phase):
+    def visualize_reconstructions(self, pl_module, x, logits, phase, indices=None):
         """Create visualization of input grids and their reconstructions."""
         if pl_module.global_rank != 0:
             return
@@ -162,14 +162,38 @@ class LoggingCallback(pl.Callback):
         
         custom_cmap = mcolors.ListedColormap(colors)
         
-        # Create the figure with proper space for a colorbar.
-        fig = plt.figure(figsize=(n_samples * 3 + 1, 6), dpi=80)
+        # Get codebook information if indices are provided
+        codebook_size = pl_module.model_config.codebook_size if indices is not None else 0
         
-        # Create a gridspec layout with space for the colorbar.
-        gs = fig.add_gridspec(2, n_samples + 1, width_ratios=[1] * n_samples + [0.1])
+        # Adjust figure height based on whether indices are provided and codebook size
+        # For large codebooks, make the discrete code visualization much taller
+        if indices is not None:
+            # Calculate height with consideration for codebook size
+            # Use a logarithmic scale to keep very large codebooks manageable
+            discrete_height = min(12, 3 + 2 * np.log10(codebook_size))
+            grid_height = 6  # Fixed height for input and reconstruction grids
+            fig_height = grid_height + discrete_height
+            n_rows = 3
+        else:
+            fig_height = 6  # Standard height when no indices
+            n_rows = 2
+        
+        # Create the figure with proper space for a colorbar.
+        fig = plt.figure(figsize=(n_samples * 3 + 1, fig_height), dpi=80)
+        
+        # Create a gridspec layout with special height ratios to make discrete codes taller
+        if n_rows == 3:
+            # Make the discrete code row taller than the other two rows
+            height_ratios = [1, 1, discrete_height/2]
+        else:
+            height_ratios = [1, 1]
+            
+        gs = fig.add_gridspec(n_rows, n_samples + 1, 
+                             width_ratios=[1] * n_samples + [0.1],
+                             height_ratios=height_ratios)
         
         # Create axes for the plots.
-        axes = [[fig.add_subplot(gs[i, j]) for j in range(n_samples)] for i in range(2)]
+        axes = [[fig.add_subplot(gs[i, j]) for j in range(n_samples)] for i in range(n_rows)]
         
         # Plot inputs on the top row.
         for i in range(n_samples):
@@ -177,14 +201,90 @@ class LoggingCallback(pl.Callback):
             axes[0][i].set_title(f"Input {i+1}")
             axes[0][i].axis('off')
             
-        # Plot reconstructions on the bottom row.
+        # Plot reconstructions on the middle row.
         for i in range(n_samples):
             axes[1][i].imshow(recon_np[i], cmap=custom_cmap, vmin=0, vmax=len(colors) - 1)
             axes[1][i].set_title(f"Reconstruction {i+1}")
             axes[1][i].axis('off')
             
+        # Plot discrete codes if provided
+        if indices is not None and n_rows > 2:
+            indices_subset = indices[:n_samples] if indices.size(0) >= n_samples else indices
+            
+            # Process indices to create visualization
+            for i in range(min(n_samples, indices_subset.size(0))):
+                # Get indices for this sample
+                sample_indices = indices_subset[i]  # Shape: [n_codes]
+                
+                # Create boolean matrix where each row corresponds to a position
+                # and each column corresponds to a codebook entry
+                n_codes = sample_indices.size(0)
+                
+                # Create a matrix of zeros, then set the used indices to 1
+                # Transpose the matrix so codebook entries are on y-axis and positions on x-axis
+                bool_matrix = np.zeros((codebook_size, n_codes))
+                for pos, idx in enumerate(sample_indices.cpu().numpy()):
+                    bool_matrix[idx, pos] = 1
+                
+                # Plot the boolean matrix - now taller than wide when codebook_size > n_codes
+                im_discrete = axes[2][i].imshow(bool_matrix, cmap='binary', aspect='auto')
+                axes[2][i].set_title(f"Discrete Codes {i+1}")
+                
+                # Add labels only for the first sample to avoid clutter
+                if i == 0:
+                    axes[2][i].set_xlabel("Position")
+                    axes[2][i].set_ylabel("Codebook Index")
+                
+                # Add sparse ticks to avoid clutter - now x-axis is positions, y-axis is codebook
+                max_ticks = 10
+                
+                # X-axis ticks (positions)
+                if n_codes > max_ticks:
+                    tick_step = max(1, n_codes // max_ticks)
+                    xticks = np.arange(0, n_codes, tick_step)
+                    axes[2][i].set_xticks(xticks)
+                    axes[2][i].set_xticklabels([str(x) for x in xticks])
+                else:
+                    # If small number of positions, show all ticks
+                    axes[2][i].set_xticks(np.arange(n_codes))
+                    axes[2][i].set_xticklabels([str(x) for x in range(n_codes)])
+                
+                # Y-axis ticks (codebook indices)
+                if codebook_size > max_ticks:
+                    # For large codebooks, show more reference points
+                    max_codebook_ticks = 20  # Increase number of ticks for large codebooks
+                    tick_step = max(1, codebook_size // max_codebook_ticks)
+                    yticks = np.arange(0, codebook_size, tick_step)
+                    axes[2][i].set_yticks(yticks)
+                    axes[2][i].set_yticklabels([str(y) for y in yticks])
+                    
+                    # Add minor ticks for a more detailed grid
+                    minor_tick_step = max(1, tick_step // 2)
+                    minor_yticks = np.arange(0, codebook_size, minor_tick_step)
+                    axes[2][i].set_yticks(minor_yticks, minor=True)
+                
+                # Add a grid for better readability
+                # Major grid lines aligned with ticks
+                axes[2][i].grid(which='major', color='gray', linestyle='-', linewidth=0.5, alpha=0.5)
+                
+                # If we have minor ticks, add minor grid lines
+                if codebook_size > max_ticks:
+                    axes[2][i].grid(which='minor', color='gray', linestyle='-', linewidth=0.25, alpha=0.3)
+                
+                # Highlight the cells with 1s to make them more visible
+                for pos in range(n_codes):
+                    idx = sample_indices[pos].item()
+                    axes[2][i].add_patch(plt.Rectangle((pos - 0.5, idx - 0.5), 1, 1, 
+                                                      fill=False, edgecolor='red', linewidth=1.5))
+                
+                # Annotate each position with its codebook index
+                for pos in range(n_codes):
+                    idx = sample_indices[pos].item()
+                    axes[2][i].text(pos, idx, str(idx), ha='center', va='center', 
+                                   color='red', fontweight='bold', fontsize=8)
+            
         # Add a colorbar as a legend using the gridspec.
-        cbar_ax = fig.add_subplot(gs[:, -1])
+        cbar_ax = fig.add_subplot(gs[:2, -1])  # Colorbar spans only input and reconstruction rows
         cbar = fig.colorbar(im, cax=cbar_ax)
         cbar.set_label('Grid Values')
         
@@ -192,6 +292,14 @@ class LoggingCallback(pl.Callback):
         present_values = sorted(np.unique(np.concatenate([x_np.flatten(), recon_np.flatten()])))
         cbar.set_ticks(present_values)
         cbar.set_ticklabels([str(int(v)) for v in present_values])
+        
+        # If indices are provided, add a colorbar for the discrete code visualization
+        if indices is not None and n_rows > 2:
+            cbar_discrete_ax = fig.add_subplot(gs[2:, -1])
+            cbar_discrete = fig.colorbar(im_discrete, cax=cbar_discrete_ax)
+            cbar_discrete.set_label('Code Usage')
+            cbar_discrete.set_ticks([0, 1])
+            cbar_discrete.set_ticklabels(['Unused', 'Used'])
         
         # Use tight_layout without a rect parameter.
         plt.tight_layout()
@@ -486,8 +594,8 @@ class LoggingCallback(pl.Callback):
 
         # Visualize if the time interval has been reached.
         if should_visualize:
-            # Visualize reconstructions
-            self.visualize_reconstructions(pl_module, x, logits, 'train')
+            # Visualize reconstructions and pass codebook indices
+            self.visualize_reconstructions(pl_module, x, logits, 'train', indices=codebook_indices)
             
             # Create and log codebook visualizations (visualization and logging now handled inside this method)
             self.visualize_codebook_state(pl_module, step=current_step, phase='train')
@@ -550,7 +658,7 @@ class LoggingCallback(pl.Callback):
 
         # Visualize reconstructions only for the randomly selected batch.
         if batch_idx == self.val_batch_to_visualize:
-            self.visualize_reconstructions(pl_module, x, logits, 'val')
+            self.visualize_reconstructions(pl_module, x, logits, 'val', indices=codebook_indices)
         
         # Calculate tokens per second for the validation batch.
         if self.val_batch_start_time is not None:
