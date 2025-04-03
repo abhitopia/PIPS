@@ -1,6 +1,7 @@
 # 2nd April 2025
 - [x] Add mixed precision training
 - [x] Added option to specify batch size for kmeans codebook initialisation
+- [x] Rope Resampling for Latent Transformer
 - [ ] Implement positional encoding sans RoPE
 - [ ] Implement Rope with resampling
 - [ ] Remove attn entropy from the code

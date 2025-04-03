@@ -383,12 +383,13 @@ class MultiHeadAttentionWithEntropy(nn.Module):
 
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_dim, n_head, dropout, rope=None):
+    def __init__(self, n_dim, n_head, dropout, rope=None, resample_positions=False):
         super().__init__()
         self.rope = rope
         self.n_dim = n_dim
         self.n_head = n_head
         self.dropout = dropout
+        self.resample_positions = resample_positions
         assert n_dim % n_head == 0
         # key, query, value projections for all heads, but in a batch
         self.q_proj = nn.Linear(n_dim, n_dim, bias=False)
@@ -397,6 +398,21 @@ class MultiHeadAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
         self.c_proj.RESCALE_INIT = True
+
+    def get_resampled_positions(self, positions: Tensor, target_length: int) -> Tensor:
+        """
+        Given a positions tensor of shape [B, L] and a target length, 
+        returns a tensor of shape [B, target_length] that samples positions evenly.
+        """
+        B, L = positions.shape
+        # Create indices evenly spaced between 0 and L-1.
+        new_indices = torch.linspace(0, L - 1, steps=target_length, device=positions.device)
+        # Round them to the nearest integer and convert to long.
+        new_indices = new_indices.round().long()
+        # Clamp to ensure no index is out-of-bounds.
+        new_indices = new_indices.clamp(0, L - 1)
+        # Use advanced indexing to sample.
+        return positions[:, new_indices]
 
     def forward(self,
             q: Tensor, 
@@ -441,8 +457,16 @@ class MultiHeadAttention(nn.Module):
 
         # Apply Rope2D to q and k
         if self.rope is not None and positions is not None:
-            k = self.rope(k, positions[:, :kT].unsqueeze(1))
-            q = self.rope(q, positions[:, :qT].unsqueeze(1))
+            if self.resample_positions:
+                # Resample positions to match the current key and query lengths.
+                key_positions = self.get_resampled_positions(positions, kT)  # shape: [B, 1, kT]
+                query_positions = self.get_resampled_positions(positions, qT) # shape: [B, 1, qT]
+            else:
+                key_positions = positions[:, :kT]
+                query_positions = positions[:, :qT]
+            
+            k = self.rope(k, key_positions.unsqueeze(1))
+            q = self.rope(q, query_positions.unsqueeze(1))
 
         # If kv_cache is present, concatenate past keys and values
         if kv_cache is not None and torch.jit.isinstance(kv_cache, Tuple[Tensor, Tensor]):
@@ -481,12 +505,12 @@ class MultiHeadAttention(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    def __init__(self, d_model, n_head, rope=None, dim_feedforward=None, dropout=0.0, return_entropy: bool = False):
+    def __init__(self, d_model, n_head, rope=None, dim_feedforward=None, dropout=0.0, return_entropy: bool = False, resample_positions: bool = False):
         super().__init__()
         if return_entropy:
             self.mha = MultiHeadAttentionWithEntropy(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
         else:
-            self.mha = MultiHeadAttention(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope)
+            self.mha = MultiHeadAttention(n_dim=d_model, n_head=n_head, dropout=dropout, rope=rope, resample_positions=resample_positions)
         self.dropout = nn.Dropout(dropout)
 
         self.return_entropy = return_entropy
@@ -522,7 +546,7 @@ class Transformer(nn.Module):
     def __init__(self, d_model, n_head, n_layer, dim_feedforward=None, rope=None, out_norm=True, return_attn_entropy: bool = False):
         super().__init__()
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope, return_entropy=return_attn_entropy)
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope, return_entropy=return_attn_entropy, resample_positions=False)
             for _ in range(n_layer)
         ])
 
@@ -575,7 +599,8 @@ class LatentTransformer(nn.Module):
         
         # Stack of cross-attn blocks
         self.blocks = nn.ModuleList([
-            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, rope=rope, return_entropy=return_attn_entropy)
+            TransformerBlock(d_model=d_model, n_head=n_head, dim_feedforward=dim_feedforward, 
+                             rope=rope, return_entropy=return_attn_entropy, resample_positions=True)
             for _ in range(n_layer)
         ])
 
