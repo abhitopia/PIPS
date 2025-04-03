@@ -170,7 +170,7 @@ class LoggingCallback(pl.Callback):
         if indices is not None:
             # Calculate height with consideration for codebook size
             # Use a logarithmic scale to keep very large codebooks manageable
-            discrete_height = min(12, 3 + 2 * np.log10(codebook_size))
+            discrete_height = min(16, 4 + 3 * np.log10(codebook_size))  # Increased height scaling
             grid_height = 6  # Fixed height for input and reconstruction grids
             fig_height = grid_height + discrete_height
             n_rows = 3
@@ -183,7 +183,7 @@ class LoggingCallback(pl.Callback):
         
         # Create a gridspec layout with special height ratios to make discrete codes taller
         if n_rows == 3:
-            # Make the discrete code row taller than the other two rows
+            # Make the discrete code row much taller than the other two rows
             height_ratios = [1, 1, discrete_height/2]
         else:
             height_ratios = [1, 1]
@@ -226,8 +226,8 @@ class LoggingCallback(pl.Callback):
                 for pos, idx in enumerate(sample_indices.cpu().numpy()):
                     bool_matrix[idx, pos] = 1
                 
-                # Plot the boolean matrix - now taller than wide when codebook_size > n_codes
-                im_discrete = axes[2][i].imshow(bool_matrix, cmap='binary', aspect='auto')
+                # Plot the boolean matrix using a high contrast colormap for better visibility
+                im_discrete = axes[2][i].imshow(bool_matrix, cmap='hot', aspect='auto')
                 axes[2][i].set_title(f"Discrete Codes {i+1}")
                 
                 # Add labels only for the first sample to avoid clutter
@@ -277,11 +277,7 @@ class LoggingCallback(pl.Callback):
                     axes[2][i].add_patch(plt.Rectangle((pos - 0.5, idx - 0.5), 1, 1, 
                                                       fill=False, edgecolor='red', linewidth=1.5))
                 
-                # Annotate each position with its codebook index
-                for pos in range(n_codes):
-                    idx = sample_indices[pos].item()
-                    axes[2][i].text(pos, idx, str(idx), ha='center', va='center', 
-                                   color='red', fontweight='bold', fontsize=8)
+                # Removed the numerical annotations to reduce clutter
             
         # Add a colorbar as a legend using the gridspec.
         cbar_ax = fig.add_subplot(gs[:2, -1])  # Colorbar spans only input and reconstruction rows
