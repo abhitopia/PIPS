@@ -1408,7 +1408,7 @@ class VQVAE(nn.Module):
         normalized_loss = total_loss / total_weight
         return normalized_loss
     
-    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=2_000_000):
+    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=2_000_000, batch_size=100_000):
         """
         Initialize codebook using k-means clustering on encoder outputs from a pre-trained model.
         
@@ -1416,6 +1416,7 @@ class VQVAE(nn.Module):
             data_loader: DataLoader containing representative data samples
             device: Device to run computation on
             max_datapoints: Maximum number of data points to use for k-means clustering
+            batch_size: Batch size for k-means clustering
         """
  
         print(f"Collecting latent vectors for codebook initialization (max: {max_datapoints} points)...")
@@ -1473,7 +1474,7 @@ class VQVAE(nn.Module):
             random_state=0,
             verbose=1,
             max_iter=300,
-            batch_size=100000,  # Process in smaller batches
+            batch_size=batch_size,  # Process in smaller batches
             max_no_improvement=50
         )
         

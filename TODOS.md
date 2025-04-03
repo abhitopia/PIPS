@@ -1,5 +1,6 @@
 # 2nd April 2025
 - [x] Add mixed precision training
+- [x] Added option to specify batch size for kmeans codebook initialisation
 - [ ] Implement positional encoding sans RoPE
 - [ ] Implement Rope with resampling
 - [ ] Remove attn entropy from the code

@@ -686,6 +686,7 @@ class ExperimentConfig:
     model_src: str | None = None
     kmeans_init_codebook: bool = False
     kmeans_init_max_datapoints: int = 5_00_000
+    kmeans_init_batch_size: int = 100_000
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -828,7 +829,8 @@ class VQVAETrainingModule(pl.LightningModule):
             target_model.initialize_codebook_with_kmeans(
                 data_loader=train_dataloader,
                 device=self.device,
-                max_datapoints=self.experiment_config.kmeans_init_max_datapoints
+                max_datapoints=self.experiment_config.kmeans_init_max_datapoints,
+                batch_size=self.experiment_config.kmeans_init_batch_size
             )
             
             # If using compilation, recompile to ensure optimizations work with new weights
