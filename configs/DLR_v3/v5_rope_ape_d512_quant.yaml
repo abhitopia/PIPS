@@ -48,7 +48,7 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: null
+  model_src: v5_rope_ape_d512/best/128000
 project_config:
   run_name: v5_rope_ape_d512_quant
   project_name: DLR_v3
