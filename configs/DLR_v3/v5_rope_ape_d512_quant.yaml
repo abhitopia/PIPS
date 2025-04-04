@@ -48,9 +48,9 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: v5_rope_ape_d512/best/128000
+  model_src: v5_rope_ape_d512_quant/best/36000
 project_config:
-  run_name: v5_rope_ape_d512_quant
+  run_name: v5_rope_ape_d512_quant_v2
   project_name: DLR_v3
   checkpoint_dir: runs
   val_check_interval: 1000
