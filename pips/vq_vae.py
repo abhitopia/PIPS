@@ -20,6 +20,27 @@ def is_power_of_two(n):
     return n > 0 and (n & (n - 1)) == 0
 
 
+class AbsolutePositionalEmbedding(nn.Module):
+    """
+    Implements Absolute Positional Embeddings as described in "Attention is All You Need".
+    
+    Args:
+        d_model (int): Embedding dimension.
+        max_seq_len (int): Maximum sequence length.
+    """
+    def __init__(self, d_model, max_seq_len=1024):
+        super().__init__()
+        self.emb = nn.Embedding(max_seq_len, d_model)
+        nn.init.normal_(self.emb.weight, mean=0.0, std=0.02)
+        
+    def forward(self, x):
+        batch_size, seq_len, _ = x.shape
+        # Use sequential positions if not provided
+        positions = torch.arange(seq_len, device=x.device).unsqueeze(0).expand(batch_size, -1)
+        pos_emb = self.emb(positions)
+        return x + pos_emb
+
+
 class RotaryPositionalEmbeddings(nn.Module):
     """
     Implements Rotary Positional Embeddings (RoPE) as described in https://arxiv.org/abs/2104.09864.
@@ -1094,6 +1115,8 @@ class VQVAEConfig(Config):
         ema_decay (float): Decay rate for EMA updates (default: 0.99)
         unused_reset_threshold (float): Threshold below which a code is considered unused (default: 1.0)
         distance_reset (bool): Whether to use distance-based codebook resets (default: False)
+        use_rope (bool): Whether to use RoPE (default: True)
+        use_ape (bool): Whether to use Absolute Positional Embeddings (default: False)
     """
     n_dim: int = 256
     n_head: int = 4
@@ -1116,6 +1139,8 @@ class VQVAEConfig(Config):
     ema_decay: float = 0.99
     unused_reset_threshold: float = 1.0
     distance_reset: bool = False
+    use_rope: bool = True
+    use_ape: bool = False
     return_attn_entropy: bool = False
 
     def __post_init__(self):
@@ -1177,6 +1202,8 @@ class VQVAEConfig(Config):
             'ema_decay': self.ema_decay,
             'unused_reset_threshold': self.unused_reset_threshold,
             'distance_reset': self.distance_reset,
+            'use_rope': self.use_rope,
+            'use_ape': self.use_ape,
             'return_attn_entropy': self.return_attn_entropy,
         }
          
@@ -1227,30 +1254,41 @@ class VQVAE(nn.Module):
         self.gamma = config.gamma
         self.n_pos = config.n_pos
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
-        self.pad_value = config.padding_idx  # Store padding value here
+        self.pad_value = config.padding_idx
         self.mask_value = config.mask_idx
         nn.init.normal_(self.embd.weight, mean=0.0, std=0.02)
         
-
-        ## The choice of out_norm is inspired by Llama. We can think of both Encoder and Decoder as Llama models.
-        ## With the difference that some of the layers are replaced by TransformerProjection blocks.
-        ## Like in Llama, the token embeddings flow through unnormalized until the head is applied.
-        ## In my case, we normalise the final output of the encoder as well as that of decoder before applyin their
-        ## respective heads. Nothing gets normalised from base to bottleneck and vice versa.
-
-        rope_2d = RoPE2D(
-                dim=config.n_dim // config.n_head,  # per-head dimension (e.g., 256//8 = 32)
-                max_height=config.max_grid_height,
-                max_width=config.max_grid_width,
-                base_height=config.rope_base_height,
-                base_width=config.rope_base_width)
+        # Initialize RoPE if enabled
+        rope_2d, rope_1d = None, None
+        if config.use_rope:
+            rope_2d = RoPE2D(
+                    dim=config.n_dim // config.n_head,
+                    max_height=config.max_grid_height,
+                    max_width=config.max_grid_width,
+                    base_height=config.rope_base_height,
+                    base_width=config.rope_base_width)
+            
+            rope_1d = RotaryPositionalEmbeddings(
+                dim=config.n_dim // config.n_head,
+                max_seq_len=config.n_pos,
+                base=config.rope_base_height
+            )
         
-        rope_1d = RotaryPositionalEmbeddings(
-            dim=config.n_dim // config.n_head,  # 256//8 = 32, per-head dimension
-            max_seq_len=config.n_pos,
-            base=config.rope_base_height
-        )
-
+        # Initialize APE if enabled
+        self.grid_ape = None
+        self.latent_ape = None
+        if config.use_ape:
+            # APE for grid (2D positions)
+            self.grid_ape = AbsolutePositionalEmbedding(
+                d_model=config.n_dim,
+                max_seq_len=config.max_grid_height * config.max_grid_width
+            )
+            
+            # APE for latent space (1D positions)
+            self.latent_ape = AbsolutePositionalEmbedding(
+                d_model=config.n_dim,
+                max_seq_len=config.n_codes
+            )
         
         self.grid_encoder = Transformer(
             d_model=config.n_dim,
@@ -1266,7 +1304,7 @@ class VQVAE(nn.Module):
             d_model=config.n_dim,
             n_head=config.n_head,
             n_layer=config.n_latent_layer,
-            out_norm=False,   # This seems to work even when skipping codebook so let's keep it.
+            out_norm=True,
             rope=rope_1d,
             return_attn_entropy=config.return_attn_entropy
         )
@@ -1327,15 +1365,33 @@ class VQVAE(nn.Module):
             torch.nn.init.ones_(module.scale)
 
     def encode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
-        x_embd = self.embd(x) # [B, S, n_dim]
-        grid_encoded, _, grid_attn_entropy = self.grid_encoder(x_embd, positions=grid_pos_indices) # [B, S, n_dim]
-        latent_encoded, _, latent_attn_entropy = self.latent_encoder(grid_encoded, positions=latent_pos_indices) # [B, n_codes, n_dim]
+        x_embd = self.embd(x)  # [B, S, n_dim]
+        
+        # Apply APE just once at the beginning if enabled
+        if self.grid_ape is not None:
+            x_embd = self.grid_ape(x_embd)
+        
+        # Pass through grid encoder (positions still needed for RoPE if enabled)
+        grid_encoded, _, grid_attn_entropy = self.grid_encoder(x_embd, positions=grid_pos_indices)
+        
+        # No need for another APE before latent encoder in a pure transformer
+        # Just pass through latent encoder
+        latent_encoded, _, latent_attn_entropy = self.latent_encoder(grid_encoded, positions=latent_pos_indices)
+        
         return latent_encoded, grid_attn_entropy + latent_attn_entropy
 
 
-    def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:    
-        latent_decoded, _ , latent_attn_entropy = self.latent_decoder(x, positions=latent_pos_indices)        
-        grid_decoded, _ , grid_attn_entropy = self.grid_decoder(latent_decoded, positions=grid_pos_indices)        
+    def decode(self, x: Tensor, grid_pos_indices: Tensor, latent_pos_indices: Tensor) -> Tensor:
+        # Apply APE just once at the beginning of decoder if enabled
+        if self.latent_ape is not None:
+            x = self.latent_ape(x)
+        
+        # Pass through latent decoder
+        latent_decoded, _, latent_attn_entropy = self.latent_decoder(x, positions=latent_pos_indices)
+        
+        # No need for another APE before grid decoder
+        grid_decoded, _, grid_attn_entropy = self.grid_decoder(latent_decoded, positions=grid_pos_indices)
+        
         grid_decoded_logits = self.decoder_head(grid_decoded)
         return grid_decoded_logits, latent_attn_entropy + grid_attn_entropy
     
@@ -1513,3 +1569,6 @@ class VQVAE(nn.Module):
         # Return to training mode
         self.train()
         print("Codebook initialized with k-means centroids!")
+
+
+

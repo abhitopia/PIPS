@@ -17,12 +17,14 @@ experiment_config:
     pad_weight: 0.1
     gamma: 2.0
     skip_codebook: false
-    use_ema: true
+    use_ema: false
     ema_decay: 0.99
     unused_reset_threshold: 1.0
     distance_reset: false
+    use_rope: true
+    use_ape: false
     return_attn_entropy: false
-  seed: 1399191621
+  seed: 194360841
   batch_size: 64
   max_steps: 1000000
   gradient_clip_val: 1.0
@@ -46,8 +48,9 @@ experiment_config:
   model_src: null
   kmeans_init_codebook: false
   kmeans_init_max_datapoints: 500000
+  kmeans_init_batch_size: 100000
 project_config:
-  run_name: reallydumb-eagle-632
+  run_name: keen-falcon-600
   project_name: train-vq-vae
   checkpoint_dir: runs
   val_check_interval: 1000

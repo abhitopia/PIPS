@@ -3,9 +3,7 @@
 - [x] Added option to specify batch size for kmeans codebook initialisation
 - [x] Rope Resampling for Latent Transformer
 - [x] Add ability to monitor codebook along with reconstruction
-- [ ] Implement positional encoding sans RoPE
-- [ ] Remove attn entropy from the code
-- [ ] Add ability to choose random sample for visualisation
+- [x] Implement Absolute Positional Encoding
 
 
 # 31st March 2025 (Serious Training)
