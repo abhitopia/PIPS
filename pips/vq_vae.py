@@ -1568,12 +1568,49 @@ class VQVAE(nn.Module):
             max_no_improvement=50
         )
         
+        latent_vectors_np = latent_vectors.numpy()  # [total_vectors, n_dim]
+
         # Make sure the tensor is in float32 before converting to numpy
-        kmeans.fit(latent_vectors.numpy())
+        kmeans.fit(latent_vectors_np)
         
         # Initialize codebook with cluster centroids
         centroids = torch.from_numpy(kmeans.cluster_centers_).float()
         self.codebook.vq_embs.weight.data.copy_(centroids)
+        # ----- New: Recompute EMA statistics based on k-means assignments -----
+        # Obtain labels (assignments) for each latent vector.
+        labels = torch.from_numpy(kmeans.labels_).long().to(device)  # Shape: [total_vectors]
+        # Move latent_vectors to device.
+        latent_vectors = latent_vectors.to(device)
+        K = centroids.shape[0]  # Should equal self.config.codebook_size.
+        D = centroids.shape[1]
+        
+        # Compute counts (cluster sizes) for each centroid.
+        counts = torch.zeros(K, dtype=torch.float32, device=device)
+        ones = torch.ones_like(labels, dtype=torch.float32, device=device)
+        counts = counts.index_add(0, labels, ones)  # For each label i, add 1.
+        
+        # Compute sums of latent vectors for each centroid.
+        sums = torch.zeros(K, D, dtype=torch.float32, device=device)
+        sums = sums.index_add(0, labels, latent_vectors)
+
+
+        # For any centroid with no assigned vectors, set count to 1 and sum to the centroid.
+        zero_mask = counts == 0
+        if zero_mask.any():
+            counts[zero_mask] = 1.0
+            sums[zero_mask] = centroids[zero_mask]
+        
+        # Update EMA buffers accordingly.
+        self.codebook.cluster_size.copy_(counts)
+
+        # Print mean, median, min and max of cluster sizes 
+        print(f"Cluster sizes: mean={self.codebook.cluster_size.mean().item()}, median={self.codebook.cluster_size.median().item()}, min={self.codebook.cluster_size.min().item()}, max={self.codebook.cluster_size.max().item()}")
+        self.codebook.embed_sum.copy_(sums)
+        self.codebook.ema_initialized.copy_(torch.tensor(True, dtype=torch.bool, device=device))
+    
+        # Optionally, reset update_magnitudes.
+        self.codebook.update_magnitudes.copy_(torch.zeros_like(self.codebook.update_magnitudes))
+        # ----- End EMA statistics update -----
         
         # Return to training mode
         self.train()
