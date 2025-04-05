@@ -816,7 +816,10 @@ class VQEmbedding(nn.Module):
             N = Number of tokens (discrete codes),
             C = Embedding dimension (should equal D).
     """
-    def __init__(self, K: int, D: int, decay: float = 0.99, unused_reset_threshold: float = 1.0, distance_reset: bool = False):
+    def __init__(self, K: int, D: int, decay: float = 0.99,
+                unused_reset_threshold: float = 1.0, 
+                hot_reset_threshold: float = 500,
+                distance_reset: bool = False):
         """
         Initialize the VQEmbedding module.
         
@@ -825,6 +828,7 @@ class VQEmbedding(nn.Module):
             D (int): Dimensionality of each embedding.
             decay (float): EMA decay rate (default: 0.99)
             unused_reset_threshold (float): Threshold below which a code is considered unused.
+            hot_reset_threshold (float): Threshold above which a code is considered hot.
             distance_reset (bool): Whether to use distance-based codebook resets.
         """
         super(VQEmbedding, self).__init__()
@@ -832,6 +836,7 @@ class VQEmbedding(nn.Module):
         self.vq_embs = nn.Embedding(K, D)
         self.decay = decay
         self.unused_reset_threshold = unused_reset_threshold
+        self.hot_reset_threshold = hot_reset_threshold
         self.distance_reset = distance_reset
         # Initialize with normal distribution
         self.vq_embs.weight.data.normal_(0, 1.0)
@@ -881,7 +886,8 @@ class VQEmbedding(nn.Module):
             Tensor: Updated normalized_embeddings with unused entries replaced.
         """
         # Identify codebook entries with low usage.
-        unused_mask = self.cluster_size < self.unused_reset_threshold  # Shape: [K]
+        reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)  # Shape: [K]
+
         
         # Flatten encoder outputs to shape [B*N, D].
         flat_z_e = z_e_x.reshape(-1, D)
@@ -892,18 +898,18 @@ class VQEmbedding(nn.Module):
         
         # Replace normalized embeddings for unused entries using torch.where.
         normalized_embeddings = torch.where(
-            unused_mask.unsqueeze(1),  # [K, 1]
+            reset_mask.unsqueeze(1),  # [K, 1]
             random_codes,
             normalized_embeddings
         )
         # Also update the EMA buffers for these entries.
         new_cluster_size = torch.where(
-            unused_mask,
+            reset_mask,
             torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
             self.cluster_size
         )
         new_embed_sum = torch.where(
-            unused_mask.unsqueeze(1),
+            reset_mask.unsqueeze(1),
             random_codes,
             self.embed_sum
         )
@@ -942,14 +948,14 @@ class VQEmbedding(nn.Module):
             sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
         
             # Compute a fixed-size unused mask (K is fixed).
-            unused_mask = self.cluster_size < self.unused_reset_threshold  # [K] boolean
+            reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
         
             # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
             # Since K is fixed, this produces a fixed-shape tensor.
-            unused_int = unused_mask.to(torch.int64)           # [K]
+            unused_int = reset_mask.to(torch.int64)           # [K]
             ranks = torch.cumsum(unused_int, dim=0) - 1           # [K]
             # For used entries, force the rank to 0 (these values won't be used).
-            ranks = torch.where(unused_mask, ranks, torch.zeros_like(ranks))
+            ranks = torch.where(reset_mask, ranks, torch.zeros_like(ranks))
         
             # For each codebook entry i, candidate_codes[i] is taken from:
             # flat_z_e[ sorted_indices[ranks[i]] ]
@@ -957,19 +963,19 @@ class VQEmbedding(nn.Module):
         
             # Update only unused entries in normalized_embeddings.
             updated_normalized_embeddings = torch.where(
-                unused_mask.unsqueeze(1),  # shape [K, 1]
+                reset_mask.unsqueeze(1),  # shape [K, 1]
                 candidate_codes,
                 normalized_embeddings_fp32
             )
         
             # Update EMA buffers for the unused entries in a vectorized way.
             updated_cluster_size = torch.where(
-                unused_mask,
+                reset_mask,
                 torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
                 self.cluster_size
             )
             updated_embed_sum = torch.where(
-                unused_mask.unsqueeze(1),
+                reset_mask.unsqueeze(1),
                 candidate_codes,
                 self.embed_sum
             )
@@ -1138,6 +1144,7 @@ class VQVAEConfig(Config):
     use_ema: bool = False
     ema_decay: float = 0.99
     unused_reset_threshold: float = 1.0
+    hot_reset_threshold: float = 500
     distance_reset: bool = False
     use_rope: bool = True
     use_ape: bool = False
@@ -1201,6 +1208,7 @@ class VQVAEConfig(Config):
             'use_ema': self.use_ema,
             'ema_decay': self.ema_decay,
             'unused_reset_threshold': self.unused_reset_threshold,
+            'hot_reset_threshold': self.hot_reset_threshold,
             'distance_reset': self.distance_reset,
             'use_rope': self.use_rope,
             'use_ape': self.use_ape,
@@ -1313,6 +1321,7 @@ class VQVAE(nn.Module):
                                     config.n_dim, 
                                     decay=config.ema_decay, 
                                     unused_reset_threshold=config.unused_reset_threshold,
+                                    hot_reset_threshold=config.hot_reset_threshold,
                                     distance_reset=config.distance_reset)    
 
         self.latent_decoder = LatentTransformer(

@@ -1,3 +1,6 @@
+# 4th April
+- [x] Add hot reset threshold to the codebook
+
 # 2nd April 2025
 - [x] Add mixed precision training
 - [x] Added option to specify batch size for kmeans codebook initialisation
