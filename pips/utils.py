@@ -1,6 +1,9 @@
 import hashlib
 import random
 
+def is_power_of_two(n):
+    return n > 0 and (n & (n - 1)) == 0
+
 def hash_string(my_string: str, len: int=8) -> str:
     # Add length validation
     if len <= 0:
