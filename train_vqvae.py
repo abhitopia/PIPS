@@ -355,22 +355,6 @@ class LoggingCallback(pl.Callback):
             "CodebookUsage/codebook_entropy": entropy_percent.item(),
             "CodebookUsage/codebook_perplexity": perplexity.item(),
         }
-        
-        # # Add per-position metrics with appropriate prefixes
-        # for pos in range(n_codes):
-        #     pos_indices = indices[:, pos]  # [B]
-            
-        #     # Position usage
-        #     pos_unique = torch.unique(pos_indices).size(0)
-        #     pos_usage_percent = pos_unique / codebook_size
-        #     results[f"Codebook/pos_{pos}_usage"] = pos_usage_percent
-            
-        #     # Position entropy
-        #     pos_unique, pos_counts = torch.unique(pos_indices, return_counts=True)
-        #     pos_normalized = pos_counts.float() / pos_counts.sum()
-        #     pos_entropy = -torch.sum(pos_normalized * torch.log2(pos_normalized + 1e-10))
-        #     pos_entropy_percent = pos_entropy / max_entropy
-        #     results[f"Codebook/pos_{pos}_entropy"] = pos_entropy_percent.item()
             
         return results
     
@@ -951,29 +935,90 @@ class VQVAETrainingModule(pl.LightningModule):
             print("Codebook initialization complete!")
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        """Handle loading checkpoints with different state dict keys."""
+        """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
         if "state_dict" in checkpoint:
+            original_state_dict = checkpoint["state_dict"].copy()
             state_dict = checkpoint["state_dict"]
-            # If we're using compile and the checkpoint wasn't compiled
-            if self.compile_model and not any("_orig_mod" in key for key in state_dict.keys()):
-                new_state_dict = {}
-                for key, value in state_dict.items():
-                    if key.startswith("model."):
-                        new_key = key.replace("model.", "model._orig_mod.")
-                        new_state_dict[new_key] = value
-                    else:
-                        new_state_dict[key] = value
-                checkpoint["state_dict"] = new_state_dict
-            # If we're not using compile but the checkpoint was compiled
-            elif not self.compile_model and any("_orig_mod" in key for key in state_dict.keys()):
-                new_state_dict = {}
-                for key, value in state_dict.items():
-                    if "_orig_mod" in key:
-                        new_key = key.replace("model._orig_mod.", "model.")
-                        new_state_dict[new_key] = value
-                    else:
-                        new_state_dict[key] = value
-                checkpoint["state_dict"] = new_state_dict
+            
+            # 1. Determine if the checkpoint model is compiled 
+            is_checkpoint_compiled = any("_orig_mod" in key for key in state_dict.keys())
+            
+            # 2. Determine if our current model is compiled by checking its state dict structure
+            # First make sure the model is configured
+            if self.model is None:
+                self.configure_model()
+            
+            # Get our model's state dict to check if it's compiled and for key structure
+            current_state_dict = self.state_dict()
+            is_current_model_compiled = any("_orig_mod" in key for key in current_state_dict.keys())
+            
+            # 3. Check for codebook size mismatch directly
+            codebook_mismatch = False
+            codebook_size_checkpoint = None
+            codebook_size_current = None
+            
+            for key, value in state_dict.items():
+                if "codebook.embedding.weight" in key or "codebook.vq_embs.weight" in key:
+                    codebook_size_checkpoint = value.size(0)
+                    codebook_size_current = self.model_config.codebook_size
+                    
+                    if codebook_size_current != codebook_size_checkpoint:
+                        codebook_mismatch = True
+                        print(f"WARNING: Codebook size mismatch! Current: {codebook_size_current}, Checkpoint: {codebook_size_checkpoint}")
+                        print(f"Loading with strict=False to skip codebook parameters")
+                    break
+            
+            # 4. Critical fix - ensure checkpoint state dict perfectly matches current model structure
+            # but without codebook parameters when there's a mismatch
+            new_state_dict = {}
+            
+            # Get the keys that should be in the final state dict from the current model
+            for target_key in current_state_dict.keys():
+                # Skip any codebook parameters if there's a mismatch
+                if codebook_mismatch and "codebook" in target_key:
+                    continue
+                
+                # Find the corresponding key in the checkpoint state dict
+                source_key = None
+                if is_current_model_compiled and not is_checkpoint_compiled:
+                    # Current is compiled, checkpoint isn't
+                    possible_source_key = target_key.replace("model._orig_mod.", "model.")
+                    if possible_source_key in state_dict:
+                        source_key = possible_source_key
+                elif not is_current_model_compiled and is_checkpoint_compiled:
+                    # Current isn't compiled, checkpoint is
+                    possible_source_key = target_key.replace("model.", "model._orig_mod.")
+                    if possible_source_key in state_dict:
+                        source_key = possible_source_key
+                else:
+                    # Both are the same (compiled or not)
+                    if target_key in state_dict:
+                        source_key = target_key
+                
+                # If we found a matching source key, copy the value with data type conversion if needed
+                if source_key is not None:
+                    value = state_dict[source_key]
+                    
+                    # Handle data type conversion if needed
+                    if hasattr(value, 'dtype') and value.dtype != torch.float32 and value.dtype != torch.int64:
+                        try:
+                            value = value.to(torch.float32)
+                        except Exception as e:
+                            print(f"WARNING: Failed to convert {source_key} from {value.dtype} to float32: {e}")
+                    
+                    new_state_dict[target_key] = value
+            
+            # 5. Replace the checkpoint's state dict with our precision-crafted version
+            checkpoint["state_dict"] = new_state_dict
+            
+            # 6. Log the final stats
+            if codebook_mismatch:
+                print(f"Successfully loaded non-codebook weights")
+                # Initialize codebook with k-means if enabled to get a good starting point
+                if self.experiment_config.kmeans_init_codebook:
+                    print("Will initialize codebook using k-means when training starts")
+        else:
+            print(f"Loaded all model weights")
 
     def get_scheduled_values(self, step: int, device: torch.device = torch.device("cpu")) -> Dict[str, torch.Tensor]:
         """Returns all scheduled values for the current step as tensors on the specified device.
@@ -1357,11 +1402,59 @@ def load_model_weights(
             checkpoint_dir=Path(checkpoint_dir)
         )
         
-        # Load just the model weights
+        # Load checkpoint
+        print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         model.configure_model()  # Need to load the model first
-        model.load_state_dict(checkpoint['state_dict'], strict=True)
-        print(f"Loaded model weights from {checkpoint_path}")
+        
+        # Check for codebook size mismatch
+        codebook_mismatch = False
+        codebook_params = set()
+        
+        # Detect all codebook-related parameters
+        for key, value in list(checkpoint['state_dict'].items()):
+            if any(pattern in key for pattern in [
+                "codebook.embedding", 
+                "codebook.vq_embs", 
+                "codebook.cluster_size", 
+                "codebook.embed_sum",
+                "codebook.previous_codebook",
+                "codebook.update_magnitudes"
+            ]):
+                if "weight" in key:  # Check just one parameter to determine size mismatch
+                    codebook_size_checkpoint = value.size(0)
+                    codebook_size_current = model.model_config.codebook_size
+                    
+                    if codebook_size_current != codebook_size_checkpoint:
+                        codebook_mismatch = True
+                        print(f"WARNING: Codebook size mismatch! Current: {codebook_size_current}, Checkpoint: {codebook_size_checkpoint}")
+                
+                # Collect all codebook parameters
+                codebook_params.add(key)
+        
+        # Remove codebook parameters if there's a mismatch
+        if codebook_mismatch:
+            print("Removing the following codebook parameters before loading:")
+            for param in sorted(codebook_params):
+                print(f"  - {param}")
+                del checkpoint['state_dict'][param]
+            
+            print(f"Loading remaining parameters with strict=False")
+            missing_keys, unexpected_keys = model.load_state_dict(checkpoint['state_dict'], strict=False)
+            
+            print(f"Successfully loaded non-codebook weights from {checkpoint_path}")
+            if missing_keys:
+                print(f"Missing keys: {missing_keys}")
+            if unexpected_keys:
+                print(f"Unexpected keys: {unexpected_keys}")
+            
+            # Initialize codebook with k-means if enabled
+            if model.experiment_config.kmeans_init_codebook:
+                print("Will initialize codebook using k-means when training starts")
+        else:
+            print(f"Loading all parameters with strict=True")
+            model.load_state_dict(checkpoint['state_dict'], strict=True)
+            print(f"Successfully loaded all model weights from {checkpoint_path}")
         
     except ValueError as e:
         print(f"Error loading model weights: {e}")
