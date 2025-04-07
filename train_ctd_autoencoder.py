@@ -1375,55 +1375,18 @@ def load_model_weights(
         print(f"Loading checkpoint from {checkpoint_path}")
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
         model.configure_model()  # Need to load the model first
-        
-        # Check for codebook size mismatch
-        codebook_mismatch = False
-        codebook_params = set()
-        
-        # Detect all codebook-related parameters
-        for key, value in list(checkpoint['state_dict'].items()):
-            if any(pattern in key for pattern in [
-                "codebook.embedding", 
-                "codebook.vq_embs", 
-                "codebook.cluster_size", 
-                "codebook.embed_sum",
-                "codebook.previous_codebook",
-                "codebook.update_magnitudes"
-            ]):
-                if "weight" in key:  # Check just one parameter to determine size mismatch
-                    codebook_size_checkpoint = value.size(0)
-                    codebook_size_current = model.model_config.codebook_size
-                    
-                    if codebook_size_current != codebook_size_checkpoint:
-                        codebook_mismatch = True
-                        print(f"WARNING: Codebook size mismatch! Current: {codebook_size_current}, Checkpoint: {codebook_size_checkpoint}")
-                
-                # Collect all codebook parameters
-                codebook_params.add(key)
-        
-        # Remove codebook parameters if there's a mismatch
-        if codebook_mismatch:
-            print("Removing the following codebook parameters before loading:")
-            for param in sorted(codebook_params):
-                print(f"  - {param}")
-                del checkpoint['state_dict'][param]
-            
-            print(f"Loading remaining parameters with strict=False")
-            missing_keys, unexpected_keys = model.load_state_dict(checkpoint['state_dict'], strict=False)
-            
-            print(f"Successfully loaded non-codebook weights from {checkpoint_path}")
-            if missing_keys:
-                print(f"Missing keys: {missing_keys}")
-            if unexpected_keys:
-                print(f"Unexpected keys: {unexpected_keys}")
-            
-            # Initialize codebook with k-means if enabled
-            if model.experiment_config.kmeans_init_codebook:
-                print("Will initialize codebook using k-means when training starts")
-        else:
-            print(f"Loading all parameters with strict=True")
-            model.load_state_dict(checkpoint['state_dict'], strict=True)
-            print(f"Successfully loaded all model weights from {checkpoint_path}")
+
+        model_sd = model.state_dict()
+        ckpt_sd = checkpoint['state_dict']
+
+        for k in model_sd:
+            if k not in ckpt_sd:
+                print(f"Skipping missing key {k}")
+                ckpt_sd[k] = model_sd[k]
+
+        print(f"Loading all parameters with strict=True")
+        model.load_state_dict(checkpoint['state_dict'], strict=True)
+        print(f"Successfully loaded all model weights from {checkpoint_path}")
         
     except ValueError as e:
         print(f"Error loading model weights: {e}")
