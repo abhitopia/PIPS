@@ -312,7 +312,7 @@ class GridDataset(Dataset):
     
 
     @staticmethod
-    def collate_fn_project(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_height=32, max_width=32) -> GRID_INPUT:
+    def collate_fn_project(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_height=32, max_width=32, flatten=True) -> GRID_INPUT:
         """Collate function to process a batch of Grids.
 
         Args:
@@ -337,7 +337,7 @@ class GridDataset(Dataset):
 
             # Flatten each grid with optional EOS markers and padding
             projected_array = grid.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
-            flattened_grids.append(projected_array.flatten())
+            flattened_grids.append(projected_array.flatten() if flatten else projected_array)
 
             # Collect attributes and convert numpy types to native Python types
             attributes.append({

@@ -1,72 +1,120 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 import math
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 from torch.amp import autocast
 
+def is_power_of_two(n):
+    return n > 0 and (n & (n - 1)) == 0
 
-class ConvBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ConvBlock, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1)
-        self.relu = nn.ReLU()
+
+class ResidualConvBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, num_convs=2, stride=2):
+        super(ResidualConvBlock, self).__init__()
+        layers = []
+        # First conv uses the provided stride (which may be 1 or 2)
+        layers.append(nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=stride, padding=1))
+        layers.append(nn.BatchNorm2d(out_channels))
+        layers.append(nn.ReLU(inplace=True))
+        # Additional convs use stride=1
+        for _ in range(num_convs - 1):
+            layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1))
+            layers.append(nn.BatchNorm2d(out_channels))
+            layers.append(nn.ReLU(inplace=True))
+        self.block = nn.Sequential(*layers)
+        # Adjust shortcut if spatial or channel dimensions change
+        if in_channels != out_channels or stride != 1:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=stride),
+                nn.BatchNorm2d(out_channels)
+            )
+        else:
+            self.shortcut = nn.Identity()
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.relu(x)
-        return x
+        residual = self.shortcut(x)
+        out = self.block(x)
+        return out + residual
 
-class ConvTransposeBlock(nn.Module):
-    def __init__(self, in_channels, out_channels):
-        super(ConvTransposeBlock, self).__init__()
-        self.conv1 = nn.ConvTranspose2d(in_channels, out_channels, kernel_size=3, stride=2, padding=1, output_padding=1)
-        self.relu = nn.ReLU()
+
+class ResidualConvTransposeBlock(nn.Module):
+    def __init__(self, in_channels, out_channels, num_convs=2, stride=2):
+        super(ResidualConvTransposeBlock, self).__init__()
+        layers = []
+        # First deconv uses the provided stride for upsampling.
+        layers.append(nn.ConvTranspose2d(
+            in_channels, out_channels, kernel_size=3, stride=stride,
+            padding=1, output_padding=1 if stride == 2 else 0))
+        layers.append(nn.BatchNorm2d(out_channels))
+        layers.append(nn.ReLU(inplace=True))
+        # Additional convs with stride=1
+        for _ in range(num_convs - 1):
+            layers.append(nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1))
+            layers.append(nn.BatchNorm2d(out_channels))
+            layers.append(nn.ReLU(inplace=True))
+        self.block = nn.Sequential(*layers)
+        # Shortcut: upsample using a 1x1 transposed conv.
+        self.shortcut = nn.Sequential(
+            nn.ConvTranspose2d(
+                in_channels, out_channels, kernel_size=1, stride=stride,
+                padding=0, output_padding=1 if stride == 2 else 0),
+            nn.BatchNorm2d(out_channels)
+        )
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.relu(x)
-        return x
+        residual = self.shortcut(x)
+        out = self.block(x)
+        return out + residual
 
 
 class ConvAutoEncoder(nn.Module):
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, in_channels, channels, input_resolution=32, final_resolution=4, num_blocks=4, num_convs=2):
         super(ConvAutoEncoder, self).__init__()
+        # Compute required downsampling factor
+        required_downsampling = int(math.log2(input_resolution / final_resolution))
+        if 2 ** required_downsampling != input_resolution / final_resolution:
+            raise ValueError("input_resolution / final_resolution must be a power of 2")
+        if num_blocks < required_downsampling:
+            raise ValueError("num_blocks must be at least log2(input_resolution/final_resolution)")
 
-        # Ensure that out_channels / in_channels is a power of 2
-        assert out_channels % in_channels == 0
-        assert out_channels / in_channels == 2**int(math.log2(out_channels / in_channels))
+        # Build strides list: use stride=2 for exactly 'required_downsampling' blocks, and stride=1 for the others.
+        strides = [1] * num_blocks
+        for i in range(num_blocks - required_downsampling, num_blocks):
+            strides[i] = 2
 
-        # Calculate the number of ConvBlocks needed
-        num_blocks = int(math.log2(out_channels / in_channels))
+        # If the input channels differ from our constant internal channels, add an initial conv to fix that.
+        self.initial_conv = nn.Conv2d(in_channels, channels, kernel_size=1) if in_channels != channels else nn.Identity()
 
         self.encoder = nn.Sequential()
         self.decoder = nn.Sequential()
 
+        # Build encoder blocks.
         for i in range(num_blocks):
-            in_ch_encoder = in_channels * 2**i
-            out_ch_encoder = in_channels * 2**(i+1)
+            self.encoder.add_module(
+                f"enc_block_{i}",
+                ResidualConvBlock(channels, channels, num_convs=num_convs, stride=strides[i])
+            )
 
-            in_ch_decoder = out_channels // 2**i
-            out_ch_decoder = out_channels // 2**(i+1)
-
-            self.encoder.append(ConvBlock(in_ch_encoder, out_ch_encoder))
-            self.decoder.append(ConvTransposeBlock(in_ch_decoder, out_ch_decoder))
-
+        # Build decoder blocks by reversing the strides order.
+        decoder_strides = strides[::-1]
+        for i in range(num_blocks):
+            self.decoder.add_module(
+                f"dec_block_{i}",
+                ResidualConvTransposeBlock(channels, channels, num_convs=num_convs, stride=decoder_strides[i])
+            )
 
     def encode(self, x):
-        x = self.encoder(x)
-        return x
+        x = self.initial_conv(x)
+        return self.encoder(x)
 
     def decode(self, x):
-        x = self.decoder(x)
-        return x
+        return self.decoder(x)
     
     def forward(self, x):
-        x = self.encode(x)
-        x = self.decode(x)
-        return x
+        return self.decode(self.encode(x))
 
 
 class TransformerAutoEncoder(nn.Module):
@@ -108,7 +156,6 @@ class TransformerAutoEncoder(nn.Module):
         x = self.decode(x)
         return x
     
-
 # Reference: https://github.com/Vrushank264/VQVAE-PyTorch/tree/main
 class VectorQuantization(Function):
     """
@@ -533,10 +580,12 @@ class VQEmbedding(nn.Module):
 @dataclass
 class CTDAutoEncoderConfig:
     n_vocab: int = 16
-    n_emb: int = 16
-    n_dim: int = 128
+    n_dim: int = 256
     n_layers: int = 3
     n_heads: int = 4
+    n_codes: int = 64
+    conv_block_size: int = 2
+    n_conv_blocks: int = 2
     codebook_size: int = 1024
     grid_height: int = 32
     grid_width: int = 32
@@ -551,14 +600,14 @@ class CTDAutoEncoderConfig:
 
     def __post_init__(self):
         # Ensure that out_channels / in_channels is a power of 2
-        assert self.n_dim % self.n_emb == 0
-        assert self.n_dim / self.n_emb == 2**int(math.log2(self.n_dim / self.n_emb))
+        # assert self.n_dim % self.n_emb == 0
+        # assert self.n_dim / self.n_emb == 2**int(math.log2(self.n_dim / self.n_emb))
 
-        # Calculate the number of ConvBlocks needed
-        num_blocks = int(math.log2(self.n_dim / self.n_emb))
-        self.latent_height = self.grid_height // 2**num_blocks
-        self.latent_width = self.grid_width // 2**num_blocks
-        self.n_latent = self.latent_height * self.latent_width
+        assert is_power_of_two(self.n_codes), "n_codes must be a power of 2"
+
+        self.latent_height = int(math.sqrt(self.n_codes))
+        self.latent_width = int(math.sqrt(self.n_codes))
+        self.latent_resolution = self.latent_height
 
         if self.codebook_size > 0:
             assert self.n_layers > 0, "Transformer encoder is required for Quantization "
@@ -566,23 +615,34 @@ class CTDAutoEncoderConfig:
         self.pad_idx = self.n_vocab - 1
         self.mask_idx = self.n_vocab - 2
 
+    def to_dict(self):
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, config_dict: dict):
+        return cls(**config_dict)
+
 
 class CTDAutoEncoder(nn.Module):
     def __init__(self, config: CTDAutoEncoderConfig):
         super(CTDAutoEncoder, self).__init__()
-        self.embd = nn.Embedding(config.n_vocab, config.n_emb)
+        self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.latent_height = config.latent_height
         self.latent_width = config.latent_width
-        self.n_latent = config.n_latent
+        self.n_latent = config.n_codes
         self.codebook_size = config.codebook_size
         self.pad_idx = config.pad_idx
         self.mask_idx = config.mask_idx
         self.pad_weight = config.pad_weight
         self.gamma = config.gamma
-        self.conv_autoencoder = ConvAutoEncoder(config.n_emb, config.n_dim)
-        self.trans_autoencoder = TransformerAutoEncoder(n_dim=config.n_dim, n_layers=config.n_layers, n_heads=config.n_heads, seq_len=config.n_latent, encode_norm=config.encode_norm)
-        self.quantizer = VQEmbedding(codebook_size=config.codebook_size, n_dim=config.n_dim) if self.codebook_size > 0 else nn.Identity()
-        self.out_proj = nn.Linear(config.n_emb, config.n_vocab, bias=False)
+        self.conv_autoencoder = ConvAutoEncoder(in_channels=config.n_dim, channels=config.n_dim, 
+                                                input_resolution=32, 
+                                                final_resolution=self.latent_height,
+                                                num_blocks=config.n_conv_blocks,
+                                                num_convs=config.conv_block_size)
+        self.trans_autoencoder = TransformerAutoEncoder(n_dim=config.n_dim, n_layers=config.n_layers, n_heads=config.n_heads, seq_len=config.n_codes, encode_norm=config.encode_norm)
+        self.codebook = VQEmbedding(codebook_size=config.codebook_size, n_dim=config.n_dim) if self.codebook_size > 0 else nn.Identity()
+        self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
 
     def conv_encode(self, x):
         x = self.embd(x) # [batch, n_emb, grid_height, grid_width]
@@ -623,12 +683,12 @@ class CTDAutoEncoder(nn.Module):
 
         meta_dict = {}
         if self.codebook_size > 0:
-            x_trans, meta_dict = self.quantizer(x_trans) # [batch, n_latent, n_dim]
+            x_trans, meta_dict = self.codebook(x_trans) # [batch, n_latent, n_dim]
 
         x_trans = self.trans_decode(x_trans) # [batch, n_latent, n_dim]
         logits = self.conv_decode(x_trans) # [batch, grid_height, grid_width, n_vocab]
         meta_dict['ce_loss'] = self.reconstruction_loss(logits, x, pad_value=self.pad_idx, pad_weight=self.pad_weight, gamma=self.gamma)
-        return x, meta_dict
+        return logits, meta_dict
     
     def reconstruction_loss(self, decoded_logits: torch.Tensor, x: torch.Tensor, pad_value: int = -1, pad_weight: float = 1.0, gamma: float = 0.0) -> torch.Tensor:
         """
@@ -655,7 +715,6 @@ class CTDAutoEncoder(nn.Module):
             torch.ones_like(x, dtype=decoded_logits.dtype)
         )
 
-        print("Weights shape: ", weights.shape)
         
         # Compute the standard cross-entropy loss per token without reduction.
         ce_loss = F.cross_entropy(
@@ -684,9 +743,10 @@ class CTDAutoEncoder(nn.Module):
 
 
 if __name__ == "__main__":
-    config = CTDAutoEncoderConfig(n_layers=3, encode_norm=True, codebook_size=0)
+    config = CTDAutoEncoderConfig(codebook_size=0, n_layers=0)
     autoencoder = CTDAutoEncoder(config)
     print(autoencoder)
+
 
     n_emb = config.n_emb
     n_dim = config.n_dim
