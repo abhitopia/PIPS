@@ -640,8 +640,18 @@ class CTDAutoEncoder(nn.Module):
                                                 final_resolution=self.latent_height,
                                                 num_blocks=config.n_conv_blocks,
                                                 num_convs=config.conv_block_size)
-        self.trans_autoencoder = TransformerAutoEncoder(n_dim=config.n_dim, n_layers=config.n_layers, n_heads=config.n_heads, seq_len=config.n_codes, encode_norm=config.encode_norm)
-        self.codebook = VQEmbedding(codebook_size=config.codebook_size, n_dim=config.n_dim) if self.codebook_size > 0 else nn.Identity()
+        
+        self.trans_autoencoder = TransformerAutoEncoder(n_dim=config.n_dim, n_layers=config.n_layers, n_heads=config.n_heads, 
+                                                        seq_len=config.n_codes, encode_norm=config.encode_norm)
+        
+        self.codebook = VQEmbedding(codebook_size=config.codebook_size, 
+                                    n_dim=config.n_dim,
+                                    use_ema=config.use_ema,
+                                    decay=config.decay,
+                                    distance_reset=config.distance_reset,
+                                    unused_reset_threshold=config.unused_reset_threshold,
+                                    hot_reset_threshold=config.hot_reset_threshold) if self.codebook_size > 0 else nn.Identity()
+        
         self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
 
     def conv_encode(self, x):
