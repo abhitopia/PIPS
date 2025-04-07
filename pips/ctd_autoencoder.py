@@ -821,6 +821,8 @@ class CTDAutoEncoder(nn.Module):
         
         # Initialize codebook with cluster centroids
         centroids = torch.from_numpy(kmeans.cluster_centers_).float()
+        # Move centroids to the same device as other tensors
+        centroids = centroids.to(device)
         self.codebook.vq_embs.weight.data.copy_(centroids)
         # ----- New: Recompute EMA statistics based on k-means assignments -----
         # Obtain labels (assignments) for each latent vector.
