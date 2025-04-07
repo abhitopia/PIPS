@@ -1,11 +1,13 @@
 from dataclasses import asdict, dataclass, field
 import math
 import numpy as np
+from sklearn.cluster import MiniBatchKMeans
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Function
 from torch.amp import autocast
+from tqdm import tqdm
 
 def is_power_of_two(n):
     return n > 0 and (n & (n - 1)) == 0
@@ -623,6 +625,7 @@ class CTDAutoEncoderConfig:
 class CTDAutoEncoder(nn.Module):
     def __init__(self, config: CTDAutoEncoderConfig):
         super(CTDAutoEncoder, self).__init__()
+        self.config = config
         self.embd = nn.Embedding(config.n_vocab, config.n_dim)
         self.latent_height = config.latent_height
         self.latent_width = config.latent_width
@@ -672,18 +675,26 @@ class CTDAutoEncoder(nn.Module):
         mask = (torch.rand(x.shape, device=x.device, dtype=torch.float32) < mask_percentage) & (x != self.pad_idx)
         x.masked_fill_(mask, self.mask_idx)
         return x
-
-    def forward(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
+    
+    def encode(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
         x_masked = self.apply_mask(x, mask_percentage)
         x_conv = self.conv_encode(x_masked) # [batch, n_dim, latent_height, latent_width]
         x_trans = self.trans_encode(x_conv) # [batch, n_latent, n_dim]
+        return x_trans
+    
+    def decode(self, x):
+        x_trans = self.trans_decode(x) # [batch, n_latent, n_dim]
+        logits = self.conv_decode(x_trans) # [batch, n_dim, grid_height, grid_width]
+        return logits
+
+    def forward(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
+        x_trans = self.encode(x, mask_percentage) # [batch, n_latent, n_dim]
 
         meta_dict = {}
         if self.codebook_size > 0:
             x_trans, meta_dict = self.codebook(x_trans) # [batch, n_latent, n_dim]
 
-        x_trans = self.trans_decode(x_trans) # [batch, n_latent, n_dim]
-        logits = self.conv_decode(x_trans) # [batch, grid_height, grid_width, n_vocab]
+        logits = self.decode(x_trans) # [batch, n_dim, grid_height, grid_width]
         meta_dict['ce_loss'] = self.reconstruction_loss(logits, x, pad_value=self.pad_idx, pad_weight=self.pad_weight, gamma=self.gamma)
         return logits, meta_dict
     
@@ -737,6 +748,119 @@ class CTDAutoEncoder(nn.Module):
         
         normalized_loss = total_loss / total_weight
         return normalized_loss
+    
+    def initialize_codebook_with_kmeans(self, data_loader, device='cuda', max_datapoints=2_000_000, batch_size=100_000):
+        """
+        Initialize codebook using k-means clustering on encoder outputs from a pre-trained model.
+        
+        Args:
+            data_loader: DataLoader containing representative data samples
+            device: Device to run computation on
+            max_datapoints: Maximum number of data points to use for k-means clustering
+            batch_size: Batch size for k-means clustering
+        """
+ 
+        print(f"Collecting latent vectors for codebook initialization (max: {max_datapoints} points)...")
+        latent_vectors = []
+        total_vectors = 0
+        
+        # Set model to eval mode
+        self.eval()
+
+        batch_size = data_loader.batch_size
+        num_codes = self.config.n_codes
+
+        num_iters = max_datapoints // (batch_size * num_codes)
+        
+        with torch.no_grad():
+            # Wrap data_loader with progress bar
+            pbar = tqdm(data_loader, total=num_iters)
+            for batch in pbar:
+                x = batch[0].to(device)  # Adjust depending on your dataloader format                
+                # Ensure encoder outputs are in full precision for k-means
+                with autocast(device_type='cuda', enabled=False):
+                    z_e_x = self.encode(x)
+                    # Convert to float32 for scikit-learn compatibility
+                    batch_vectors = z_e_x.float().reshape(-1, self.config.n_dim).cpu()
+                
+                latent_vectors.append(batch_vectors)
+                total_vectors += batch_vectors.size(0)
+                
+                # Update progress bar description
+                pbar.set_description(f"Collected {total_vectors}/{max_datapoints} vectors")
+                
+                # Break if we've exceeded the maximum
+                if total_vectors >= max_datapoints:
+                    pbar.close()
+                    print(f"Reached maximum number of datapoints ({max_datapoints})")
+                    break
+        
+        # Concatenate all batches
+        latent_vectors = torch.cat(latent_vectors, dim=0)
+        
+        if total_vectors < max_datapoints:
+            print(f"Dataloader exhausted. Using all available {total_vectors} latent vectors for clustering")
+        else:
+            print(f"Using {total_vectors} latent vectors for k-means clustering")
+        
+        # Perform k-means clustering with progress bar
+        print(f"Running k-means clustering with {self.config.codebook_size} centroids...")
+        kmeans = MiniBatchKMeans(
+            n_clusters=self.config.codebook_size,
+            random_state=0,
+            verbose=1,
+            max_iter=300,
+            batch_size=batch_size,  # Process in smaller batches
+            max_no_improvement=50
+        )
+        
+        latent_vectors_np = latent_vectors.numpy()  # [total_vectors, n_dim]
+
+        # Make sure the tensor is in float32 before converting to numpy
+        kmeans.fit(latent_vectors_np)
+        
+        # Initialize codebook with cluster centroids
+        centroids = torch.from_numpy(kmeans.cluster_centers_).float()
+        self.codebook.vq_embs.weight.data.copy_(centroids)
+        # ----- New: Recompute EMA statistics based on k-means assignments -----
+        # Obtain labels (assignments) for each latent vector.
+        labels = torch.from_numpy(kmeans.labels_).long().to(device)  # Shape: [total_vectors]
+        # Move latent_vectors to device.
+        latent_vectors = latent_vectors.to(device)
+        K = centroids.shape[0]  # Should equal self.config.codebook_size.
+        D = centroids.shape[1]
+        
+        # Compute counts (cluster sizes) for each centroid.
+        counts = torch.zeros(K, dtype=torch.float32, device=device)
+        ones = torch.ones_like(labels, dtype=torch.float32, device=device)
+        counts = counts.index_add(0, labels, ones)  # For each label i, add 1.
+        
+        # Compute sums of latent vectors for each centroid.
+        sums = torch.zeros(K, D, dtype=torch.float32, device=device)
+        sums = sums.index_add(0, labels, latent_vectors)
+
+
+        # For any centroid with no assigned vectors, set count to 1 and sum to the centroid.
+        zero_mask = counts == 0
+        if zero_mask.any():
+            counts[zero_mask] = 1.0
+            sums[zero_mask] = centroids[zero_mask]
+        
+        # Update EMA buffers accordingly.
+        self.codebook.cluster_size.copy_(counts)
+
+        # Print mean, median, min and max of cluster sizes 
+        print(f"Cluster sizes: mean={self.codebook.cluster_size.mean().item()}, median={self.codebook.cluster_size.median().item()}, min={self.codebook.cluster_size.min().item()}, max={self.codebook.cluster_size.max().item()}")
+        self.codebook.embed_sum.copy_(sums)
+        self.codebook.ema_initialized.copy_(torch.tensor(True, dtype=torch.bool, device=device))
+    
+        # Optionally, reset update_magnitudes.
+        self.codebook.update_magnitudes.copy_(torch.zeros_like(self.codebook.update_magnitudes))
+        # ----- End EMA statistics update -----
+        
+        # Return to training mode
+        self.train()
+        print("Codebook initialized with k-means centroids!")
 
 
 if __name__ == "__main__":
