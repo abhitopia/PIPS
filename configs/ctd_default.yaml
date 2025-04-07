@@ -7,11 +7,11 @@ experiment_config:
     n_heads: 4
     n_conv_blocks: 2
     conv_block_size: 2
-    codebook_size: 0
+    codebook_size: 1024
     grid_height: 32
     grid_width: 32
     encode_norm: true
-    use_ema: false
+    use_ema: true
     decay: 0.99
     distance_reset: true
     unused_reset_threshold: 1.0

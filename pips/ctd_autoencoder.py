@@ -609,9 +609,6 @@ class CTDAutoEncoderConfig:
         self.latent_width = int(math.sqrt(self.n_codes))
         self.latent_resolution = self.latent_height
 
-        if self.codebook_size > 0:
-            assert self.n_layers > 0, "Transformer encoder is required for Quantization "
-
         self.pad_idx = self.n_vocab - 1
         self.mask_idx = self.n_vocab - 2
 
