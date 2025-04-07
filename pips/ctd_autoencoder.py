@@ -73,8 +73,17 @@ class ResidualConvTransposeBlock(nn.Module):
 
 
 class ConvAutoEncoder(nn.Module):
-    def __init__(self, in_channels, channels, input_resolution=32, final_resolution=4, num_blocks=4, num_convs=2):
+    def __init__(self, in_channels, channels, input_resolution=32, final_resolution=4, num_blocks=4, num_convs=2, encode_norm=False, decode_norm=False):
         super(ConvAutoEncoder, self).__init__()
+        # If num_blocks is 0, this will be an identity function
+        if num_blocks == 0:
+            self.initial_conv = nn.Identity()
+            self.encoder = nn.Identity()
+            self.decoder = nn.Identity()
+            self.encode_norm = nn.Identity()
+            self.decode_norm = nn.Identity()
+            return
+            
         # Compute required downsampling factor
         required_downsampling = int(math.log2(input_resolution / final_resolution))
         if 2 ** required_downsampling != input_resolution / final_resolution:
@@ -107,27 +116,52 @@ class ConvAutoEncoder(nn.Module):
                 f"dec_block_{i}",
                 ResidualConvTransposeBlock(channels, channels, num_convs=num_convs, stride=decoder_strides[i])
             )
+            
+        # Add LayerNorm for the encoded and decoded outputs if requested
+        self.encode_norm = nn.LayerNorm(channels) if encode_norm else nn.Identity()
+        self.decode_norm = nn.LayerNorm(channels) if decode_norm else nn.Identity()
 
     def encode(self, x):
         x = self.initial_conv(x)
-        return self.encoder(x)
+        x = self.encoder(x)
+        
+        # Apply LayerNorm if requested (need to reshape for LayerNorm then reshape back)
+        if not isinstance(self.encode_norm, nn.Identity):
+            # Reshape from [B, C, H, W] to [B, H, W, C] for LayerNorm
+            x_norm = x.permute(0, 2, 3, 1)
+            x_norm = self.encode_norm(x_norm)
+            # Reshape back to [B, C, H, W]
+            x = x_norm.permute(0, 3, 1, 2)
+        
+        return x
 
     def decode(self, x):
-        return self.decoder(x)
+        x = self.decoder(x)
+        
+        # Apply LayerNorm if requested (need to reshape for LayerNorm then reshape back)
+        if not isinstance(self.decode_norm, nn.Identity):
+            # Reshape from [B, C, H, W] to [B, H, W, C] for LayerNorm
+            x_norm = x.permute(0, 2, 3, 1)
+            x_norm = self.decode_norm(x_norm)
+            # Reshape back to [B, C, H, W]
+            x = x_norm.permute(0, 3, 1, 2)
+            
+        return x
     
     def forward(self, x):
         return self.decode(self.encode(x))
 
 
 class TransformerAutoEncoder(nn.Module):
-    def __init__(self, n_dim, n_layers, n_heads, seq_len, encode_norm=True):
+    def __init__(self, n_dim, n_layers, n_heads, seq_len, encode_norm=True, decode_norm=False):
         super(TransformerAutoEncoder, self).__init__()
         self.n_dim = n_dim
         self.n_layers = n_layers
         self.n_heads = n_heads
         self.seq_len = seq_len
 
-        self.pos_embedding = nn.Parameter(torch.randn(1, self.seq_len, self.n_dim)) if self.n_layers > 0 else torch.zeros(1, self.seq_len, self.n_dim, requires_grad=False)
+        # Position embedding with scaled initialization
+        self.pos_embedding = nn.Parameter(torch.randn(1, self.seq_len, self.n_dim) * 0.02) if self.n_layers > 0 else torch.zeros(1, self.seq_len, self.n_dim, requires_grad=False)
 
         self.encoder = nn.TransformerEncoder(
             nn.TransformerEncoderLayer(d_model=self.n_dim, nhead=self.n_heads, dim_feedforward=4*self.n_dim, batch_first=True, bias=False, norm_first=True),
@@ -142,6 +176,7 @@ class TransformerAutoEncoder(nn.Module):
         ) if self.n_layers > 0 else nn.Identity()
 
         self.encode_norm = nn.LayerNorm(self.n_dim) if encode_norm else nn.Identity()
+        self.decode_norm = nn.LayerNorm(self.n_dim) if decode_norm else nn.Identity()
 
     def encode(self, x):
         x = x + self.pos_embedding
@@ -151,6 +186,7 @@ class TransformerAutoEncoder(nn.Module):
     
     def decode(self, x):
         x = self.decoder(x)
+        x = self.decode_norm(x)
         return x
     
     def forward(self, x):
@@ -592,6 +628,7 @@ class CTDAutoEncoderConfig:
     grid_height: int = 32
     grid_width: int = 32
     encode_norm: bool = True
+    decode_norm: bool = False
     use_ema: bool = True
     decay: float = 0.99
     distance_reset: bool = True
@@ -639,10 +676,14 @@ class CTDAutoEncoder(nn.Module):
                                                 input_resolution=32, 
                                                 final_resolution=self.latent_height,
                                                 num_blocks=config.n_conv_blocks,
-                                                num_convs=config.conv_block_size)
+                                                num_convs=config.conv_block_size,
+                                                encode_norm=config.encode_norm,
+                                                decode_norm=config.decode_norm)
         
         self.trans_autoencoder = TransformerAutoEncoder(n_dim=config.n_dim, n_layers=config.n_layers, n_heads=config.n_heads, 
-                                                        seq_len=config.n_codes, encode_norm=config.encode_norm)
+                                                        seq_len=config.n_codes, 
+                                                        encode_norm=config.encode_norm,
+                                                        decode_norm=config.decode_norm)
         
         self.codebook = VQEmbedding(codebook_size=config.codebook_size, 
                                     n_dim=config.n_dim,
@@ -655,7 +696,6 @@ class CTDAutoEncoder(nn.Module):
         self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
 
     def conv_encode(self, x):
-        x = self.embd(x) # [batch, grid_height, grid_width, n_emb]
         x = x.permute(0, 3, 1, 2) # [batch, n_emb, grid_height, grid_width] 
         x = self.conv_autoencoder.encode(x) # [batch, n_dim, latent_height, latent_width]
         return x
@@ -688,6 +728,7 @@ class CTDAutoEncoder(nn.Module):
     
     def encode(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
         x_masked = self.apply_mask(x, mask_percentage)
+        x_masked = self.embd(x_masked) # [batch, grid_height, grid_width, n_emb]
         x_conv = self.conv_encode(x_masked) # [batch, n_dim, latent_height, latent_width]
         x_trans = self.trans_encode(x_conv) # [batch, n_latent, n_dim]
         return x_trans
