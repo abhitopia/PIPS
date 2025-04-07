@@ -655,8 +655,8 @@ class CTDAutoEncoder(nn.Module):
         self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
 
     def conv_encode(self, x):
-        x = self.embd(x) # [batch, n_emb, grid_height, grid_width]
-        x = x.permute(0, 3, 1, 2) # [batch, grid_height, grid_width, n_emb]
+        x = self.embd(x) # [batch, grid_height, grid_width, n_emb]
+        x = x.permute(0, 3, 1, 2) # [batch, n_emb, grid_height, grid_width] 
         x = self.conv_autoencoder.encode(x) # [batch, n_dim, latent_height, latent_width]
         return x
     
