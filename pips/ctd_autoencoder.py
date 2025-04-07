@@ -608,9 +608,17 @@ class CTDAutoEncoder(nn.Module):
         x = x.permute(0, 2, 3, 1) # [batch, grid_height, grid_width, n_dim]
         x = self.out_proj(x) # [batch, grid_height, grid_width, n_vocab]
         return x
+    
+    def apply_mask(self, x: torch.Tensor, mask_percentage: torch.Tensor) -> torch.Tensor:
+        x = x.clone()
+        # Create a random tensor with values in the range [0,1) for each element in x.
+        mask = (torch.rand(x.shape, device=x.device, dtype=torch.float32) < mask_percentage) & (x != self.pad_idx)
+        x.masked_fill_(mask, self.mask_idx)
+        return x
 
-    def forward(self, x):
-        x_conv = self.conv_encode(x) # [batch, n_dim, latent_height, latent_width]
+    def forward(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
+        x_masked = self.apply_mask(x, mask_percentage)
+        x_conv = self.conv_encode(x_masked) # [batch, n_dim, latent_height, latent_width]
         x_trans = self.trans_encode(x_conv) # [batch, n_latent, n_dim]
 
         meta_dict = {}
@@ -689,6 +697,6 @@ if __name__ == "__main__":
     print(x.shape)
 
     # Forward pass
-    y, meta_dict = autoencoder(x)
+    y, meta_dict = autoencoder(x, mask_percentage=torch.tensor(0.5))
     print(y.shape)
     print(meta_dict)    
