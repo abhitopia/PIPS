@@ -438,8 +438,7 @@ class VQEmbedding(nn.Module):
     def reset_unused_codes_distance(self, z_e_x, normalized_embeddings, D, distances):
         """
         Reset unused codebook entries using quantization errors (distances) in a fully vectorized manner.
-        For each codebook entry (of fixed size K), if its EMA count is below the threshold, it is updated
-        with a candidate encoder output selected from those with the highest quantization error.
+        Uses only tensor operations for compatibility with PyTorch's compilation systems.
         
         Args:
             z_e_x (Tensor): Encoder outputs, shape [B, N, D].
@@ -450,7 +449,6 @@ class VQEmbedding(nn.Module):
         Returns:
             Tensor: Updated normalized_embeddings.
         """
-
         with autocast(device_type='cuda', enabled=False):
             z_e_x_fp32 = z_e_x.float()
             normalized_embeddings_fp32 = normalized_embeddings.float()
@@ -463,82 +461,65 @@ class VQEmbedding(nn.Module):
             flat_z_e = z_e_x_fp32.reshape(-1, D)      # [B*N, D]
             flat_dists = distances_fp32.reshape(-1)     # [B*N]
         
-            # # Check if we have any vectors to work with
-            # if flat_z_e.shape[0] == 0:
-            #     return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
-        
+            # Get candidates count with a minimum of 1 to avoid indexing errors
+            candidates_count = flat_z_e.shape[0]
+            
             # Sort encoder outputs by descending quantization error.
             sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
         
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
-        
-            # If no codes need resetting, return early
-            if not reset_mask.any():
-                return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
-        
-            # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
-            unused_int = reset_mask.to(torch.int64)           # [K]
-        
-            # Count total unused entries
-            num_unused = unused_int.sum().item()
-        
-            # Ensure we have enough candidates
-            max_candidates = min(sorted_indices.shape[0], num_unused)
-        
-            # If we need more ranks than available candidates, we'll cycle through
-            # the available candidates
-            if num_unused > 0:
-                # Create ranks that are within bounds of sorted_indices
-                ranks = torch.arange(num_unused, device=reset_mask.device) % max_candidates
             
-                # Expand ranks to match the size of the codebook
-                full_ranks = torch.zeros_like(unused_int)
+            # Convert mask to indices of True values
+            nonzero_indices = torch.nonzero(reset_mask, as_tuple=True)[0]
             
-                # Put the valid ranks only at positions where reset_mask is True
-                rank_idx = 0
-                for i in range(K):
-                    if reset_mask[i]:
-                        full_ranks[i] = ranks[rank_idx]
-                        rank_idx += 1
-                        if rank_idx >= num_unused:
-                            break
+            # Get number of unused codes
+            num_unused = nonzero_indices.shape[0]
             
-                # Get the indices of vectors to use as replacements
-                safe_indices = sorted_indices[:max_candidates]
+            # Create a safe tensor even if num_unused is 0
+            max_candidates = torch.min(
+                torch.tensor(candidates_count, device=reset_mask.device),
+                torch.tensor(max(1, num_unused), device=reset_mask.device)
+            )
             
-                # Get replacement candidates
-                candidate_codes = flat_z_e[safe_indices[full_ranks]]  # [K, D]
-            else:
-                # Fallback - shouldn't happen with the early return, but just to be safe
-                candidate_codes = torch.zeros_like(normalized_embeddings_fp32)
-        
-            # Update only unused entries in normalized_embeddings.
+            # Create candidate indices that are always safe
+            # Use modulo to cycle through candidates if we have more unused codes than candidates
+            indices_to_use = torch.arange(K, device=reset_mask.device) % max(1, max_candidates.item())
+            
+            # Select candidates from sorted indices, handling the case when sorted_indices is empty
+            safe_candidates = flat_z_e[sorted_indices[:max(1, max_candidates.item())]]
+            
+            # Create an output where reset positions get updated
+            candidate_codes = safe_candidates[indices_to_use]
+            
+            # Apply mask with torch.where - no conditionals
             updated_normalized_embeddings = torch.where(
-                reset_mask.unsqueeze(1),  # shape [K, 1]
+                reset_mask.unsqueeze(1).expand_as(normalized_embeddings_fp32),
                 candidate_codes,
                 normalized_embeddings_fp32
             )
-        
-            # Update EMA buffers for the unused entries in a vectorized way.
-            # Create the constant tensor just once with proper device
+            
+            # Create ones tensor with proper shape and device for updating cluster size
             ones = torch.ones(1, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
-        
+            
+            # Update cluster size - always safe, no conditionals
             updated_cluster_size = torch.where(
                 reset_mask,
-                ones,  # Use the pre-created tensor instead of creating a new one each time
+                ones.expand_as(self.cluster_size),
                 self.cluster_size
             )
-        
+            
+            # Update embed sum - always safe, no conditionals
             updated_embed_sum = torch.where(
-                reset_mask.unsqueeze(1),
+                reset_mask.unsqueeze(1).expand_as(self.embed_sum),
                 candidate_codes,
                 self.embed_sum
             )
-        
+            
+            # Always update the EMA buffers - no conditionals
             self.cluster_size.copy_(updated_cluster_size)
             self.embed_sum.copy_(updated_embed_sum)
-        
+            
             return updated_normalized_embeddings.to(normalized_embeddings.dtype)
     
     def reset_unused_codes(self, z_e_x, normalized_embeddings, D, codebook_size, distances):
