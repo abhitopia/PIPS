@@ -452,15 +452,20 @@ class VQEmbedding(nn.Module):
         """
 
         with autocast(device_type='cuda', enabled=False):
-
             z_e_x_fp32 = z_e_x.float()
             normalized_embeddings_fp32 = normalized_embeddings.float()
             distances_fp32 = distances.float()
+            
             # Fixed codebook size K.
             K = normalized_embeddings_fp32.shape[0]
+            
             # Flatten encoder outputs and distances.
             flat_z_e = z_e_x_fp32.reshape(-1, D)      # [B*N, D]
             flat_dists = distances_fp32.reshape(-1)     # [B*N]
+        
+            # Check if we have any vectors to work with
+            if flat_z_e.shape[0] == 0:
+                return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
         
             # Sort encoder outputs by descending quantization error.
             sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
@@ -468,16 +473,45 @@ class VQEmbedding(nn.Module):
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
         
-            # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
-            # Since K is fixed, this produces a fixed-shape tensor.
-            unused_int = reset_mask.to(torch.int64)           # [K]
-            ranks = torch.cumsum(unused_int, dim=0) - 1           # [K]
-            # For used entries, force the rank to 0 (these values won't be used).
-            ranks = torch.where(reset_mask, ranks, torch.zeros_like(ranks))
+            # If no codes need resetting, return early
+            if not reset_mask.any():
+                return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
         
-            # For each codebook entry i, candidate_codes[i] is taken from:
-            # flat_z_e[ sorted_indices[ranks[i]] ]
-            candidate_codes = flat_z_e[sorted_indices[ranks]]     # [K, D]
+            # Compute a rank for each codebook entry: for unused entries, rank them in order of appearance.
+            unused_int = reset_mask.to(torch.int64)           # [K]
+        
+            # Count total unused entries
+            num_unused = unused_int.sum().item()
+        
+            # Ensure we have enough candidates
+            max_candidates = min(sorted_indices.shape[0], num_unused)
+        
+            # If we need more ranks than available candidates, we'll cycle through
+            # the available candidates
+            if num_unused > 0:
+                # Create ranks that are within bounds of sorted_indices
+                ranks = torch.arange(num_unused, device=reset_mask.device) % max_candidates
+            
+                # Expand ranks to match the size of the codebook
+                full_ranks = torch.zeros_like(unused_int)
+            
+                # Put the valid ranks only at positions where reset_mask is True
+                rank_idx = 0
+                for i in range(K):
+                    if reset_mask[i]:
+                        full_ranks[i] = ranks[rank_idx]
+                        rank_idx += 1
+                        if rank_idx >= num_unused:
+                            break
+            
+                # Get the indices of vectors to use as replacements
+                safe_indices = sorted_indices[:max_candidates]
+            
+                # Get replacement candidates
+                candidate_codes = flat_z_e[safe_indices[full_ranks]]  # [K, D]
+            else:
+                # Fallback - shouldn't happen with the early return, but just to be safe
+                candidate_codes = torch.zeros_like(normalized_embeddings_fp32)
         
             # Update only unused entries in normalized_embeddings.
             updated_normalized_embeddings = torch.where(
@@ -487,11 +521,15 @@ class VQEmbedding(nn.Module):
             )
         
             # Update EMA buffers for the unused entries in a vectorized way.
+            # Create the constant tensor just once with proper device
+            ones = torch.ones(1, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
+        
             updated_cluster_size = torch.where(
                 reset_mask,
-                torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+                ones,  # Use the pre-created tensor instead of creating a new one each time
                 self.cluster_size
             )
+        
             updated_embed_sum = torch.where(
                 reset_mask.unsqueeze(1),
                 candidate_codes,
