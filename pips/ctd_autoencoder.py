@@ -374,7 +374,8 @@ class VQEmbedding(nn.Module):
         self.distance_reset = distance_reset
         self.use_ema = use_ema
         # Initialize with normal distribution
-        self.vq_embs.weight.data.normal_(0, 1.0)  # Using LayerNorm, we expect the norm to be 1.0
+        self.vq_embs.weight.data.normal_(0, math.sqrt(n_dim))  # Using LayerNorm, we expect the norm to be sqrt(n_dim)
+
         
         # Register buffers for EMA updates
         self.register_buffer('cluster_size', torch.zeros(codebook_size), persistent=True)
