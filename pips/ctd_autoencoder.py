@@ -463,9 +463,9 @@ class VQEmbedding(nn.Module):
             flat_z_e = z_e_x_fp32.reshape(-1, D)      # [B*N, D]
             flat_dists = distances_fp32.reshape(-1)     # [B*N]
         
-            # Check if we have any vectors to work with
-            if flat_z_e.shape[0] == 0:
-                return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
+            # # Check if we have any vectors to work with
+            # if flat_z_e.shape[0] == 0:
+            #     return normalized_embeddings_fp32.to(normalized_embeddings.dtype)
         
             # Sort encoder outputs by descending quantization error.
             sorted_indices = torch.argsort(flat_dists, descending=True)  # [B*N]
