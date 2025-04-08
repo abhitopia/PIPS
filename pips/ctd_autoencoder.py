@@ -438,7 +438,7 @@ class VQEmbedding(nn.Module):
     def reset_unused_codes_distance(self, z_e_x, normalized_embeddings, D, distances):
         """
         Reset unused codebook entries using quantization errors (distances) in a fully vectorized manner.
-        Uses only tensor operations for compatibility with PyTorch's compilation systems.
+        Uses only tensor operations with static shapes for compatibility with PyTorch's compilation.
         
         Args:
             z_e_x (Tensor): Encoder outputs, shape [B, N, D].
@@ -461,7 +461,7 @@ class VQEmbedding(nn.Module):
             flat_z_e = z_e_x_fp32.reshape(-1, D)      # [B*N, D]
             flat_dists = distances_fp32.reshape(-1)     # [B*N]
         
-            # Get candidates count with a minimum of 1 to avoid indexing errors
+            # Get candidates count
             candidates_count = flat_z_e.shape[0]
             
             # Sort encoder outputs by descending quantization error.
@@ -470,53 +470,51 @@ class VQEmbedding(nn.Module):
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
             
-            # Convert mask to indices of True values
-            nonzero_indices = torch.nonzero(reset_mask, as_tuple=True)[0]
+            # Instead of using nonzero, we can use cumsum and the reset_mask directly
+            # This avoids dynamic shape operations
+            reset_count = reset_mask.sum().clamp(min=1)  # Count of reset entries, minimum 1 for safety
             
-            # Get number of unused codes
-            num_unused = nonzero_indices.shape[0]
+            # Get top N candidates with highest error, where N is at most the flattened tensor size
+            top_n = min(candidates_count, K)  # We'll take at most K candidates
+            top_indices = sorted_indices[:top_n]  # Get the indices of top_n highest error samples
             
-            # Create a safe tensor even if num_unused is 0
-            max_candidates = torch.min(
-                torch.tensor(candidates_count, device=reset_mask.device),
-                torch.tensor(max(1, num_unused), device=reset_mask.device)
-            )
+            # Get the corresponding vectors
+            top_vectors = flat_z_e[top_indices]  # Shape: [top_n, D]
             
-            # Create candidate indices that are always safe
-            # Use modulo to cycle through candidates if we have more unused codes than candidates
-            indices_to_use = torch.arange(K, device=reset_mask.device) % max(1, max_candidates.item())
+            # Create a cycling index pattern for the reset entries
+            # For each position in the codebook, if it needs reset, we'll assign it 
+            # one of the top error vectors in a cycling pattern
+            cycling_indices = torch.arange(K, device=reset_mask.device) % top_n
             
-            # Select candidates from sorted indices, handling the case when sorted_indices is empty
-            safe_candidates = flat_z_e[sorted_indices[:max(1, max_candidates.item())]]
+            # Get the corresponding candidates
+            # Shape: [K, D] - for each position, we have a candidate ready
+            all_candidates = top_vectors[cycling_indices]
             
-            # Create an output where reset positions get updated
-            candidate_codes = safe_candidates[indices_to_use]
-            
-            # Apply mask with torch.where - no conditionals
+            # Apply mask with torch.where - only update entries that need resetting
             updated_normalized_embeddings = torch.where(
-                reset_mask.unsqueeze(1).expand_as(normalized_embeddings_fp32),
-                candidate_codes,
-                normalized_embeddings_fp32
+                reset_mask.unsqueeze(1),  # Shape: [K, 1]
+                all_candidates,           # Shape: [K, D]
+                normalized_embeddings_fp32  # Shape: [K, D]
             )
             
             # Create ones tensor with proper shape and device for updating cluster size
             ones = torch.ones(1, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
             
-            # Update cluster size - always safe, no conditionals
+            # Update cluster size - only for reset entries
             updated_cluster_size = torch.where(
                 reset_mask,
                 ones.expand_as(self.cluster_size),
                 self.cluster_size
             )
             
-            # Update embed sum - always safe, no conditionals
+            # Update embed sum - only for reset entries
             updated_embed_sum = torch.where(
-                reset_mask.unsqueeze(1).expand_as(self.embed_sum),
-                candidate_codes,
+                reset_mask.unsqueeze(1),
+                all_candidates,
                 self.embed_sum
             )
             
-            # Always update the EMA buffers - no conditionals
+            # Always update the EMA buffers
             self.cluster_size.copy_(updated_cluster_size)
             self.embed_sum.copy_(updated_embed_sum)
             
