@@ -710,7 +710,7 @@ class LoggingCallback(pl.Callback):
             max_cluster_size = cluster_sizes.max().item()
             mean_cluster_size = cluster_sizes.mean().item()
             min_cluster_size = cluster_sizes.min().item()
-            unused_count = (cluster_sizes < vq_embedding.unused_reset_threshold).sum().item()
+            unused_count = (cluster_sizes < max(vq_embedding.unused_reset_threshold, 1e-6)).sum().item()
             unused_percent = unused_count / len(cluster_sizes) * 100.0
             
             # Get update magnitude metrics (if available)
