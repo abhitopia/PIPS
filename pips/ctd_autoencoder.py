@@ -405,6 +405,7 @@ class VQEmbedding(nn.Module):
         """
         # Identify codebook entries with low usage.
         reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)  # Shape: [K]
+        median_usage = self.current_usage.median().item()
 
         
         # Flatten encoder outputs to shape [B*N, D].
@@ -423,7 +424,7 @@ class VQEmbedding(nn.Module):
         # Also update the EMA buffers for these entries.
         new_cluster_size = torch.where(
             reset_mask,
-            torch.tensor(1.0, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+            torch.tensor(median_usage, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
             self.cluster_size
         )
         new_embed_sum = torch.where(
@@ -469,7 +470,8 @@ class VQEmbedding(nn.Module):
         
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
-            
+            median_usage = self.current_usage.median().item()
+
             # Instead of using nonzero, we can use cumsum and the reset_mask directly
             # This avoids dynamic shape operations
             reset_count = reset_mask.sum().clamp(min=1)  # Count of reset entries, minimum 1 for safety
@@ -498,7 +500,7 @@ class VQEmbedding(nn.Module):
             )
             
             # Create ones tensor with proper shape and device for updating cluster size
-            ones = torch.ones(1, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
+            ones = torch.tensor(median_usage, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
             
             # Update cluster size - only for reset entries
             updated_cluster_size = torch.where(
