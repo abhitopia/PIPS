@@ -365,7 +365,7 @@ class VQEmbedding(nn.Module):
             hot_reset_threshold (float): Threshold above which a code is considered hot.
             distance_reset (bool): Whether to use distance-based codebook resets.
         """
-        super(VQEmbedding, self).__init__()
+        super().__init__()
         # Create an embedding layer (the codebook) with K embeddings of dimension D.
         self.vq_embs = nn.Embedding(codebook_size, n_dim)
         self.decay = decay
@@ -405,7 +405,7 @@ class VQEmbedding(nn.Module):
         """
         # Identify codebook entries with low usage.
         reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)  # Shape: [K]
-        median_usage = self.current_usage.median().item()
+        median_usage = self.cluster_size.median().item()
 
         
         # Flatten encoder outputs to shape [B*N, D].
@@ -470,7 +470,7 @@ class VQEmbedding(nn.Module):
         
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
-            median_usage = self.current_usage.median().item()
+            median_usage = self.cluster_size.median().item()
 
             # Instead of using nonzero, we can use cumsum and the reset_mask directly
             # This avoids dynamic shape operations
