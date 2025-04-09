@@ -877,13 +877,12 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         Initialize codebook with k-means clustering if enabled in config.
         """
         super().on_train_start()
-
         
         # Initialize codebook with k-means if enabled
         if self.experiment_config.kmeans_init_codebook:
             print(f"Initializing codebook with k-means clustering...")
             
-            # By this point, train_dataloader is available
+            # This line seems to work in your code, so leaving it as is
             train_dataloader = self.trainer.train_dataloader
             
             # Get the original uncompiled model
@@ -910,9 +909,28 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
             
             print("Codebook initialization complete!")
 
-        # Running the validation loop before training starts.
-        self.trainer.validate(self.model, self.trainer.val_dataloader)
+        # Try to access validation dataloaders in different possible ways
+        val_dataloader = None
+        
+        # Option 1: Try accessing directly from the trainer's fit_loop
+        if hasattr(self.trainer, "fit_loop") and hasattr(self.trainer.fit_loop, "val_loop"):
+            val_dataloader = self.trainer.fit_loop.val_loop.dataloader
+        
+        # Option 2: Try accessing through the data connector
+        if val_dataloader is None and hasattr(self.trainer, "_data_connector"):
+            val_dataloader = self.trainer._data_connector._val_dataloader_source.dataloader()
+        
+        # Option 3: Check if val_dataloaders is available as an attribute
+        if val_dataloader is None and hasattr(self.trainer, "val_dataloaders"):
+            val_dataloader = self.trainer.val_dataloaders
+        
 
+        print(f"val_dataloader: {val_dataloader}")
+        # Now run validation with the dataloader you found
+        if val_dataloader is not None:
+            self.trainer.validate(self.model, val_dataloader)
+        else:
+            print("WARNING: Couldn't access validation dataloader, skipping initial validation")
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
