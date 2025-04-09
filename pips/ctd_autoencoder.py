@@ -405,8 +405,9 @@ class VQEmbedding(nn.Module):
         """
         # Identify codebook entries with low usage.
         reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)  # Shape: [K]
-        median_usage = self.cluster_size.median().item()
-
+        
+        # Use tensor median instead of item()
+        median_usage = self.cluster_size.median()
         
         # Flatten encoder outputs to shape [B*N, D].
         flat_z_e = z_e_x.reshape(-1, D)
@@ -421,19 +422,23 @@ class VQEmbedding(nn.Module):
             random_codes,
             normalized_embeddings
         )
+        
         # Also update the EMA buffers for these entries.
         new_cluster_size = torch.where(
             reset_mask,
-            torch.tensor(median_usage, dtype=self.cluster_size.dtype, device=self.cluster_size.device),
+            median_usage.expand_as(self.cluster_size),
             self.cluster_size
         )
+        
         new_embed_sum = torch.where(
             reset_mask.unsqueeze(1),
             random_codes,
             self.embed_sum
         )
+        
         self.cluster_size.copy_(new_cluster_size)
         self.embed_sum.copy_(new_embed_sum)
+        
         return normalized_embeddings
     
     def reset_unused_codes_distance(self, z_e_x, normalized_embeddings, D, distances):
@@ -470,7 +475,9 @@ class VQEmbedding(nn.Module):
         
             # Compute a fixed-size unused mask (K is fixed).
             reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)
-            median_usage = self.cluster_size.median().item()
+            
+            # Instead of using .item(), use the median as a tensor directly
+            median_usage = self.cluster_size.median()
 
             # Instead of using nonzero, we can use cumsum and the reset_mask directly
             # This avoids dynamic shape operations
@@ -499,13 +506,13 @@ class VQEmbedding(nn.Module):
                 normalized_embeddings_fp32  # Shape: [K, D]
             )
             
-            # Create ones tensor with proper shape and device for updating cluster size
-            ones = torch.tensor(median_usage, dtype=self.cluster_size.dtype, device=self.cluster_size.device)
+            # Create a tensor with the median value with proper shape and device for updating cluster size
+            ones = median_usage.expand_as(self.cluster_size)
             
             # Update cluster size - only for reset entries
             updated_cluster_size = torch.where(
                 reset_mask,
-                ones.expand_as(self.cluster_size),
+                ones,
                 self.cluster_size
             )
             
