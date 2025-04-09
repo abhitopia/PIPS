@@ -1,3 +1,9 @@
+# 9th April 2025
+- [x] Add CE, VQ cofficieints
+- [x] Make validation go first before training
+- [ ] Try training with EMA disabled (decay 1.0)
+
+
 # 4th April
 - [x] Add hot reset threshold to the codebook
 

@@ -755,6 +755,8 @@ class ExperimentConfig:
     weight_decay: float = 1e-4  # Consistent with Dalle-E paper
     
     # Commitment loss parameters
+    beta_ce: float = 1.0
+    beta_vq: float = 1.0
     beta_commitment: float = 0.25
     
     # Mask percentage parameters
@@ -1020,7 +1022,9 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         }
 
     def forward(self, x: Tensor,
+                beta_ce: Tensor = torch.tensor(1.0),
                 beta_commitment: Tensor = torch.tensor(1.0),
+                beta_vq: Tensor = torch.tensor(1.0),
                 mask_pct: Tensor = torch.tensor(0.0)):
         
         # Forward pass with provided scheduled parameters.
@@ -1050,8 +1054,8 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         
         # Compute weighted losses for total loss.
         weighted_losses = {
-            'loss(CE)': raw_losses['loss(CE)'],
-            'loss(VQ)': raw_losses['loss(VQ)'],
+            'loss(CE)': raw_losses['loss(CE)'] * beta_ce,
+            'loss(VQ)': raw_losses['loss(VQ)'] * beta_vq,
             'loss(Commitment)': raw_losses['loss(Commitment)'] * beta_commitment,
         }
         
@@ -1076,12 +1080,16 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         scheduled = self.get_scheduled_values(self.global_step, device=x.device)
 
         beta_commitment = torch.tensor(self.experiment_config.beta_commitment, device=x.device)
+        beta_ce = torch.tensor(self.experiment_config.beta_ce, device=x.device)
+        beta_vq = torch.tensor(self.experiment_config.beta_vq, device=x.device)
         # Sample mask percentage for this batch; set max_pct_mask to 0 in validation for no masking.
         mask_pct = torch.empty(1, device=x.device).uniform_(0.0, scheduled['max_pct(MASK)'])[0]
 
         output_dict = self(
              x,
              beta_commitment=beta_commitment,
+             beta_ce=beta_ce,
+             beta_vq=beta_vq,
              mask_pct=mask_pct
         )
 
@@ -1098,11 +1106,15 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).
         scheduled = self.get_scheduled_values(self.global_step, device=x.device)
         beta_commitment = torch.tensor(self.experiment_config.beta_commitment, device=x.device)
+        beta_ce = torch.tensor(self.experiment_config.beta_ce, device=x.device)
+        beta_vq = torch.tensor(self.experiment_config.beta_vq, device=x.device)
         mask_pct = torch.tensor(0.0, device=x.device) # No masking in validation
 
         output_dict = self(
              x,
              beta_commitment=beta_commitment,
+             beta_ce=beta_ce,
+             beta_vq=beta_vq,
              mask_pct=mask_pct
         )
 
@@ -1516,7 +1528,7 @@ def train(
         # profiler=profiler,
         default_root_dir=tempfile.gettempdir() if lr_find else None,
         log_every_n_steps=1,
-        num_sanity_val_steps=0,
+        num_sanity_val_steps=0 if experiment_config.model_src is None else -1, # Run validation on the loaded model
         enable_progress_bar=True,
         accelerator=acceleration.device,
         precision=acceleration.precision,
@@ -1544,6 +1556,8 @@ def train(
         # Load weights if a model source is specified
         if experiment_config.model_src:
             load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
+            # print("Running validation loop on the loaded model...")
+            # trainer.validate(model, val_loader)
         # wandb_logger.watch(model, log='parameters', log_graph=True, log_freq=100)
 
     if lr_find:
