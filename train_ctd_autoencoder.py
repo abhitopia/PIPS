@@ -909,29 +909,6 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
             
             print("Codebook initialization complete!")
 
-        # Try to access validation dataloaders in different possible ways
-        val_dataloader = None
-        
-        # Option 1: Try accessing directly from the trainer's fit_loop
-        if hasattr(self.trainer, "fit_loop") and hasattr(self.trainer.fit_loop, "val_loop"):
-            val_dataloader = self.trainer.fit_loop.val_loop.dataloader
-        
-        # Option 2: Try accessing through the data connector
-        if val_dataloader is None and hasattr(self.trainer, "_data_connector"):
-            val_dataloader = self.trainer._data_connector._val_dataloader_source.dataloader()
-        
-        # Option 3: Check if val_dataloaders is available as an attribute
-        if val_dataloader is None and hasattr(self.trainer, "val_dataloaders"):
-            val_dataloader = self.trainer.val_dataloaders
-        
-
-        print(f"val_dataloader: {val_dataloader}")
-        # Now run validation with the dataloader you found
-        if val_dataloader is not None:
-            self.trainer.validate(self.model, val_dataloader)
-        else:
-            print("WARNING: Couldn't access validation dataloader, skipping initial validation")
-
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
         if "state_dict" in checkpoint:
@@ -1551,7 +1528,7 @@ def train(
         # profiler=profiler,
         default_root_dir=tempfile.gettempdir() if lr_find else None,
         log_every_n_steps=1,
-        num_sanity_val_steps=0 if experiment_config.model_src is None else -1, # Run validation on the loaded model
+        num_sanity_val_steps=0,
         enable_progress_bar=True,
         accelerator=acceleration.device,
         precision=acceleration.precision,
@@ -1579,8 +1556,6 @@ def train(
         # Load weights if a model source is specified
         if experiment_config.model_src:
             load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
-            # print("Running validation loop on the loaded model...")
-            # trainer.validate(model, val_loader)
         # wandb_logger.watch(model, log='parameters', log_graph=True, log_freq=100)
 
     if lr_find:
