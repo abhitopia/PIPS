@@ -871,18 +871,19 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
         else:
             print("Model compilation disabled; skipping torch.compile.")
     
-    def on_fit_start(self):
+    def on_train_start(self):
         """
-        Called at the very beginning of fit.
-        Initialize codebook with k-means clustering before any validation or training occurs.
+        Called at the beginning of training after dataloaders are initialized.
+        Initialize codebook with k-means clustering if enabled in config.
         """
-        super().on_fit_start()
+        super().on_train_start()
+
         
         # Initialize codebook with k-means if enabled
         if self.experiment_config.kmeans_init_codebook:
-            print(f"Initializing codebook with k-means clustering (before validation)...")
+            print(f"Initializing codebook with k-means clustering...")
             
-            # Get train dataloader - by this point it should be available
+            # By this point, train_dataloader is available
             train_dataloader = self.trainer.train_dataloader
             
             # Get the original uncompiled model
@@ -908,14 +909,10 @@ class CTDAutoEncoderTrainingModule(pl.LightningModule):
                 )
             
             print("Codebook initialization complete!")
-    
-    def on_train_start(self):
-        """
-        Called at the beginning of training after dataloaders are initialized.
-        K-means initialization is now handled in on_fit_start instead.
-        """
-        super().on_train_start()
-        # K-means initialization moved to on_fit_start
+
+        # Running the validation loop before training starts.
+        self.trainer.validate(self.model, self.trainer.val_dataloader)
+
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
