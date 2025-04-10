@@ -20,7 +20,7 @@ experiment_config:
     pad_weight: 1.0
     gamma: 2.0
   seed: 6
-  batch_size: 1024
+  batch_size: 2048
   max_steps: 1000000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
