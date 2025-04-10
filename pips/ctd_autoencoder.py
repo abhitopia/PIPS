@@ -696,9 +696,12 @@ class VQEmbedding(nn.Module):
         Returns:
             tuple: (z_q_x, zqx_tilde, idx)
         """
+
+        # Pass gradients through the codebook if EMA is disabled
+        codebook_weights = self.vq_embs.weight.detach() if self.use_ema else self.vq_embs.weight
         # Input shape: (B, N, C)
         # Capture all outputs from the straight-through estimator.
-        z_q_x, flat_idx, idx, distances = VQ_ST(z_e_x, self.vq_embs.weight.detach())
+        z_q_x, flat_idx, idx, distances = VQ_ST(z_e_x, codebook_weights)
         
         # Retrieve alternative quantized representation using flat_idx.
         flat_zqx_tilde = torch.index_select(self.vq_embs.weight, dim=0, index=flat_idx)
