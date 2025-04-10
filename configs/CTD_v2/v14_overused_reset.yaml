@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v14_overused_reset
+  run_name: nockpt_v14_overused_reset_v2
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000

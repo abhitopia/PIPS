@@ -504,7 +504,7 @@ class VQEmbedding(nn.Module):
 
             # Optionally update the EMA buffers for the reset entries.
             # Here, we set the cluster size for reset codes to the median usage.
-            median_usage = self.cluster_size.median()  # scalar tensor
+            median_usage = self.cluster_size.max()  # scalar tensor
             new_cluster_size = torch.where(reset_mask,
                                             median_usage.expand_as(self.cluster_size),
                                             self.cluster_size)
