@@ -353,7 +353,8 @@ class VQEmbedding(nn.Module):
     def __init__(self, codebook_size: int, n_dim: int, use_ema: bool = True, decay: float = 0.99,
                 unused_reset_threshold: float = 1.0, 
                 hot_reset_threshold: float = 500,
-                distance_reset: bool = False):
+                distance_reset: bool = False,
+                reset_update_alpha: float = 1.0):
         """
         Initialize the VQEmbedding module.
         
@@ -373,6 +374,7 @@ class VQEmbedding(nn.Module):
         self.hot_reset_threshold = hot_reset_threshold
         self.distance_reset = distance_reset
         self.use_ema = use_ema
+        self.reset_update_alpha = reset_update_alpha
         # Initialize with normal distribution
         self.vq_embs.weight.data.normal_(0, 1.0)  # Using LayerNorm, we expect the norm to be sqrt(n_dim)
 
@@ -440,6 +442,78 @@ class VQEmbedding(nn.Module):
         self.embed_sum.copy_(new_embed_sum)
         
         return normalized_embeddings
+    
+    def reset_unused_codes_near_overused(self, z_e_x, normalized_embeddings, D, codebook_size, eps=1e-8):
+        """
+        Reset unused/hot codebook entries by reinitializing them near the region with high usage.
+
+        This method computes the candidate pool from the 'active' codebook entries—those not
+        flagged for reset, based on their cluster usage (self.cluster_size). It calculates the mean
+        and standard deviation of the active entries and then, for every code entry flagged for reset,
+        it generates a candidate by sampling from a Gaussian centered at the active pool mean with the 
+        corresponding standard deviation. The candidate is then clamped within ±2 standard deviations. 
+        Finally, the update is applied gradually via interpolation with factor beta.
+
+        Args:
+            z_e_x (Tensor): Encoder outputs, shape [B, N, D]. (Not directly used here.)
+            normalized_embeddings (Tensor): Normalized codebook embeddings, shape [K, D].
+            D (int): Embedding dimension.
+            codebook_size (int): Total number of codebook entries (K).
+            eps (float): Small constant to avoid division by zero.
+
+        Returns:
+            Tensor: The updated normalized embeddings.
+        """
+        with torch.no_grad():
+            # Determine which codebook entries need resetting:
+            # entries that are either underused or overused.
+            reset_mask = (self.cluster_size < self.unused_reset_threshold) | (self.cluster_size > self.hot_reset_threshold)  # shape: [K]
+            
+            # Determine active entries: those NOT flagged for reset.
+            active_mask = ~reset_mask                              # shape: [K]
+            active_mask_float = active_mask.to(normalized_embeddings.dtype)  # convert bool to float
+
+            # Compute the active candidate pool: the mean and std of embeddings that are active.
+            # (If no entries are active, this will yield zeros—but in practice,
+            # you should have some active codes.)
+            sum_active = (normalized_embeddings * active_mask_float.unsqueeze(1)).sum(dim=0, keepdim=True)  # [1, D]
+            count_active = active_mask_float.sum() + eps  # scalar to avoid division by zero.
+            candidate_pool_mean = sum_active / count_active   # [1, D]
+
+            # Compute the variance and standard deviation over the active entries.
+            diff = normalized_embeddings - candidate_pool_mean  # [K, D]
+            diff_squared = diff * diff                           # [K, D]
+            sum_diff_squared = (diff_squared * active_mask_float.unsqueeze(1)).sum(dim=0, keepdim=True)
+            candidate_pool_var = sum_diff_squared / count_active  # [1, D]
+            candidate_pool_std = torch.sqrt(candidate_pool_var + eps)  # [1, D]
+
+            # Generate candidate embeddings for all codebook entries by sampling from a Gaussian
+            # defined by the candidate pool mean and std.
+            candidate_all = candidate_pool_mean + torch.randn((codebook_size, D),
+                                                            device=normalized_embeddings.device) * candidate_pool_std
+            # Clamp the candidates within ±2 standard deviations of the candidate pool mean.
+            lower_bound = candidate_pool_mean - 2 * candidate_pool_std
+            upper_bound = candidate_pool_mean + 2 * candidate_pool_std
+            candidate_all = torch.clamp(candidate_all, lower_bound, upper_bound)
+
+            # For code entries flagged for reset, apply a gradual update using interpolation:
+            # new_embedding = (1 - beta) * old_embedding + beta * candidate.
+            effective_update = (1 - self.reset_update_alpha) * normalized_embeddings + self.reset_update_alpha * candidate_all
+            # Use torch.where to update only the entries where reset_mask is True.
+            new_embeddings = torch.where(reset_mask.unsqueeze(1), effective_update, normalized_embeddings)
+
+            # Optionally update the EMA buffers for the reset entries.
+            # Here, we set the cluster size for reset codes to the median usage.
+            median_usage = self.cluster_size.median()  # scalar tensor
+            new_cluster_size = torch.where(reset_mask,
+                                            median_usage.expand_as(self.cluster_size),
+                                            self.cluster_size)
+            new_embed_sum = torch.where(reset_mask.unsqueeze(1), new_embeddings, self.embed_sum)
+            self.cluster_size.copy_(new_cluster_size)
+            self.embed_sum.copy_(new_embed_sum)
+
+            return new_embeddings
+
     
     def reset_unused_codes_distance(self, z_e_x, normalized_embeddings, D, distances):
         """
@@ -531,7 +605,8 @@ class VQEmbedding(nn.Module):
     
     def reset_unused_codes(self, z_e_x, normalized_embeddings, D, codebook_size, distances):
         if self.distance_reset:
-            return self.reset_unused_codes_distance(z_e_x, normalized_embeddings, D, distances)
+            # return self.reset_unused_codes_distance(z_e_x, normalized_embeddings, D, distances)
+            return self.reset_unused_codes_near_overused(z_e_x, normalized_embeddings, D, codebook_size)
         else:
             return self.reset_unused_codes_random(z_e_x, normalized_embeddings, D, codebook_size)
 
