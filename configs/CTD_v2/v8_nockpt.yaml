@@ -15,7 +15,7 @@ experiment_config:
     use_ema: true
     decay: 0.99
     distance_reset: false
-    unused_reset_threshold: 1e-15
+    unused_reset_threshold: 1.0e-15
     hot_reset_threshold: 5000
     pad_weight: 1.0
     gamma: 2.0
