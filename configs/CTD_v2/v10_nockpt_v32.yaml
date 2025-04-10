@@ -43,10 +43,10 @@ experiment_config:
   permute_train: true
   model_src: nockpt_v10_v2/best/21000
   kmeans_init_codebook: true
-  kmeans_init_max_datapoints: 500000
+  kmeans_init_max_datapoints: 5000000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v10_v34
+  run_name: nockpt_v10_v35
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
