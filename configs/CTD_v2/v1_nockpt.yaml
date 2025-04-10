@@ -25,8 +25,8 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   mask_schedule_type: cosine
-  learning_rate: 0.0003
-  lr_min: 3.0e-06
+  learning_rate: 0.0004
+  lr_min: 4.0e-06
   warmup_steps_lr: 1000
   decay_steps_lr: null
   weight_decay: 0.0
