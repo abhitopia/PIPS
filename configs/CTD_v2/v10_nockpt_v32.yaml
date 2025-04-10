@@ -14,7 +14,7 @@ experiment_config:
     decode_norm: true
     use_ema: true
     decay: 0.99
-    distance_reset: true
+    distance_reset: false
     unused_reset_threshold: 0.5
     hot_reset_threshold: 50000000
     pad_weight: 1.0
@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v10_v32
+  run_name: nockpt_v10_v33
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
