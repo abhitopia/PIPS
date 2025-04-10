@@ -16,7 +16,7 @@ experiment_config:
     decay: 0.99
     distance_reset: false
     unused_reset_threshold: 1.0
-    hot_reset_threshold: 50000
+    hot_reset_threshold: 5000000
     pad_weight: 1.0
     gamma: 2.0
   seed: 6
@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 5000000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v10_ckpt_v2
+  run_name: nockpt_v10_ckpt_v3
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
