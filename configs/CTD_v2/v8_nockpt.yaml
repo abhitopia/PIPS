@@ -41,7 +41,7 @@ experiment_config:
   val_ds: VAL
   limit_training_samples: null
   permute_train: true
-  model_src: null
+  model_src: nockpt_v7/best/7000
   kmeans_init_codebook: false
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
