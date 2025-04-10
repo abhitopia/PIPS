@@ -638,7 +638,7 @@ class VQEmbedding(nn.Module):
             self.update_codebook_ema(z_e_x, idx, distances)
 
         meta = {
-            "vq_loss": vq_loss.detach() if self.use_ema else vq_loss,
+            "vq_loss": vq_loss,
             "commitment_loss": commitment_loss,
             "indices": idx
         }
