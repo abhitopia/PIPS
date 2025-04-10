@@ -25,8 +25,8 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   mask_schedule_type: cosine
-  learning_rate: 0.0001
-  lr_min: 1.0e-05
+  learning_rate: 0.001
+  lr_min: 1.0e-04
   warmup_steps_lr: 1000
   decay_steps_lr: null
   weight_decay: 0.0
@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v10_v4_noema
+  run_name: nockpt_v10_v5_noema
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
