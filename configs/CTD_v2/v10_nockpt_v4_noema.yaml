@@ -31,7 +31,7 @@ experiment_config:
   decay_steps_lr: null
   weight_decay: 0.0
   beta_ce: 1.0
-  beta_vq: 0.5
+  beta_vq: 1.0
   beta_commitment: 0.25
   mask_pct_start: 0.0
   max_mask_pct: 0.0
@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: nockpt_v10_v5_noema
+  run_name: nockpt_v10_v6_noema
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
