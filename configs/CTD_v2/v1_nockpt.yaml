@@ -20,7 +20,7 @@ experiment_config:
     pad_weight: 1.0
     gamma: 2.0
   seed: 6
-  batch_size: 256
+  batch_size: 1024
   max_steps: 1000000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
@@ -46,7 +46,7 @@ experiment_config:
   kmeans_init_max_datapoints: 500000
   kmeans_init_batch_size: 100000
 project_config:
-  run_name: v1_nockpt
+  run_name: nockpt_v1
   project_name: CTD_v2
   checkpoint_dir: runs
   val_check_interval: 1000
