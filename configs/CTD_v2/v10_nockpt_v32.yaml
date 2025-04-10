@@ -19,7 +19,7 @@ experiment_config:
     hot_reset_threshold: 50000000
     pad_weight: 1.0
     gamma: 2.0
-  seed: 6
+  seed: 69
   batch_size: 1024
   max_steps: 200000
   gradient_clip_val: 1.0
