@@ -4,10 +4,10 @@ experiment_config:
     n_dim: 256
     n_layers: 4
     n_heads: 4
-    n_codes: 64
+    n_codes: 121
     conv_block_size: 2
     n_conv_blocks: 2
-    codebook_size: 8192
+    codebook_size: 1024
     grid_height: 32
     grid_width: 32
     encode_norm: true
