@@ -219,12 +219,24 @@ class TaskDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
                  cache_dir=Path(__file__).resolve().parent / '.cache',
                  max_tasks: int = None,
-                 seed: int = 42):
+                 seed: int = 42,
+                 data_multiplier: int = 1):
+        """
+        Args:
+            dataset_type: Type of dataset to load
+            cache_dir: Directory to store cached data
+            max_tasks: Maximum number of tasks to use (sample randomly if less than total)
+            seed: Random seed for reproducibility
+            data_multiplier: Factor to multiply dataset size by using deterministic augmentations
+        """
+        assert data_multiplier >= 1, "data_multiplier must be at least 1"
+        
         self.dataset_type = dataset_type
         self.cache_dir = cache_dir
         self.data = None
         self.max_tasks = max_tasks
         self.seed = seed
+        self.data_multiplier = data_multiplier
         self.indices = None  # Will store our sampled indices
         
         # Initialize shared length if not present.
@@ -232,7 +244,7 @@ class TaskDataset(Dataset):
             self._init_len_without_data()
             
         # Generate deterministic indices if needed
-        if self.max_tasks is not None and self.max_tasks < self._shared_length:
+        if self.max_tasks is not None and self.max_tasks < self._actual_length():
             self._generate_indices()
 
     def _init_len_without_data(self):
@@ -246,6 +258,10 @@ class TaskDataset(Dataset):
         self._shared_length = len(temp_data)
         del temp_data  # Clean up the temporary mapping
 
+
+    def _actual_length(self):
+        return self._shared_length * self.data_multiplier
+
     def _generate_indices(self):
         """
         Generate a deterministic random permutation of indices.
@@ -253,7 +269,7 @@ class TaskDataset(Dataset):
         """
         # Use a fixed seed for deterministic sampling
         rng = np.random.RandomState(self.seed)
-        self.indices = rng.permutation(self._shared_length)[:self.max_tasks]
+        self.indices = rng.permutation(self._actual_length())[:self.max_tasks]
 
     def _initialize_data(self):
         """Initialize the data for this process"""
@@ -263,30 +279,38 @@ class TaskDataset(Dataset):
             self._shared_length = len(self.data)
             
             # Generate indices if needed and not already done
-            if self.max_tasks is not None and self.max_tasks < self._shared_length:
+            if self.max_tasks is not None and self.max_tasks < len(self):
                 if self.indices is None:
                     self._generate_indices()
             # print(f"Initialized data with {len(self.data)} grids for {self.dataset_type.name}")
 
     def __len__(self):
-        actual_length = self._shared_length
+        actual_length = self._actual_length()
 
         # Apply max_tasks limit if specified
         if self.max_tasks is not None:
             actual_length = min(actual_length, self.max_tasks)
-
+            
+        # Multiply by data_multiplier to account for augmentations
         return actual_length
 
     def __getitem__(self, idx):
         # Initialize data if not already done
         if self.data is None:
             self._initialize_data()
-        
-        # If we're using a subset of indices, map the requested index to our selected indices
-        if self.max_tasks is not None and self.max_tasks < self._shared_length:
+
+
+        # If we're using a subset of indices, map the base index to our selected indices
+        if self.max_tasks is not None and self.max_tasks < self._actual_length():
             idx = self.indices[idx]
         
-        task = self.data[idx]
+        # Calculate the base index and augmentation round
+        original_length = len(self.data)
+        augmentation_round = idx // original_length
+        base_idx = idx % original_length
+        
+        # Get the original task
+        task = self.data[base_idx]
 
         # reconstruct the task from the data
         train_examples = []
@@ -354,14 +378,21 @@ class TaskDataset(Dataset):
             )
             test_examples.append(example)
         
-        # Create and return ArcTask object
+        # Create ArcTask object
         arc_task = ArcTask(
             id=task['task_id'],
             prog_id=task['program_id'],
             train=train_examples,
             test=test_examples,
-            dataset=task['dataset']
+            dataset=task['dataset'],
+            color_perm=ColorPermutation.from_name(task['color_perm']),
+            transform=ArrayTransform[task['transform']]
         )
+        
+        # Apply permutation if this is an augmented version (not the original data)
+        if augmentation_round > 0:
+            # Create a unique permutation for this augmentation
+            arc_task = arc_task.permute(seed=idx)
         
         return arc_task
 
@@ -385,11 +416,18 @@ def worker_init_fn(worker_id):
 
 
 if __name__ == "__main__":
-    ds = TaskDataset(dataset_type=DatasetType.ALL, max_tasks=10)
+    ds = TaskDataset(dataset_type=DatasetType.ALL, data_multiplier=2)
+
+    print("Length of dataset:", len(ds))
+    print("Shared length:", ds._shared_length)
+
     print(ds[0])
     print(ds[1])
-    print(ds[2])
-    print(ds[3])
-    print(ds[4])
-    print(ds[5])
-    print(ds[6])
+    print(ds[0+ds._shared_length])
+    print(ds[0+ds._shared_length].train[0])
+    print(ds[0+ds._shared_length].train[0].input)
+
+    
+    print(ds[1+ds._shared_length])
+    print(ds[1+ds._shared_length].train[0])
+    print(ds[1+ds._shared_length].train[0].input)

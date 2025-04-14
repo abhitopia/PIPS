@@ -84,11 +84,21 @@ class ColorPermutation:
         return cls(name)
     
     @classmethod
-    def random(cls):
-        """Create a random color permutation with an encoded name."""
+    def random(cls, seed=None):
+        """Create a random color permutation with an encoded name.
+        
+        Args:
+            seed: Optional random seed for deterministic generation
+        """
         # Generate a random permutation
         values = list(range(10))
-        random.shuffle(values)
+        
+        # Use seeded RNG if seed is provided
+        if seed is not None:
+            rng = random.Random(seed)
+            rng.shuffle(values)
+        else:
+            random.shuffle(values)
         
         # Create a name that encodes the values
         name = "CPRAND_" + "".join(str(d) for d in values)
@@ -130,27 +140,32 @@ class ArrayTransform(Enum):
 
 def get_permutation_params(color_perm: Optional[object] = None, 
                           arr_transform: Optional[ArrayTransform] = None,
-                          avoid_identity: bool = True) -> tuple:
+                          avoid_identity: bool = True,
+                          seed: Optional[int] = None) -> tuple:
     """Get color permutation and array transformation parameters.
     
     Args:
         color_perm: Color permutation to use. If None, a random one is selected.
         arr_transform: Array transformation to use. If None, a random one is selected.
         avoid_identity: If True, avoid returning identity for both parameters.
+        seed: Optional random seed for deterministic generation.
         
     Returns:
         tuple: (color_perm, arr_transform) objects
     """
+    # Set up RNG if seed is provided
+    rng = random.Random(seed) if seed is not None else random
+    
     # Handle color permutation
     if color_perm is None:
         # Use a completely random permutation
-        color_perm = ColorPermutation.random()
+        color_perm = ColorPermutation.random(seed=seed)
     elif isinstance(color_perm, str):
         color_perm = ColorPermutation.from_name(color_perm)
     
     # Handle array transformation
     if arr_transform is None:
-        arr_transform = random.choice(list(ArrayTransform))
+        arr_transform = rng.choice(list(ArrayTransform))
     elif isinstance(arr_transform, str):
         arr_transform = ArrayTransform[arr_transform]
     
@@ -158,7 +173,9 @@ def get_permutation_params(color_perm: Optional[object] = None,
     if (avoid_identity and 
         color_perm.name == "CPID" and 
         arr_transform == ArrayTransform.IDENT):
-        return get_permutation_params(None, None, avoid_identity)
+        # Increment seed if provided to get a different result
+        new_seed = None if seed is None else seed + 1
+        return get_permutation_params(None, None, avoid_identity, new_seed)
     
     return color_perm, arr_transform
 
@@ -291,25 +308,19 @@ class Grid:
             is_input=self.is_input
         )
 
-    def permute(self, color_perm=None, arr_transform=None, in_place: bool = False):
+    def permute(self, color_perm=None, arr_transform=None, seed=None):
         """Apply color permutation and array transformation to the grid.
         
         Args:
             color_perm: ColorPermutation to apply. If None, a random permutation is selected.
             arr_transform: ArrayTransform to apply. If None, a random transformation is selected.
-            in_place: If True, modify this grid instance. If False, return a new grid.
+            seed: Optional random seed for deterministic generation.
         """
         try:
-            color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
+            color_perm, arr_transform = get_permutation_params(color_perm, arr_transform, avoid_identity=True, seed=seed)
 
             array = color_perm.transform(self.array)
             array = arr_transform.transform(array)
-
-            if in_place:
-                self.array = array
-                self.color_perm = color_perm
-                self.transform = arr_transform
-                return self
 
             return Grid(
                 array,
@@ -463,15 +474,26 @@ class Example:
 
         return cloned
 
-    def permute(self, color_perm=None, arr_transform=None):
-
+    def permute(self, color_perm=None, arr_transform=None, seed=None):
+        """Apply permutation to this example.
+        
+        Args:
+            color_perm: ColorPermutation to apply. If None, a random permutation is selected.
+            arr_transform: ArrayTransform to apply. If None, a random transformation is selected.
+            seed: Optional random seed for deterministic generation.
+            
+        Returns:
+            A new permuted Example object
+        """
         clone = self.clone()
-        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
-
+        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform, avoid_identity=True, seed=seed)
+        
+        # Create new permuted grids
         clone.input = clone.input.permute(color_perm, arr_transform)
         clone.output = clone.output.permute(color_perm, arr_transform)
         clone.color_perm = color_perm
         clone.transform = arr_transform
+        
         return clone
 
 
@@ -557,24 +579,35 @@ class ArcTask:
         
         return cloned
         
-    def permute(self, color_perm=None, arr_transform=None):
+    def permute(self, color_perm=None, arr_transform=None, seed=None):
         """Apply permutation to all examples in the task.
         
         Args:
             color_perm: ColorPermutation to apply. If None, a random permutation is chosen.
             arr_transform: ArrayTransform to apply. If None, a random transformation is chosen.
+            seed: Optional random seed for deterministic generation.
             
         Returns:
-            self: The permuted task for chaining.
+            A new permuted ArcTask object.
         """        
         clone = self.clone()
 
-        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
+        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform, avoid_identity=True, seed=seed)
         
+
+        train_examples = []
+        test_examples = []
         # Apply permutation to all examples
         for ex in clone.train + clone.test:
-            ex.permute(color_perm, arr_transform)
+            if ex.is_test:
+                test_examples.append(ex.permute(color_perm, arr_transform, seed=seed))
+            else:
+                train_examples.append(ex.permute(color_perm, arr_transform, seed=seed))
             
+
+        clone.train = train_examples
+        clone.test = test_examples
+
         # Store permutation information
         clone._color_perm = color_perm
         clone._transform = arr_transform
