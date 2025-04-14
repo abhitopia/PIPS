@@ -1,6 +1,8 @@
 #%%
+from functools import partial
 import logging
 import concurrent.futures
+import pickle
 from pips.data import DATASET_LOADERS, ArcTask, ArrayTransform, ColorPermutation, DatasetType, Example, Grid, ARCAGI1_TRAIN
 from pathlib import Path
 import numpy as np
@@ -17,6 +19,65 @@ logging.basicConfig(level=logging.INFO)
 
 #%%
 
+
+class Tokenizer:
+    def __init__(self, token2idx=None, idx2token=None, frozen=True) -> None:
+        self.token2idx = token2idx if token2idx is not None else {}
+        self.idx2token = idx2token if idx2token is not None else {}
+        self.frozen = frozen
+    
+    def add_token(self, token):
+        if self.frozen:
+            raise ValueError('Tokenizer is frozen. No new tokens can be added.')
+        if token not in self.token2idx:
+            idx = len(self.token2idx)
+            self.token2idx[token] = idx
+            self.idx2token[idx] = token
+    
+    def encode(self, sequence: str) -> List[int]:
+        sequence = sequence.split(' ')
+        return [self.token2idx[token] for token in sequence]
+
+    def decode(self, sequence, remove_padding=True):
+        tokens = [self.idx2token[idx] for idx in sequence]
+        return ' '.join(tokens)
+    
+    def to_dict(self) -> Dict:
+        return {
+            'token2idx': self.token2idx,
+            'idx2token': self.idx2token,
+            'frozen': self.frozen
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        obj = cls()
+        obj.token2idx = data['token2idx']
+        obj.idx2token = data['idx2token']
+        obj.frozen = data['frozen']
+        return obj
+    
+    def __eq__(self, value: object) -> bool:
+        assert isinstance(value, Tokenizer), 'value must be an instance of Tokenizer'
+        return self.token2idx == value.token2idx and self.idx2token == value.idx2token
+
+    def __len__(self):
+        return len(self.token2idx)
+
+
+class ProgramTokenizer(Tokenizer):
+    def __init__(self):
+        super().__init__(frozen=False)
+
+    def build(self, tokens: List[str]):
+        if self.frozen:
+            raise ValueError('Tokenizer is frozen. No new tokens can be added.')
+        for token in tokens:
+            for t in token.strip().split(' '):
+                if len(t) == 1:
+                    print(f'Adding token: {token}')
+                self.add_token(t)
+        self.frozen = True
 
 
 def process_task_loader(loader, output_file, num_train=3, num_test=1):
@@ -486,7 +547,7 @@ class ExampleDataset(Dataset):
             if self.indices is None:
                 self._generate_indices()
     
-    def __getitem__(self, idx):
+    def __getitem__(self, idx) -> Example:
         """Get a specific example from a task"""
         # Initialize data if not already done
         if self.task_dataset.data is None:
@@ -519,6 +580,26 @@ class ExampleDataset(Dataset):
         self.task_dataset.unload()
         self.indices = None
 
+
+    def get_program_tokenizer(self):
+        filename = f'program_tokenizer_{self.task_dataset.dataset_type.name}_{self.data_multiplier}_{self.is_test}.pkl'
+        cache_file = self.task_dataset.cache_dir / filename
+
+        if cache_file.exists():
+            print(f"Loading program tokenizer from {cache_file}")
+            return pickle.load(cache_file.open('rb'))
+
+        tokenizer = ProgramTokenizer()
+        program_ids = []
+        for idx in tqdm(range(len(self)), desc="Building program tokenizer"):
+            program_ids.append(self[idx].uid)
+        tokenizer.build(program_ids)
+
+        with open(cache_file, 'wb') as f:
+            print(f"Saving program tokenizer to {cache_file}")
+            pickle.dump(tokenizer, f)
+        return tokenizer
+
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):
     """Initialize worker for DataLoader"""
@@ -528,69 +609,109 @@ def worker_init_fn(worker_id):
         dataset = worker_info.dataset
         dataset._initialize_data()
 
-# def collate_fn_project(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_height=32, max_width=32, flatten=True, is_test=False):    
-    
-#     flattened_grids = []
-#     attributes = []
 
-#     for grid in batch:
-#         # Optionally permute the grid using the grid.permute method
-#         if permute:
-#             grid = grid.permute()
+# Define the NamedTuple for the collate function output
+class EXAMPLE(NamedTuple):
+    input_grids: torch.Tensor
+    output_grids: torch.Tensor
+    program_ids: torch.Tensor
+    attributes: List[Dict[str, any]]
 
-#         # Flatten each grid with optional EOS markers and padding
-#         projected_array = grid.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
-#         flattened_grids.append(projected_array.flatten() if flatten else projected_array)
 
-#         # Collect attributes and convert numpy types to native Python types
-#         attributes.append({
-#             'idx': int(grid.idx),
-#             'program_id': str(grid.program_id),
-#             'task_id': str(grid.task_id),
-#             'dataset': str(grid.dataset),
-#             'color_perm': str(grid.color_perm),
-#             'transform': str(grid.transform),
-#             'is_test': bool(grid.is_test),
-#             'is_input': bool(grid.is_input)
-#         })
 
-#     # Convert the lists of numpy arrays to tensors
-#     flattened_grids = np.array(flattened_grids)
+def collate_fn_project(batch, program_tokenizer, pad_value=-1, device=torch.device('cpu'), max_height=32, max_width=32, flatten=True):    
+    flattened_input_grids = []
+    flattened_output_grids = []
+    program_ids = []
+    attributes = []
 
-#     # Convert to torch tensors and move to device
-#     flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+    for example in batch:
+        # Flatten each grid with optional EOS markers and padding
 
-#     return GRID_INPUT(grids=flattened_grids, attributes=attributes)
+        input_grids, output_grids = example.input, example.output
+
+        projected_input_grids = input_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+        projected_output_grids = output_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+
+        flattened_input_grids.append(projected_input_grids.flatten() if flatten else projected_input_grids)
+        flattened_output_grids.append(projected_output_grids.flatten() if flatten else projected_output_grids)
+
+        program_ids.append(program_tokenizer.encode(example.uid)[0])
+
+        # Collect attributes and convert numpy types to native Python types
+        attributes.append({
+            'idx': int(example.idx),
+            'program_id': str(example.program_id),
+            'task_id': str(example.task_id),
+            'dataset': str(example.dataset),
+            'color_perm': str(example.color_perm),
+            'transform': str(example.transform),
+            'is_test': bool(example.is_test),
+        })
+
+    # Convert the lists of numpy arrays to tensors
+    flattened_input_grids = np.array(flattened_input_grids)
+    flattened_output_grids = np.array(flattened_output_grids)
+    program_ids = np.array(program_ids)
+
+
+    # Convert to torch tensors and move to device
+    flattened_input_grids = torch.tensor(flattened_input_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+    flattened_output_grids = torch.tensor(flattened_output_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+    program_ids = torch.tensor(program_ids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+    return EXAMPLE(input_grids=flattened_input_grids, 
+                   output_grids=flattened_output_grids, 
+                   program_ids=program_ids, 
+                   attributes=attributes)
 
 
 
 
 if __name__ == "__main__":
-    ds = TaskDataset(dataset_type=DatasetType.ALL, data_multiplier=2)
+
+    data_multiplier = 2
+    dataset_type = DatasetType.ALL
+    is_test = False
+    ds = TaskDataset(dataset_type=dataset_type, data_multiplier=data_multiplier)
 
     print("Length of dataset:", len(ds))
-    print("Shared length:", ds._num_original_tasks)
+    print("Number of original tasks:", ds.num_of_original_tasks)
+    print("Number of total tasks:", ds.num_of_total_tasks)
 
+    assert ds.num_of_total_tasks == data_multiplier * ds.num_of_original_tasks
+
+    # Test TaskDataset
     print(ds[0])
-    print(ds[0+ds._num_original_tasks])
-    print(ds[0+ds._num_original_tasks].train[0])
-    print(ds[0+ds._num_original_tasks].train[0].input)
+    print(ds[0+ds.num_of_original_tasks])
+    print(ds[0+ds.num_of_original_tasks].train[0])
+    print(ds[0+ds.num_of_original_tasks].train[0].input)
 
     print(ds[1])
-    print(ds[1+ds._num_original_tasks])
-    print(ds[1+ds._num_original_tasks].train[0])
-    print(ds[1+ds._num_original_tasks].train[0].input)
+    print(ds[1+ds.num_of_original_tasks])
+    print(ds[1+ds.num_of_original_tasks].train[0])
+    print(ds[1+ds.num_of_original_tasks].train[0].input)
     
-    # Test ExampleDataset
-    print("\n---- Testing ExampleDataset ----")
     
     # Create train example dataset
-    train_ex_ds = ExampleDataset(dataset_type=DatasetType.ALL, data_multiplier=3, is_test=False)
+    train_ex_ds = ExampleDataset(dataset_type=dataset_type, data_multiplier=data_multiplier, is_test=is_test)
     print("Length of train example dataset:", len(train_ex_ds))
     print("Train examples per task:", train_ex_ds.examples_per_task)
     print("Base length:", train_ex_ds.number_of_original_examples)
     print("Total length:", train_ex_ds.number_of_total_examples)
-    
+
+    assert train_ex_ds.number_of_original_examples == train_ex_ds.examples_per_task * ds.num_of_original_tasks
+    assert train_ex_ds.number_of_total_examples == train_ex_ds.examples_per_task * ds.num_of_total_tasks
+    assert train_ex_ds.number_of_total_examples == data_multiplier * train_ex_ds.number_of_original_examples
+
+    tokenizer = train_ex_ds.get_program_tokenizer()
+
+    print("Number of tokens in tokenizer:", len(tokenizer))
+    print("Number of examples in train example dataset:", train_ex_ds.number_of_total_examples // 3)
+    if len(tokenizer) < train_ex_ds.number_of_total_examples // train_ex_ds.examples_per_task:
+        print(f"Warning: Number of unique tokens ({len(tokenizer)}) is less than expected unique tasks "
+              f"({train_ex_ds.number_of_total_examples // train_ex_ds.examples_per_task}). "
+              f"This is likely due to permutation collisions.")
+
     # # Create test example dataset
     # test_ex_ds = ExampleDataset(dataset_type=DatasetType.ALL, data_multiplier=2, is_test=True)
     # print("Length of test example dataset:", len(test_ex_ds))
@@ -599,52 +720,47 @@ if __name__ == "__main__":
     
     # Test accessing examples
 
-    train_idx = 3
+    train_idx = 6
     print("\nExample from train dataset (original, unpermuted):")
     train_example = train_ex_ds[train_idx]
     print(train_example)
+
+    print("UID:", train_example.uid)
+    print("Tokenized UID:", tokenizer.encode(train_example.uid))
+
+    print(tokenizer.idx2token[1])
+    print(tokenizer.idx2token[0])
 
     print("\nExample from train dataset (permuted):")
     train_example = train_ex_ds[train_ex_ds.number_of_original_examples + train_idx]
     print(train_example)
     
-    # # Get the last unpermuted example
-    # print("\nLast unpermuted example from train dataset:")
-    # train_example = train_ex_ds[train_ex_ds._number_of_original_examples - 1]
-    # print(f"Example ID: {train_example.idx}, Task ID: {train_example.task_id}, Is test: {train_example.is_test}")
-    # print(f"Input shape: {train_example.input.array.shape}, Output shape: {train_example.output.array.shape}")
-    # print(train_example.input)
-    
-    # # Get the first permuted example
-    # print("\nFirst permuted example from train dataset:")
-    # train_example = train_ex_ds[train_ex_ds._number_of_original_examples]
-    # print(f"Example ID: {train_example.idx}, Task ID: {train_example.task_id}, Is test: {train_example.is_test}")
-    # print(f"Input shape: {train_example.input.array.shape}, Output shape: {train_example.output.array.shape}")
-    # print(train_example.input)
-    
-    # print("\nExample from test dataset (last unpermuted):")
-    # test_example = test_ex_ds[test_ex_ds._number_of_original_examples - 1]
-    # print(f"Example ID: {test_example.idx}, Task ID: {test_example.task_id}, Is test: {test_example.is_test}")
-    # print(f"Input shape: {test_example.input.array.shape}, Output shape: {test_example.output.array.shape}")
-    # print(test_example.input)
-    
-    # print("\nExample from test dataset (first permuted):")
-    # test_example = test_ex_ds[test_ex_ds._number_of_original_examples]
-    # print(f"Example ID: {test_example.idx}, Task ID: {test_example.task_id}, Is test: {test_example.is_test}")
-    # print(f"Input shape: {test_example.input.array.shape}, Output shape: {test_example.output.array.shape}")
-    # print(test_example.input)
-    
-    # # Test with DataLoader
-    # print("\nTesting with DataLoader:")
-    # train_loader = DataLoader(
-    #     train_ex_ds, 
-    #     batch_size=4,
-    #     num_workers=2,
-    #     worker_init_fn=worker_init_fn,
-    #     shuffle=True
-    # )
-    
-    # # Get first batch
-    # batch = next(iter(train_loader))
-    # print(f"Batch size: {len(batch)}")
-    # print(f"First example in batch - Task ID: {batch[0].task_id}, Is test: {batch[0].is_test}")
+    # Test with DataLoader
+    print("\nTesting with DataLoader:")
+
+    collate_fn = partial(collate_fn_project, 
+                         program_tokenizer=tokenizer,
+                         pad_value=-1,
+                         max_height=32,
+                         max_width=32,
+                         flatten=False,
+                         device=torch.device('cpu'))
+
+    train_loader = DataLoader(
+        train_ex_ds, 
+        collate_fn=collate_fn,
+        batch_size=4,
+        num_workers=2,
+        worker_init_fn=worker_init_fn,
+        shuffle=False
+    )
+
+    input_grids, output_grids, program_ids, attributes = next(iter(train_loader))
+    print(input_grids.shape)
+    print(output_grids.shape)
+    print(program_ids.shape)
+    print(attributes)
+
+    print(program_ids)
+    for pid in program_ids:
+        print(tokenizer.decode([pid.item()]))
