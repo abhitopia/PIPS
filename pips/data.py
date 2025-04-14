@@ -178,6 +178,10 @@ class Grid:
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
+
+        assert isinstance(color_perm, ColorPermutation) or color_perm is None, "color_perm must be a ColorPermutation or None"
+        assert isinstance(transform, ArrayTransform) or transform is None, "transform must be an ArrayTransform or None"
+
         self.color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
         self.transform = transform if transform is not None else ArrayTransform.IDENT
         self.is_test = is_test
@@ -187,11 +191,16 @@ class Grid:
     def shape(self):
         return self.array.shape
     
+    @property
+    def uid(self):
+        """Returns a unique identifier combining program ID with color permutation and transformation."""
+        return f"{self.program_id}/{self.color_perm.name}/{self.transform.name}"
+    
     def __repr__(self):
         prefix = 'Test' if self.is_test else 'Train'
         io_type = 'Input' if self.is_input else 'Output'
         if all(x is not None for x in [self.program_id, self.dataset, self.task_id, self.idx]):
-            return f"{self.program_id}: {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}/{io_type}"
+            return f"{self.uid}: {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}/{io_type}"
         return f"Grid(shape={self.shape})"
     
     def flatten(self, max_size: Optional[int] = None, pad_value: int = -1, eos_value: Optional[int] = None):
@@ -357,6 +366,10 @@ class Example:
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
+
+        assert isinstance(color_perm, ColorPermutation) or color_perm is None, "color_perm must be a ColorPermutation or None"
+        assert isinstance(transform, ArrayTransform) or transform is None, "transform must be an ArrayTransform or None"
+
         self.color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
         self.transform = transform if transform is not None else ArrayTransform.IDENT
         self.is_test = is_test
@@ -387,12 +400,17 @@ class Example:
         )
     
     @property
+    def uid(self):
+        """Returns a unique identifier combining program ID with color permutation and transformation."""
+        return f"{self.program_id}/{self.color_perm.name}/{self.transform.name}"
+
+    @property
     def is_original(self):
         return self.color_perm.name == "CPID" and self.transform == ArrayTransform.IDENT
     
     def __repr__(self):
         prefix = 'Test' if self.is_test else 'Train'
-        return f'{self.program_id} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}'
+        return f'{self.uid} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}'
 
     def to_dict(self):
         return {
@@ -446,15 +464,15 @@ class Example:
         return cloned
 
     def permute(self, color_perm=None, arr_transform=None):
-        assert not self.is_original, "Cannot transform an original example. Please clone first."
 
+        clone = self.clone()
         color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
 
-        self.input = self.input.permute(color_perm, arr_transform)
-        self.output = self.output.permute(color_perm, arr_transform)
-        self.color_perm = color_perm
-        self.transform = arr_transform
-        return self
+        clone.input = clone.input.permute(color_perm, arr_transform)
+        clone.output = clone.output.permute(color_perm, arr_transform)
+        clone.color_perm = color_perm
+        clone.transform = arr_transform
+        return clone
 
 
 class ArcTask:
@@ -466,12 +484,21 @@ class ArcTask:
         self.train = train
         self.test = test
         self._complexity = None
+
+        assert isinstance(color_perm, ColorPermutation) or color_perm is None, "color_perm must be a ColorPermutation or None"
+        assert isinstance(transform, ArrayTransform) or transform is None, "transform must be an ArrayTransform or None"
+
         self._color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
         self._transform = transform if transform is not None else ArrayTransform.IDENT
 
-    def __repr__(self):
-        return f'ArcTask(id={self.id}, prog={self.prog_id}, dataset={self.dataset}, permuted={not self.is_original})'
+    def __repr__(self):    
+        return f'{self.uid} : {self.dataset}/{self.prog_id}/{self._color_perm.name}/{self._transform.name}'
 
+    @property
+    def uid(self):
+        """Returns a unique identifier combining program ID with color permutation and transformation."""
+        return f"{self.prog_id}/{self._color_perm.name}/{self._transform.name}"
+        
     def to_dict(self):
         result = {
             "id": self.id,
@@ -539,20 +566,20 @@ class ArcTask:
             
         Returns:
             self: The permuted task for chaining.
-        """
-        assert not self.is_original, "Cannot transform an original task. Please clone first."
-        
+        """        
+        clone = self.clone()
+
         color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
         
         # Apply permutation to all examples
-        for ex in self.train + self.test:
+        for ex in clone.train + clone.test:
             ex.permute(color_perm, arr_transform)
             
         # Store permutation information
-        self._color_perm = color_perm
-        self._transform = arr_transform
+        clone._color_perm = color_perm
+        clone._transform = arr_transform
         
-        return self
+        return clone
 
 
 def load_task(task_json, task_id, prog_id, dataset, inverse=False):
@@ -734,15 +761,16 @@ ARCAGI2_TRAIN = ArcTasksLoader(name='ARCAGI2_TRAIN', path='data/arc_dataset_coll
 ARCAGI2_EVAL = ArcTasksLoader(name='ARCAGI2_EVAL', path='data/arc_dataset_collection/dataset/ARC-AGI-2/data/evaluation')
 
 TRAIN_GRID_LOADERS = [
-    BARC_GP4OM_OM, BARC_GP4_OM, BARC_GP4O_OM, BARC_GP4O_OM_SUG, 
+    BARC_GP4OM_OM, # BARC_GP4_OM, BARC_GP4O_OM, BARC_GP4O_OM_SUG, 
     ARC_1D, ARC_COMMUNITY, ARC_CONCEPT, ARC_DBIGHAM,
     ARC_DIVA, ARC_MINI, ARC_NOSOUND, ARC_PQA,
     ARC_REARC_EASY, ARC_REARC_HARD, ARC_SEQUENCE, ARC_SORTOF,
     ARC_SYNTH_RIDDLES, ARC_TAMA, ARC_IPARC,
-    ARCAGI1_TRAIN, ARCAGI1_EVAL, ARCAGI2_TRAIN
+    # ARCAGI1_TRAIN, ARCAGI1_EVAL, 
+    ARCAGI2_TRAIN
 ]
 
-ARC_TRAIN = [ARCAGI1_TRAIN, ARCAGI2_TRAIN, ARCAGI1_EVAL]
+ARC_TRAIN = [ARCAGI2_TRAIN]
 
 VAL_GRID_LOADERS = [ARCAGI2_EVAL]
 

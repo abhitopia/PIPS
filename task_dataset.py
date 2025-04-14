@@ -21,7 +21,7 @@ logging.basicConfig(level=logging.INFO)
 
 def process_task_loader(loader, output_file, num_train=3, num_test=1):
     if output_file.exists():
-        logger.info(f"Cache exists for {loader.name}. Skipping.")
+        logger.info(f"Cache exists for {loader.name} at {output_file}. Skipping.")
         return
 
     tasks = loader.tasks
@@ -34,6 +34,8 @@ def process_task_loader(loader, output_file, num_train=3, num_test=1):
         ('task_id', 'U50'),
         ('program_id', 'U50'),
         ('dataset', 'U50'),
+        ('color_perm', 'U50'),
+        ('transform', 'U50'),
         
         # Train pairs (input and output grids)
         *[(f'train_input_{i}', (np.int8, (30, 30))) for i in range(1, num_train+1)],
@@ -98,6 +100,8 @@ def process_task_loader(loader, output_file, num_train=3, num_test=1):
         task_dict['task_id'] = task.id
         task_dict['program_id'] = task.prog_id
         task_dict['dataset'] = task.dataset
+        task_dict['color_perm'] = task._color_perm.name
+        task_dict['transform'] = task._transform.name
         
         # Process selected train examples (already randomly selected)
         for j in range(num_train):
@@ -213,7 +217,7 @@ def load_task_loaders(loaders, cache_dir=Path('.cache'), verbose=False):
 
 class TaskDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
-                 cache_dir=Path(__file__).resolve().parent.parent / '.cache',
+                 cache_dir=Path(__file__).resolve().parent / '.cache',
                  max_tasks: int = None,
                  seed: int = 42):
         self.dataset_type = dataset_type
@@ -313,8 +317,8 @@ class TaskDataset(Dataset):
                 program_id=task['program_id'],
                 task_id=task['task_id'],
                 dataset=task['dataset'],
-                color_perm=ColorPermutation.CPID.name,  # Original color permutation
-                transform=ArrayTransform.IDENT.name,    # Original transformation
+                color_perm=ColorPermutation.from_name(task['color_perm']),  # Original color permutation
+                transform=ArrayTransform[task['transform']],    # Original transformation
                 is_test=False
             )
             train_examples.append(example)
@@ -344,8 +348,8 @@ class TaskDataset(Dataset):
                 program_id=task['program_id'],
                 task_id=task['task_id'],
                 dataset=task['dataset'],
-                color_perm=ColorPermutation.CPID.name,  # Original color permutation
-                transform=ArrayTransform.IDENT.name,    # Original transformation
+                color_perm=ColorPermutation.from_name(task['color_perm']),  # Original color permutation
+                transform=ArrayTransform[task['transform']],    # Original transformation
                 is_test=True
             )
             test_examples.append(example)
