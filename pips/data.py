@@ -10,6 +10,7 @@ from tqdm import tqdm
 import concurrent.futures
 from functools import partial
 
+
 logger = logging.getLogger(__name__)
 
 try:
@@ -20,31 +21,87 @@ except ImportError:
     logger.warning("ujson not found, falling back to standard json module. Consider installing ujson for better performance: pip install ujson")
 
 
-class ColorPermutation(Enum):
-    CPID = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]  # Identity
-    CP01 = [7, 4, 5, 2, 8, 3, 0, 9, 6, 1]
-    CP02 = [0, 9, 4, 5, 6, 8, 1, 3, 2, 7]
-    CP03 = [7, 4, 1, 9, 6, 0, 8, 2, 5, 3]
-    CP04 = [9, 6, 5, 7, 4, 0, 3, 8, 1, 2]
-    CP05 = [1, 8, 0, 3, 9, 5, 6, 2, 7, 4]
-    CP06 = [5, 3, 1, 9, 7, 6, 0, 2, 8, 4]
-    CP07 = [1, 4, 3, 8, 7, 9, 6, 2, 5, 0]
-    CP08 = [6, 0, 2, 1, 3, 4, 7, 8, 5, 9]
-    CP09 = [2, 0, 3, 8, 4, 6, 1, 9, 5, 7]
-    RAND = None  # Placeholder for random permutation
-
+class ColorPermutation:
+    """Class representing color permutations with support for serialization/deserialization."""
+    
+    # Predefined permutations
+    PREDEFINED = {
+        "CPID": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9],  # Identity
+        "CP01": [7, 4, 5, 2, 8, 3, 0, 9, 6, 1],
+        "CP02": [0, 9, 4, 5, 6, 8, 1, 3, 2, 7],
+        "CP03": [7, 4, 1, 9, 6, 0, 8, 2, 5, 3],
+        "CP04": [9, 6, 5, 7, 4, 0, 3, 8, 1, 2],
+        "CP05": [1, 8, 0, 3, 9, 5, 6, 2, 7, 4],
+        "CP06": [5, 3, 1, 9, 7, 6, 0, 2, 8, 4],
+        "CP07": [1, 4, 3, 8, 7, 9, 6, 2, 5, 0],
+        "CP08": [6, 0, 2, 1, 3, 4, 7, 8, 5, 9],
+        "CP09": [2, 0, 3, 8, 4, 6, 1, 9, 5, 7]
+    }
+    
+    @classmethod
+    def get_all_predefined(cls):
+        """Get all predefined permutation names."""
+        return list(cls.PREDEFINED.keys())
+    
+    def __init__(self, name, values=None):
+        """Initialize a color permutation.
+        
+        Args:
+            name: Name of the permutation
+            values: List of 10 integers representing the permutation. If None, tries to 
+                  use a predefined permutation based on the name.
+        """
+        self.name = name
+        
+        # If values provided, use them, otherwise look up predefined or parse from name
+        if values is not None:
+            self.values = values
+        elif name in self.PREDEFINED:
+            self.values = self.PREDEFINED[name]
+        elif name.startswith("CPRAND_"):
+            # Parse the values from the name
+            try:
+                self.values = [int(d) for d in name[7:]]
+                # Validate values
+                if len(self.values) != 10 or set(self.values) != set(range(10)):
+                    raise ValueError(f"Invalid permutation encoding in {name}")
+            except (ValueError, IndexError):
+                raise ValueError(f"Invalid permutation encoding in {name}")
+        else:
+            raise ValueError(f"Unknown permutation name: {name}")
+        
+        # Create the transform function
+        self._color_mapping = {original: new for original, new in enumerate(self.values)}
+    
     @property
     def transform(self):
-        if self == ColorPermutation.RAND:
-            # Generate a random permutation of numbers 0-9
-            colors = list(range(10))
-            random.shuffle(colors)
-            color_mapping = {original: new for original, new in enumerate(colors)}
-            return lambda x: np.vectorize(color_mapping.get)(x)
-        else:
-            colors = self.value
-            color_mapping = {original: new for original, new in enumerate(colors)}
-            return lambda x: np.vectorize(color_mapping.get)(x)
+        """Get the transform function for this permutation."""
+        return lambda x: np.vectorize(self._color_mapping.get)(x)
+    
+    @classmethod
+    def from_name(cls, name):
+        """Create a ColorPermutation from a name."""
+        return cls(name)
+    
+    @classmethod
+    def random(cls):
+        """Create a random color permutation with an encoded name."""
+        # Generate a random permutation
+        values = list(range(10))
+        random.shuffle(values)
+        
+        # Create a name that encodes the values
+        name = "CPRAND_" + "".join(str(d) for d in values)
+        
+        return cls(name, values)
+    
+    def __eq__(self, other):
+        if isinstance(other, ColorPermutation):
+            return self.values == other.values
+        return False
+    
+    def __repr__(self):
+        return f"ColorPermutation({self.name})"
 
 
 class ArrayTransform(Enum):
@@ -71,14 +128,49 @@ class ArrayTransform(Enum):
         }[self.name]
 
 
+def get_permutation_params(color_perm: Optional[object] = None, 
+                          arr_transform: Optional[ArrayTransform] = None,
+                          avoid_identity: bool = True) -> tuple:
+    """Get color permutation and array transformation parameters.
+    
+    Args:
+        color_perm: Color permutation to use. If None, a random one is selected.
+        arr_transform: Array transformation to use. If None, a random one is selected.
+        avoid_identity: If True, avoid returning identity for both parameters.
+        
+    Returns:
+        tuple: (color_perm, arr_transform) objects
+    """
+    # Handle color permutation
+    if color_perm is None:
+        # Use a completely random permutation
+        color_perm = ColorPermutation.random()
+    elif isinstance(color_perm, str):
+        color_perm = ColorPermutation.from_name(color_perm)
+    
+    # Handle array transformation
+    if arr_transform is None:
+        arr_transform = random.choice(list(ArrayTransform))
+    elif isinstance(arr_transform, str):
+        arr_transform = ArrayTransform[arr_transform]
+    
+    # Check for identity case and retry if needed
+    if (avoid_identity and 
+        color_perm.name == "CPID" and 
+        arr_transform == ArrayTransform.IDENT):
+        return get_permutation_params(None, None, avoid_identity)
+    
+    return color_perm, arr_transform
+
+
 class Grid:
     def __init__(self, array: np.ndarray, *, 
                  idx: Optional[int] = None,
                  program_id: Optional[str] = None,
                  task_id: Optional[str] = None,
                  dataset: Optional[str] = None,
-                 color_perm: Optional[str] = None,
-                 transform: Optional[str] = None,
+                 color_perm: ColorPermutation = None,
+                 transform: ArrayTransform = None,
                  is_test: bool = False,
                  is_input: bool = True):
         self.array = np.asarray(array)
@@ -86,8 +178,8 @@ class Grid:
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
-        self.color_perm = color_perm
-        self.transform = transform
+        self.color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
+        self.transform = transform if transform is not None else ArrayTransform.IDENT
         self.is_test = is_test
         self.is_input = is_input
         
@@ -99,7 +191,7 @@ class Grid:
         prefix = 'Test' if self.is_test else 'Train'
         io_type = 'Input' if self.is_input else 'Output'
         if all(x is not None for x in [self.program_id, self.dataset, self.task_id, self.idx]):
-            return f"{self.program_id} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm}/{self.transform}/{io_type}"
+            return f"{self.program_id}: {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}/{io_type}"
         return f"Grid(shape={self.shape})"
     
     def flatten(self, max_size: Optional[int] = None, pad_value: int = -1, eos_value: Optional[int] = None):
@@ -190,38 +282,24 @@ class Grid:
             is_input=self.is_input
         )
 
-    def permute(self, color_perm: ColorPermutation = ColorPermutation.RAND, arr_transform: Optional[ArrayTransform] = None, in_place: bool = False):
+    def permute(self, color_perm=None, arr_transform=None, in_place: bool = False):
         """Apply color permutation and array transformation to the grid.
         
         Args:
-            color_perm: Color permutation to apply. Defaults to a random permutation. If None, a random permutation except RAND is chosen.
-            arr_transform: Array transformation to apply. If None, a random transformation is chosen.
+            color_perm: ColorPermutation to apply. If None, a random permutation is selected.
+            arr_transform: ArrayTransform to apply. If None, a random transformation is selected.
             in_place: If True, modify this grid instance. If False, return a new grid.
         """
         try:
-            if color_perm is None:
-                cps = list(ColorPermutation)[:-1]  # Exclude the random permutation
-                color_perm = random.choice(cps)
-            else:
-                assert isinstance(color_perm, ColorPermutation), "color_perm should be an instance of ColorPermutation"
-
-            if arr_transform is None:
-                ats = list(ArrayTransform)
-                arr_transform = random.choice(ats)
-            else:
-                assert isinstance(arr_transform, ArrayTransform), "arr_transform should be an instance of ArrayTransform"
-
-            # Try again if the identity transformation is selected with the identity color permutation
-            if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
-                return self.permute()
+            color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
 
             array = color_perm.transform(self.array)
             array = arr_transform.transform(array)
 
             if in_place:
                 self.array = array
-                self.color_perm = color_perm.name
-                self.transform = arr_transform.name
+                self.color_perm = color_perm
+                self.transform = arr_transform
                 return self
 
             return Grid(
@@ -230,8 +308,8 @@ class Grid:
                 program_id=self.program_id,
                 task_id=self.task_id,
                 dataset=self.dataset,
-                color_perm=color_perm.name,
-                transform=arr_transform.name,
+                color_perm=color_perm,
+                transform=arr_transform,
                 is_test=self.is_test,
                 is_input=self.is_input
             )
@@ -239,7 +317,7 @@ class Grid:
             # Log all relevant attributes for debugging
             logger.error(f"Error during permutation: {e}")
             logger.error(f"Grid attributes: idx={self.idx}, program_id={self.program_id}, task_id={self.task_id}, "
-                         f"dataset={self.dataset}, color_perm={self.color_perm}, transform={self.transform}, "
+                         f"dataset={self.dataset}, color_perm={self.color_perm.name}, transform={self.transform.name}, "
                          f"is_test={self.is_test}, is_input={self.is_input}, array_shape={self.array.shape}")
             raise
 
@@ -273,18 +351,16 @@ class Grid:
         return padded_array
 
 class Example:
-    def __init__(self, idx: int, input: np.array, output: np.array, program_id: str, task_id: str, dataset: str, color_perm: str, transform: str, is_test=False):
+    def __init__(self, idx: int, input: np.array, output: np.array, program_id: str, task_id: str, dataset: str, 
+                 color_perm: ColorPermutation = None, transform: ArrayTransform = None, is_test=False):
         self.idx = idx    
         self.program_id = program_id
         self.task_id = task_id
         self.dataset = dataset
-        self.color_perm = color_perm
-        self.transform = transform
+        self.color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
+        self.transform = transform if transform is not None else ArrayTransform.IDENT
         self.is_test = is_test
         self._complexity = None
-        self._is_original = color_perm == ColorPermutation.CPID.name and transform == ArrayTransform.IDENT.name
-        self._original_input = None
-        self._original_output = None
         
         # Create Grid objects with full metadata
         self.input = Grid(
@@ -293,8 +369,8 @@ class Example:
             program_id=program_id,
             task_id=task_id,
             dataset=dataset,
-            color_perm=color_perm,
-            transform=transform,
+            color_perm=self.color_perm,
+            transform=self.transform,
             is_test=is_test,
             is_input=True
         )
@@ -304,19 +380,19 @@ class Example:
             program_id=program_id,
             task_id=task_id,
             dataset=dataset,
-            color_perm=color_perm,
-            transform=transform,
+            color_perm=self.color_perm,
+            transform=self.transform,
             is_test=is_test,
             is_input=False
         )
     
     @property
     def is_original(self):
-        return self._is_original
+        return self.color_perm.name == "CPID" and self.transform == ArrayTransform.IDENT
     
     def __repr__(self):
         prefix = 'Test' if self.is_test else 'Train'
-        return f'{self.program_id} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm}/{self.transform}'
+        return f'{self.program_id} : {self.dataset}/{self.task_id}/{prefix}/{self.idx}/{self.color_perm.name}/{self.transform.name}'
 
     def to_dict(self):
         return {
@@ -326,8 +402,8 @@ class Example:
             "program_id": self.program_id,
             "task_id": self.task_id,
             "dataset": self.dataset,
-            "color_perm": self.color_perm,
-            "transform": self.transform,
+            "color_perm": self.color_perm.name,
+            "transform": self.transform.name,
             "is_test": self.is_test
         }
 
@@ -340,8 +416,8 @@ class Example:
             program_id=example_dict['program_id'],
             task_id=example_dict['task_id'],
             dataset=example_dict['dataset'],
-            color_perm=example_dict['color_perm'],
-            transform=example_dict['transform'],
+            color_perm=ColorPermutation.from_name(example_dict['color_perm']),
+            transform=ArrayTransform[example_dict['transform']],
             is_test=example_dict['is_test']
         )
 
@@ -363,51 +439,38 @@ class Example:
 
     def clone(self):
         """Create a deep copy of the example. But it is made as not original example."""
-        assert self._is_original, "Cannot clone an permuted example."
+        assert self.is_original, "Cannot clone a permuted example."
 
         cloned = copy.deepcopy(self)
-        cloned._is_original = False
-        cloned._original_input = self.input.clone()
-        cloned._original_output = self.output.clone()
+
         return cloned
 
-    def permute(self, color_perm: Optional[ColorPermutation] = None, arr_transform: Optional[ArrayTransform] = None):
-        assert not self._is_original, "Cannot transform an original example. Please clone first."
+    def permute(self, color_perm=None, arr_transform=None):
+        assert not self.is_original, "Cannot transform an original example. Please clone first."
 
-        if color_perm is None:
-            cps = list(ColorPermutation)
-            color_perm = random.choice(cps)
-        else:
-            assert isinstance(color_perm, ColorPermutation), "color_perm should be an instance of ColorPermutation"
-
-        if arr_transform is None:
-            ats = list(ArrayTransform)
-            arr_transform = random.choice(ats)
-        else:
-            assert isinstance(arr_transform, ArrayTransform), "arr_transform should be an instance of ArrayTransform"
-
-        # Try again if the identity transformation is selected with the identity color permutation
-        if color_perm == ColorPermutation.CPID and arr_transform == ArrayTransform.IDENT:
-            return self.permute()
+        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
 
         self.input = self.input.permute(color_perm, arr_transform)
         self.output = self.output.permute(color_perm, arr_transform)
-        self.color_perm = color_perm.name
-        self.transform = arr_transform.name
+        self.color_perm = color_perm
+        self.transform = arr_transform
         return self
 
 
 class ArcTask:
-    def __init__(self, id, prog_id, train: List[Example], test: List[Example], dataset=None):
+    def __init__(self, id, prog_id, train: List[Example], test: List[Example], dataset=None, 
+                 color_perm: ColorPermutation = None, transform: ArrayTransform = None):
         self.id = id
         self.prog_id = prog_id
         self.dataset = dataset
         self.train = train
         self.test = test
         self._complexity = None
+        self._color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
+        self._transform = transform if transform is not None else ArrayTransform.IDENT
 
     def __repr__(self):
-        return f'ArcTask(id={self.id}, prog={self.prog_id}, dataset={self.dataset})'
+        return f'ArcTask(id={self.id}, prog={self.prog_id}, dataset={self.dataset}, permuted={not self.is_original})'
 
     def to_dict(self):
         result = {
@@ -415,17 +478,23 @@ class ArcTask:
             "prog_id": self.prog_id,
             "dataset": self.dataset,
             "train": [e.to_dict() for e in self.train],
-            "test": [e.to_dict() for e in self.test]
+            "test": [e.to_dict() for e in self.test],
+            "color_perm": self._color_perm.name,
+            "transform": self._transform.name
         }
         return result
     
     @staticmethod
     def from_dict(task_dict):
-        return ArcTask(id=task_dict['id'],
-                       prog_id=task_dict['prog_id'],
-                       train=task_dict['train'],
-                       test=task_dict['test'],
-                       dataset=task_dict.get('dataset'))
+        return ArcTask(
+            id=task_dict['id'],
+            prog_id=task_dict['prog_id'],
+            train=[Example.from_dict(e) if isinstance(e, dict) else e for e in task_dict['train']],
+            test=[Example.from_dict(e) if isinstance(e, dict) else e for e in task_dict['test']],
+            dataset=task_dict.get('dataset'),
+            color_perm=ColorPermutation.from_name(task_dict.get('color_perm', "CPID")),
+            transform=ArrayTransform[task_dict.get('transform', "IDENT")]
+        )
 
     def compute_complexity(self):
         complexity = np.max([e.complexity for e in self.train + self.test])
@@ -436,6 +505,55 @@ class ArcTask:
         if self._complexity is None:
             self._complexity = self.compute_complexity()
         return self._complexity
+        
+    @property
+    def is_original(self):
+        return self._color_perm.name == "CPID" and self._transform == ArrayTransform.IDENT
+        
+    def clone(self):
+        """Create a deep copy of the task. But mark it as not original."""
+        assert self.is_original, "Cannot clone a permuted task."
+        
+        # Create new lists with cloned examples
+        cloned_train = [ex.clone() for ex in self.train]
+        cloned_test = [ex.clone() for ex in self.test]
+        
+        cloned = ArcTask(
+            id=self.id,
+            prog_id=self.prog_id,
+            train=cloned_train,
+            test=cloned_test,
+            dataset=self.dataset,
+            color_perm=self._color_perm,
+            transform=self._transform
+        )
+        
+        return cloned
+        
+    def permute(self, color_perm=None, arr_transform=None):
+        """Apply permutation to all examples in the task.
+        
+        Args:
+            color_perm: ColorPermutation to apply. If None, a random permutation is chosen.
+            arr_transform: ArrayTransform to apply. If None, a random transformation is chosen.
+            
+        Returns:
+            self: The permuted task for chaining.
+        """
+        assert not self.is_original, "Cannot transform an original task. Please clone first."
+        
+        color_perm, arr_transform = get_permutation_params(color_perm, arr_transform)
+        
+        # Apply permutation to all examples
+        for ex in self.train + self.test:
+            ex.permute(color_perm, arr_transform)
+            
+        # Store permutation information
+        self._color_perm = color_perm
+        self._transform = arr_transform
+        
+        return self
+
 
 def load_task(task_json, task_id, prog_id, dataset, inverse=False):
     """Load a single task from JSON data."""
@@ -447,8 +565,8 @@ def load_task(task_json, task_id, prog_id, dataset, inverse=False):
             program_id=prog_id,
             task_id=task_id,
             dataset=dataset,
-            color_perm=ColorPermutation.CPID.name,
-            transform=ArrayTransform.IDENT.name,
+            color_perm=ColorPermutation("CPID"),
+            transform=ArrayTransform.IDENT,
             is_test=False
         ) for idx, ex in enumerate(task_json['train'])
     ]
@@ -461,8 +579,8 @@ def load_task(task_json, task_id, prog_id, dataset, inverse=False):
             program_id=prog_id,
             task_id=task_id,
             dataset=dataset,
-            color_perm=ColorPermutation.CPID.name,
-            transform=ArrayTransform.IDENT.name,
+            color_perm=ColorPermutation("CPID"),
+            transform=ArrayTransform.IDENT,
             is_test=True
         ) for idx, ex in enumerate(task_json['test'])
     ]
