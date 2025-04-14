@@ -1,2 +1,3 @@
 - [x] Make activation function configurable
 - [x] Introduce depth embedding for the interpreter
+- [ ] Have different margin for source vs destination
