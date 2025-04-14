@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 
 from pips.data import Example, ArcTask, ColorPermutation, ArrayTransform, Grid
-from pips.task_dataset import ArcTrainingDataset
+from pips.task_dataset_1 import ArcTrainingDataset
 
 # Test fixtures
 @pytest.fixture

@@ -30,7 +30,6 @@ class ProSIPConfig:
 
     # Trajectory loss config
     margin: float = 0.0
-    zero_margin_at_end: bool = True
 
     # LoRA parameters
     lora_rank: int = 8
@@ -66,8 +65,8 @@ class ProSIPConfig:
             activation=self.activation,
             ffn_dim=self.n_dim * 4,
             lora_rank=self.lora_rank,
-            lora_mlp_layers=self.lora_mlp_layers,
-            lora_mlp_dim=self.lora_mlp_dim
+            mlp_layers=self.lora_mlp_layers,
+            mlp_dim=self.lora_mlp_dim
         )
 
 class ProSIPModel(nn.Module):
@@ -75,7 +74,6 @@ class ProSIPModel(nn.Module):
         super().__init__()
         self.config = config
         self.trajectory_margin = config.margin
-        self.zero_margin_at_end = config.zero_margin_at_end
 
         self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
         self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
@@ -97,8 +95,7 @@ class ProSIPModel(nn.Module):
         loss = vectorized_monotonic_trajectory_loss(intermediate_embeddings, 
                                                     encoded_input_grids, 
                                                     encoded_output_grids,
-                                                    margin=self.trajectory_margin,
-                                                    zero_margin_at_end=self.zero_margin_at_end)
+                                                    margin=self.trajectory_margin)
 
         print("intermediate_embeddings.shape", intermediate_embeddings.shape)
         print("loss", loss)

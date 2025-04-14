@@ -22,7 +22,7 @@ def vectorized_point_distance(points, ref_point):
     distances = norms.sum(dim=2)
     return distances
 
-def vectorized_monotonic_trajectory_loss(traj, src, dest, margin=0.0, zero_margin_at_end=True):
+def vectorized_monotonic_trajectory_loss(traj, src, dest, margin=0.0):
     """
     Computes a loss that enforces the following:
       1. For the source side, each successive point is at least `margin` further away from src.
@@ -59,11 +59,9 @@ def vectorized_monotonic_trajectory_loss(traj, src, dest, margin=0.0, zero_margi
 
     # Compute the destination-side differences.
     # We want: d_dest[i+1] + margin <= d_dest[i]  --> d_dest[i+1] - d_dest[i] + margin <= 0.
-    diff_dest = d_dest[1:] - d_dest[:-1]  # Shape: [M-1, B]
+    diff_dest = d_dest[1:] - d_dest[:-1] + margin  # Shape: [M-1, B]
     # Build a margin vector with shape [M-1, B] that applies the margin to every adjacent pair except the last:
-    margin_vec = torch.full_like(diff_dest, margin)
-    margin_vec[-1] = 0.0 if zero_margin_at_end else margin # Last adjacent pair: last intermediate point → dest has zero margin.
-    loss_dest = F.relu(diff_dest + margin_vec).mean()
+    loss_dest = F.relu(diff_dest).mean()
 
     total_loss = loss_src + loss_dest
     return total_loss

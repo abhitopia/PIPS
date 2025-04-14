@@ -13,7 +13,7 @@ from pips.data import (
     Grid
 )
 
-from pips.task_dataset import ArcTrainingDataset
+from pips.task_dataset_1 import ArcTrainingDataset
 
 # Test fixtures
 @pytest.fixture

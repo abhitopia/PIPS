@@ -587,3 +587,107 @@ class ArcTasksLoader:
                     prog_prefix=f'INV_{self.prog_prefix}' if separate_prog else self.prog_prefix,
                     identical_task_per_folder=self.identical_task_per_folder, 
                     inverse=True)
+    
+
+
+ARC_1D = ArcTasksLoader(name='ARC_1D', path='data/arc_dataset_collection/dataset/1D-ARC/data')
+BARC_GP4OM_OM = ArcTasksLoader(name='BARC_GP4OM_OM', path='data/barc_tasks/data/100k_gpt4o-mini_generated_problems', has_jsonlines=True)
+BARC_GP4_OM = ArcTasksLoader(name='BARC_GP4_OM', path='data/barc_tasks/data/100k-gpt4-description-gpt4omini-code_generated_problems', has_jsonlines=True)
+BARC_GP4O_OM = ArcTasksLoader(name='BARC_GP4O_OM', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_100k', has_jsonlines=True)
+BARC_GP4O_OM_SUG = ArcTasksLoader(name='BARC_GP4O_OM_SUG', path='data/barc_tasks/data/200k_HEAVY_gpt4o-description-gpt4omini-code_generated_problems_data_suggestfunction_100k', has_jsonlines=True)
+ARC_COMMUNITY = ArcTasksLoader(name='ARC_COMMUNITY', path='data/arc_dataset_collection/dataset/arc-community/data')
+ARC_CONCEPT = ArcTasksLoader(name='ARC_CONCEPT', path='data/arc_dataset_collection/dataset/ConceptARC/data')
+ARC_DBIGHAM = ArcTasksLoader(name='ARC_DBIGHAM', path='data/arc_dataset_collection/dataset/dbigham/data')
+ARC_DIVA = ArcTasksLoader(name='ARC_DIVA', path='data/arc_dataset_collection/dataset/arc-dataset-diva/data', identical_task_per_folder=False)
+ARC_MINI = ArcTasksLoader(name='ARC_MINI', path='data/arc_dataset_collection/dataset/Mini-ARC/data')
+ARC_NOSOUND = ArcTasksLoader(name='ARC_NOSOUND', path='data/arc_dataset_collection/dataset/nosound/data')
+ARC_PQA = ArcTasksLoader(name='ARC_PQA', path='data/arc_dataset_collection/dataset/PQA/data', identical_task_per_folder=False)
+ARC_REARC_EASY = ArcTasksLoader(name='ARC_REARC_EASY', path='data/arc_dataset_collection/dataset/RE-ARC/data/easy', prog_prefix='REARCEASY')
+ARC_REARC_HARD = ArcTasksLoader(name='ARC_REARC_HARD', path='data/arc_dataset_collection/dataset/RE-ARC/data/hard', prog_prefix='REARCHARD')
+ARC_SEQUENCE = ArcTasksLoader(name='ARC_SEQUENCE', path='data/arc_dataset_collection/dataset/Sequence_ARC/data', prog_prefix='SEQ')
+ARC_SORTOF = ArcTasksLoader(name='ARC_SORTOF', path='data/arc_dataset_collection/dataset/Sort-of-ARC/data')
+ARC_SYNTH_RIDDLES = ArcTasksLoader(name='ARC_SYNTH_RIDDLES', path='data/arc_dataset_collection/dataset/synth_riddles/data')
+ARC_TAMA = ArcTasksLoader(name='ARC_TAMA', path='data/arc_dataset_collection/dataset/arc-dataset-tama/data')
+ARC_IPARC = ArcTasksLoader(name='ARC_IPARC', path='data/arc_dataset_collection/dataset/IPARC/data')
+
+ARCAGI1_TRAIN = ArcTasksLoader(name='ARCAGI1_TRAIN', path='data/arc_dataset_collection/dataset/ARC-AGI-1/data/training')
+ARCAGI1_EVAL = ArcTasksLoader(name='ARCAGI1_EVAL', path='data/arc_dataset_collection/dataset/ARC-AGI-1/data/evaluation')
+ARCAGI2_TRAIN = ArcTasksLoader(name='ARCAGI2_TRAIN', path='data/arc_dataset_collection/dataset/ARC-AGI-2/data/training')
+ARCAGI2_EVAL = ArcTasksLoader(name='ARCAGI2_EVAL', path='data/arc_dataset_collection/dataset/ARC-AGI-2/data/evaluation')
+
+TRAIN_GRID_LOADERS = [
+    BARC_GP4OM_OM, BARC_GP4_OM, BARC_GP4O_OM, BARC_GP4O_OM_SUG, 
+    ARC_1D, ARC_COMMUNITY, ARC_CONCEPT, ARC_DBIGHAM,
+    ARC_DIVA, ARC_MINI, ARC_NOSOUND, ARC_PQA,
+    ARC_REARC_EASY, ARC_REARC_HARD, ARC_SEQUENCE, ARC_SORTOF,
+    ARC_SYNTH_RIDDLES, ARC_TAMA, ARC_IPARC,
+    ARCAGI1_TRAIN, ARCAGI1_EVAL, ARCAGI2_TRAIN
+]
+
+ARC_TRAIN = [ARCAGI1_TRAIN, ARCAGI2_TRAIN, ARCAGI1_EVAL]
+
+VAL_GRID_LOADERS = [ARCAGI2_EVAL]
+
+
+
+class DatasetType(str, Enum):
+    ALL = "all"
+    TRAIN = "train"  # Current train collection
+    ARC_TRAIN = "arc_train"
+    VAL = "val"    # Current val collection
+    ARC_1D = "arc_1d"
+    BARC_GP4OM_OM = "barc_gp4om_om"
+    BARC_GP4_OM = "barc_gp4_om"
+    BARC_GP4O_OM = "barc_gp4o_om"
+    BARC_GP4O_OM_SUG = "barc_gp4o_om_sug"
+    ARC_COMMUNITY = "arc_community"
+    ARC_CONCEPT = "arc_concept"
+    ARC_DBIGHAM = "arc_dbigham"
+    ARC_DIVA = "arc_diva"
+    ARC_MINI = "arc_mini"
+    ARC_NOSOUND = "arc_nosound"
+    ARC_PQA = "arc_pqa"
+    ARC_REARC_EASY = "arc_rearc_easy"
+    ARC_REARC_HARD = "arc_rearc_hard"
+    ARC_SEQUENCE = "arc_sequence"
+    ARC_SORTOF = "arc_sortof"
+    ARC_SYNTH_RIDDLES = "arc_synth_riddles"
+    ARC_TAMA = "arc_tama"
+    ARC_IPARC = "arc_iparc"
+    ARCAGI1_TRAIN = "arcagi1_train"
+    ARCAGI1_EVAL = "arcagi1_eval"
+    ARCAGI2_TRAIN = "arcagi2_train"
+    ARCAGI2_EVAL = "arcagi2_eval"
+
+# Map enum values to their corresponding loaders
+DATASET_LOADERS = {
+    DatasetType.ALL: TRAIN_GRID_LOADERS + VAL_GRID_LOADERS,
+    DatasetType.TRAIN: TRAIN_GRID_LOADERS,
+    DatasetType.ARC_TRAIN: ARC_TRAIN,
+    DatasetType.VAL: VAL_GRID_LOADERS,
+    DatasetType.ARC_1D: [ARC_1D],
+    DatasetType.BARC_GP4OM_OM: [BARC_GP4OM_OM],
+    DatasetType.BARC_GP4_OM: [BARC_GP4_OM],
+    DatasetType.BARC_GP4O_OM: [BARC_GP4O_OM],
+    DatasetType.BARC_GP4O_OM_SUG: [BARC_GP4O_OM_SUG],
+    DatasetType.ARC_COMMUNITY: [ARC_COMMUNITY],
+    DatasetType.ARC_CONCEPT: [ARC_CONCEPT],
+    DatasetType.ARC_DBIGHAM: [ARC_DBIGHAM],
+    DatasetType.ARC_DIVA: [ARC_DIVA],
+    DatasetType.ARC_MINI: [ARC_MINI],
+    DatasetType.ARC_NOSOUND: [ARC_NOSOUND],
+    DatasetType.ARC_PQA: [ARC_PQA],
+    DatasetType.ARC_REARC_EASY: [ARC_REARC_EASY],
+    DatasetType.ARC_REARC_HARD: [ARC_REARC_HARD],
+    DatasetType.ARC_SEQUENCE: [ARC_SEQUENCE],
+    DatasetType.ARC_SORTOF: [ARC_SORTOF],
+    DatasetType.ARC_SYNTH_RIDDLES: [ARC_SYNTH_RIDDLES],
+    DatasetType.ARC_TAMA: [ARC_TAMA],
+    DatasetType.ARC_IPARC: [ARC_IPARC],
+    DatasetType.ARCAGI1_TRAIN: [ARCAGI1_TRAIN],
+    DatasetType.ARCAGI1_EVAL: [ARCAGI1_EVAL],
+    DatasetType.ARCAGI2_TRAIN: [ARCAGI2_TRAIN],
+    DatasetType.ARCAGI2_EVAL: [ARCAGI2_EVAL],
+}
+
+# %%

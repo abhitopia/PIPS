@@ -5,6 +5,27 @@ import torch.nn as nn
 from prosip.utils import get_activation_fn
 
 
+
+def _build_mlp(input_dim, output_dim, num_hidden_layers, hidden_dim, activation, dropout):
+    layers = []
+    assert num_hidden_layers >= 0, "Number of hidden layers must be non-negative"
+
+    # First hidden layer.
+    layers.append(nn.Linear(input_dim, hidden_dim))
+    layers.append(activation())
+    if dropout > 0:
+        layers.append(nn.Dropout(dropout))
+    # Additional hidden layers if required.
+    for _ in range(num_hidden_layers - 1):
+        layers.append(nn.Linear(hidden_dim, hidden_dim))
+        layers.append(activation())
+        if dropout > 0:
+            layers.append(nn.Dropout(dropout))
+    # Final output layer.
+    layers.append(nn.Linear(hidden_dim, output_dim))
+    return nn.Sequential(*layers)
+
+
 class HyperNetwork(nn.Module):
     def __init__(self, task_embedding_dim, target_dim_A, target_dim_B, rank,
                  num_hidden_layers=1, hidden_dim=128, activation=nn.ReLU, dropout=0.0):
@@ -25,29 +46,12 @@ class HyperNetwork(nn.Module):
         self.rank = rank
 
         # Build two MLPs to generate the parameters for the low-rank matrices.
-        self.fc_A = self._build_mlp(task_embedding_dim, target_dim_A * rank,
+        self.fc_A = _build_mlp(task_embedding_dim, target_dim_A * rank,
                                     num_hidden_layers, hidden_dim, activation, dropout)
-        self.fc_B = self._build_mlp(task_embedding_dim, rank * target_dim_B,
+        self.fc_B = _build_mlp(task_embedding_dim, rank * target_dim_B,
                                     num_hidden_layers, hidden_dim, activation, dropout)
 
-    def _build_mlp(self, input_dim, output_dim, num_hidden_layers, hidden_dim, activation, dropout):
-        layers = []
-        assert num_hidden_layers >= 0, "Number of hidden layers must be non-negative"
-   
-        # First hidden layer.
-        layers.append(nn.Linear(input_dim, hidden_dim))
-        layers.append(activation())
-        if dropout > 0:
-            layers.append(nn.Dropout(dropout))
-        # Additional hidden layers if required.
-        for _ in range(num_hidden_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
-            layers.append(activation())
-            if dropout > 0:
-                layers.append(nn.Dropout(dropout))
-        # Final output layer.
-        layers.append(nn.Linear(hidden_dim, output_dim))
-        return nn.Sequential(*layers)
+
 
     def forward(self, task_embedding):
         """
@@ -220,9 +224,10 @@ class InterpreterConfig:
 
     # LoRA parameters
     lora_rank: int = 8
-    lora_mlp_layers: int = 1
-    lora_mlp_dim: int = 128
+    mlp_layers: int = 2
+    mlp_dim: int = 128
 
+    # Dynamic Program Embedding parameters
     def __post_init__(self):
         if self.ffn_dim is None:
             self.ffn_dim = self.n_dim * 4
@@ -232,7 +237,18 @@ class Interpreter(nn.Module):
     def __init__(self, config: InterpreterConfig):
         super(Interpreter, self).__init__()
         self.config = config
+        
+        # Create a proper iteration embedding
         self.iteration_embedding = nn.Embedding(config.max_iterations, config.n_dim)
+        
+        # Layer to combine program and iteration embeddings
+        self.dynamic_prog_embedding = _build_mlp(
+                                                input_dim=2*config.n_dim, 
+                                                output_dim=config.n_dim, 
+                                                num_hidden_layers=config.mlp_layers, 
+                                                hidden_dim=config.mlp_dim, 
+                                                activation=get_activation_fn(config.activation, return_module=True), 
+                                                dropout=config.dropout)
         
         self.base_transformer = BaseDynamicTransformerEncoder(
             num_layers=config.n_layer,
@@ -243,28 +259,29 @@ class Interpreter(nn.Module):
             num_heads=config.n_head,
             dropout=config.dropout,
             activation=config.activation,
-            lora_mlp_layers=config.lora_mlp_layers,
-            lora_mlp_dim=config.lora_mlp_dim
-        )
+            lora_mlp_layers=config.mlp_layers,
+            lora_mlp_dim=config.mlp_dim)
 
     def forward(self, x, program, num_iterations=1):
-        # x is B, S, D
+        # x is BxSxD
+        # program is BxP
         batch_size = x.shape[0]
         output = []
         # Process through transformer encoder
         for it in range(num_iterations):
-            # Get iteration token embedding for this iteration.
+            # Get iteration embedding for this iteration
             iter_emb = self.iteration_embedding(torch.tensor(it, device=x.device))
-            # Prepend iteration token to the sequence:
-            # Expand iter_emb to [B, 1, n_dim] and concatenate with x along the sequence dimension.
-            iter_emb = iter_emb.unsqueeze(0).expand(batch_size, -1, -1)  # [B, 1, n_dim]
-            x = torch.cat([iter_emb, x], dim=1)  # New seq_len becomes seq_len + 1
-
-            x = self.base_transformer(x, program)
-
-            # Optionally, remove the iteration token after processing.
-            # For instance, you might slice x[:, 1:, :] and use that as the input for the next iteration.
-            x = x[:, 1:, :]  # Remove the prepended token.
+            iter_emb = iter_emb.unsqueeze(0).expand(batch_size, -1)  # [batch_size, n_dim]
+            
+            # Concatenate iteration embedding with program embedding
+            combined_embedding = torch.cat([program, iter_emb], dim=1)
+            
+            # Transform to get dynamic program embedding for this iteration
+            iteration_program = self.dynamic_prog_embedding(combined_embedding)
+            
+            # Use the iteration-specific program embedding for the transformer
+            x = self.base_transformer(x, iteration_program)
+            
             output.append(x.clone())
         
         output = torch.stack(output, dim=0) # shape: [num_iterations, batch, seq_len, n_dim]
