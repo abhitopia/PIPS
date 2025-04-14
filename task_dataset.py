@@ -240,27 +240,32 @@ class TaskDataset(Dataset):
         self.indices = None  # Will store our sampled indices
         
         # Initialize shared length if not present.
-        if not hasattr(self, '_shared_length'):
+        if not hasattr(self, '_num_original_tasks'):
             self._init_len_without_data()
             
         # Generate deterministic indices if needed
-        if self.max_tasks is not None and self.max_tasks < self._actual_length():
+        if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks():
             self._generate_indices()
 
     def _init_len_without_data(self):
         """
-        Initialize the shared length without fully loading the data.
+        Initialize the number of original tasks without fully loading the data.
         This function quickly loads the grid data (using memory mapping)
-        to compute the length and stores it as _shared_length.
+        to compute the length and stores it as _num_original_tasks.
         """
         loaders = DATASET_LOADERS[self.dataset_type]
         temp_data = load_task_loaders(loaders, self.cache_dir, verbose=True)
-        self._shared_length = len(temp_data)
+        self._num_original_tasks = len(temp_data)
         del temp_data  # Clean up the temporary mapping
 
 
-    def _actual_length(self):
-        return self._shared_length * self.data_multiplier
+    @property
+    def num_of_original_tasks(self):
+        return self._num_original_tasks
+
+    @property
+    def num_of_total_tasks(self):
+        return self._num_original_tasks * self.data_multiplier
 
     def _generate_indices(self):
         """
@@ -269,23 +274,22 @@ class TaskDataset(Dataset):
         """
         # Use a fixed seed for deterministic sampling
         rng = np.random.RandomState(self.seed)
-        self.indices = rng.permutation(self._actual_length())[:self.max_tasks]
+        self.indices = rng.permutation(self.num_of_total_tasks)[:self.max_tasks]
 
     def _initialize_data(self):
         """Initialize the data for this process"""
         if self.data is None:
             loaders = DATASET_LOADERS[self.dataset_type]
             self.data = load_task_loaders(loaders, self.cache_dir)
-            self._shared_length = len(self.data)
+            self._num_original_tasks = len(self.data)
             
             # Generate indices if needed and not already done
-            if self.max_tasks is not None and self.max_tasks < len(self):
+            if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks():
                 if self.indices is None:
                     self._generate_indices()
-            # print(f"Initialized data with {len(self.data)} grids for {self.dataset_type.name}")
 
     def __len__(self):
-        actual_length = self._actual_length()
+        actual_length = self.num_of_total_tasks
 
         # Apply max_tasks limit if specified
         if self.max_tasks is not None:
@@ -301,11 +305,11 @@ class TaskDataset(Dataset):
 
 
         # If we're using a subset of indices, map the base index to our selected indices
-        if self.max_tasks is not None and self.max_tasks < self._actual_length():
+        if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks:
             idx = self.indices[idx]
         
         # Calculate the base index and augmentation round
-        original_length = len(self.data)
+        original_length = self.num_of_original_tasks
         augmentation_round = idx // original_length
         base_idx = idx % original_length
         
@@ -405,6 +409,116 @@ class TaskDataset(Dataset):
         self.data = None
         self.indices = None
 
+class ExampleDataset(Dataset):
+    def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
+                 cache_dir=Path(__file__).resolve().parent / '.cache',
+                 max_examples: int = None,
+                 seed: int = 42,
+                 data_multiplier: int = 1,
+                 is_test: bool = False):
+        """
+        Dataset for ARC examples (individual input-output pairs) from tasks.
+        
+        Args:
+            dataset_type: Type of dataset to load
+            cache_dir: Directory to store cached data
+            max_examples: Maximum number of examples to use (sample randomly if less than total)
+            seed: Random seed for reproducibility
+            data_multiplier: Factor to multiply dataset size by using deterministic augmentations
+            is_test: Whether to use test examples (True) or train examples (False)
+        """
+        self.is_test = is_test
+        self.seed = seed
+        self.data_multiplier = data_multiplier
+        
+        # Create underlying TaskDataset
+        self.task_dataset = TaskDataset(
+            dataset_type=dataset_type,
+            cache_dir=cache_dir,
+            max_tasks=None,  # We'll handle max_examples ourselves
+            seed=seed,
+            data_multiplier=data_multiplier  # Use same multiplier
+        )
+        
+        # Set examples per task based on is_test flag
+        self.examples_per_task = 1 if is_test else 3
+                
+        # Calculate max examples and handle indices
+        self.max_examples = max_examples
+        self.indices = None
+        
+        # Generate deterministic indices if needed
+        if self.max_examples is not None and self.max_examples < len(self):
+            self._generate_indices()
+    
+    @property
+    def number_of_original_examples(self):
+        """Initialize the base length without fully loading data"""
+        # Get task dataset's base length (before multiplier)
+        base_task_length = self.task_dataset._num_original_tasks
+        return base_task_length * self.examples_per_task
+    
+    @property
+    def number_of_total_examples(self):
+        """Get the actual length without max_examples constraint"""
+        return self.number_of_original_examples * self.data_multiplier
+    
+    def _generate_indices(self):
+        """Generate deterministic random indices for sampling max_examples"""
+        rng = np.random.RandomState(self.seed)
+        self.indices = rng.permutation(self.number_of_total_examples)[:self.max_examples]
+    
+    def __len__(self):
+        """Return the number of examples in the dataset"""
+        actual_length = self.number_of_total_examples
+        
+        # Apply max_examples limit if specified
+        if self.max_examples is not None:
+            actual_length = min(actual_length, self.max_examples)
+            
+        return actual_length
+    
+    def _initialize_data(self):
+        """Initialize the data for this process"""
+        self.task_dataset._initialize_data()
+        # Generate indices if needed and not already done
+        if self.max_examples is not None and self.max_examples < self.number_of_total_examples:
+            if self.indices is None:
+                self._generate_indices()
+    
+    def __getitem__(self, idx):
+        """Get a specific example from a task"""
+        # Initialize data if not already done
+        if self.task_dataset.data is None:
+            self._initialize_data()
+        
+        # If we're using a subset of indices, map the index
+        if self.max_examples is not None and self.max_examples < self.number_of_total_examples:
+            idx = self.indices[idx]
+        
+        # Calculate original length and augmentation round (same logic as TaskDataset)
+        original_length = self.number_of_original_examples
+        augmentation_round = idx // original_length
+        base_idx = idx % original_length
+                
+        # Calculate which task and which example within task
+        task_idx = base_idx // self.examples_per_task
+        example_idx = base_idx % self.examples_per_task
+        
+        # Get the task from the TaskDataset, which handles permutation internally
+        task = self.task_dataset[task_idx + augmentation_round * self.task_dataset.num_of_original_tasks]
+        
+        # Return the appropriate example based on is_test flag
+        if self.is_test:
+            return task.test[example_idx]
+        else:
+            return task.train[example_idx]
+    
+    def unload(self):
+        """Reset the internal state of the dataset"""
+        self.task_dataset.unload()
+        self.indices = None
+
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):
     """Initialize worker for DataLoader"""
@@ -412,22 +526,125 @@ def worker_init_fn(worker_id):
     worker_info = torch.utils.data.get_worker_info()
     if worker_info is not None:
         dataset = worker_info.dataset
-        dataset._initialize_data()  # Initialize data for this worker
+        dataset._initialize_data()
+
+# def collate_fn_project(batch, pad_value=-1, device=torch.device('cpu'), permute=False, max_height=32, max_width=32, flatten=True, is_test=False):    
+    
+#     flattened_grids = []
+#     attributes = []
+
+#     for grid in batch:
+#         # Optionally permute the grid using the grid.permute method
+#         if permute:
+#             grid = grid.permute()
+
+#         # Flatten each grid with optional EOS markers and padding
+#         projected_array = grid.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+#         flattened_grids.append(projected_array.flatten() if flatten else projected_array)
+
+#         # Collect attributes and convert numpy types to native Python types
+#         attributes.append({
+#             'idx': int(grid.idx),
+#             'program_id': str(grid.program_id),
+#             'task_id': str(grid.task_id),
+#             'dataset': str(grid.dataset),
+#             'color_perm': str(grid.color_perm),
+#             'transform': str(grid.transform),
+#             'is_test': bool(grid.is_test),
+#             'is_input': bool(grid.is_input)
+#         })
+
+#     # Convert the lists of numpy arrays to tensors
+#     flattened_grids = np.array(flattened_grids)
+
+#     # Convert to torch tensors and move to device
+#     flattened_grids = torch.tensor(flattened_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+
+#     return GRID_INPUT(grids=flattened_grids, attributes=attributes)
+
+
 
 
 if __name__ == "__main__":
     ds = TaskDataset(dataset_type=DatasetType.ALL, data_multiplier=2)
 
     print("Length of dataset:", len(ds))
-    print("Shared length:", ds._shared_length)
+    print("Shared length:", ds._num_original_tasks)
 
     print(ds[0])
-    print(ds[1])
-    print(ds[0+ds._shared_length])
-    print(ds[0+ds._shared_length].train[0])
-    print(ds[0+ds._shared_length].train[0].input)
+    print(ds[0+ds._num_original_tasks])
+    print(ds[0+ds._num_original_tasks].train[0])
+    print(ds[0+ds._num_original_tasks].train[0].input)
 
+    print(ds[1])
+    print(ds[1+ds._num_original_tasks])
+    print(ds[1+ds._num_original_tasks].train[0])
+    print(ds[1+ds._num_original_tasks].train[0].input)
     
-    print(ds[1+ds._shared_length])
-    print(ds[1+ds._shared_length].train[0])
-    print(ds[1+ds._shared_length].train[0].input)
+    # Test ExampleDataset
+    print("\n---- Testing ExampleDataset ----")
+    
+    # Create train example dataset
+    train_ex_ds = ExampleDataset(dataset_type=DatasetType.ALL, data_multiplier=3, is_test=False)
+    print("Length of train example dataset:", len(train_ex_ds))
+    print("Train examples per task:", train_ex_ds.examples_per_task)
+    print("Base length:", train_ex_ds.number_of_original_examples)
+    print("Total length:", train_ex_ds.number_of_total_examples)
+    
+    # # Create test example dataset
+    # test_ex_ds = ExampleDataset(dataset_type=DatasetType.ALL, data_multiplier=2, is_test=True)
+    # print("Length of test example dataset:", len(test_ex_ds))
+    # print("Test examples per task:", test_ex_ds.examples_per_task)
+    # print("Base length:", test_ex_ds._number_of_original_examples)
+    
+    # Test accessing examples
+
+    train_idx = 3
+    print("\nExample from train dataset (original, unpermuted):")
+    train_example = train_ex_ds[train_idx]
+    print(train_example)
+
+    print("\nExample from train dataset (permuted):")
+    train_example = train_ex_ds[train_ex_ds.number_of_original_examples + train_idx]
+    print(train_example)
+    
+    # # Get the last unpermuted example
+    # print("\nLast unpermuted example from train dataset:")
+    # train_example = train_ex_ds[train_ex_ds._number_of_original_examples - 1]
+    # print(f"Example ID: {train_example.idx}, Task ID: {train_example.task_id}, Is test: {train_example.is_test}")
+    # print(f"Input shape: {train_example.input.array.shape}, Output shape: {train_example.output.array.shape}")
+    # print(train_example.input)
+    
+    # # Get the first permuted example
+    # print("\nFirst permuted example from train dataset:")
+    # train_example = train_ex_ds[train_ex_ds._number_of_original_examples]
+    # print(f"Example ID: {train_example.idx}, Task ID: {train_example.task_id}, Is test: {train_example.is_test}")
+    # print(f"Input shape: {train_example.input.array.shape}, Output shape: {train_example.output.array.shape}")
+    # print(train_example.input)
+    
+    # print("\nExample from test dataset (last unpermuted):")
+    # test_example = test_ex_ds[test_ex_ds._number_of_original_examples - 1]
+    # print(f"Example ID: {test_example.idx}, Task ID: {test_example.task_id}, Is test: {test_example.is_test}")
+    # print(f"Input shape: {test_example.input.array.shape}, Output shape: {test_example.output.array.shape}")
+    # print(test_example.input)
+    
+    # print("\nExample from test dataset (first permuted):")
+    # test_example = test_ex_ds[test_ex_ds._number_of_original_examples]
+    # print(f"Example ID: {test_example.idx}, Task ID: {test_example.task_id}, Is test: {test_example.is_test}")
+    # print(f"Input shape: {test_example.input.array.shape}, Output shape: {test_example.output.array.shape}")
+    # print(test_example.input)
+    
+    # # Test with DataLoader
+    # print("\nTesting with DataLoader:")
+    # train_loader = DataLoader(
+    #     train_ex_ds, 
+    #     batch_size=4,
+    #     num_workers=2,
+    #     worker_init_fn=worker_init_fn,
+    #     shuffle=True
+    # )
+    
+    # # Get first batch
+    # batch = next(iter(train_loader))
+    # print(f"Batch size: {len(batch)}")
+    # print(f"First example in batch - Task ID: {batch[0].task_id}, Is test: {batch[0].is_test}")
