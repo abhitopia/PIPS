@@ -1,3 +1,3 @@
 - [x] Make activation function configurable
 - [x] Introduce depth embedding for the interpreter
-- [ ] Have different margin for source vs destination
+- [x] Figure out which BARC datasets to use
