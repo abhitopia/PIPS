@@ -232,7 +232,7 @@ class Interpreter(nn.Module):
     def __init__(self, config: InterpreterConfig):
         super(Interpreter, self).__init__()
         self.config = config
-        self.timestep_embedding = nn.Embedding(config.max_iterations, config.n_dim)
+        self.iteration_embedding = nn.Embedding(config.max_iterations, config.n_dim)
         
         self.base_transformer = BaseDynamicTransformerEncoder(
             num_layers=config.n_layer,
@@ -249,13 +249,24 @@ class Interpreter(nn.Module):
 
     def forward(self, x, program, num_iterations=1):
         # x is B, S, D
+        batch_size = x.shape[0]
         output = []
         # Process through transformer encoder
         for it in range(num_iterations):
-            timestep_emb = self.timestep_embedding(torch.tensor(it, device=x.device))
-            x = x + timestep_emb.unsqueeze(0).unsqueeze(0)  # shape: [1, 1, n_dim] broadcasted to [batch, seq_len, n_dim]
+            # Get iteration token embedding for this iteration.
+            iter_emb = self.iteration_embedding(torch.tensor(it, device=x.device))
+            # Prepend iteration token to the sequence:
+            # Expand iter_emb to [B, 1, n_dim] and concatenate with x along the sequence dimension.
+            iter_emb = iter_emb.unsqueeze(0).expand(batch_size, -1, -1)  # [B, 1, n_dim]
+            x = torch.cat([iter_emb, x], dim=1)  # New seq_len becomes seq_len + 1
+
             x = self.base_transformer(x, program)
+
+            # Optionally, remove the iteration token after processing.
+            # For instance, you might slice x[:, 1:, :] and use that as the input for the next iteration.
+            x = x[:, 1:, :]  # Remove the prepended token.
             output.append(x.clone())
         
+        output = torch.stack(output, dim=0) # shape: [num_iterations, batch, seq_len, n_dim]
         return output
 

@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
 from prosip.interpreter import Interpreter, InterpreterConfig
+from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
 class ProSIPConfig:
@@ -27,6 +28,9 @@ class ProSIPConfig:
     encode_norm: bool = True
     decode_norm: bool = True
 
+    # Trajectory loss config
+    margin: float = 0.0
+    zero_margin_at_end: bool = True
 
     # LoRA parameters
     lora_rank: int = 8
@@ -70,6 +74,9 @@ class ProSIPModel(nn.Module):
     def __init__(self, config: ProSIPConfig):
         super().__init__()
         self.config = config
+        self.trajectory_margin = config.margin
+        self.zero_margin_at_end = config.zero_margin_at_end
+
         self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
         self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
         self.autoencoder = GridAutoEncoder(config.autoencoder_config)
@@ -87,7 +94,14 @@ class ProSIPModel(nn.Module):
         # Now reshape them to (B, N*n_latent, n_dim)
         intermediate_embeddings = self.interpreter.forward(encoded_input_grids, program_embeds, num_iterations)
 
-        print("Length of intermediate_embeddings", len(intermediate_embeddings))
+        loss = vectorized_monotonic_trajectory_loss(intermediate_embeddings, 
+                                                    encoded_input_grids, 
+                                                    encoded_output_grids,
+                                                    margin=self.trajectory_margin,
+                                                    zero_margin_at_end=self.zero_margin_at_end)
+
+        print("intermediate_embeddings.shape", intermediate_embeddings.shape)
+        print("loss", loss)
 
         decoded_output_grids = self.autoencoder.decode(encoded_output_grids)
         decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
