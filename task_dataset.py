@@ -673,7 +673,7 @@ if __name__ == "__main__":
     dataset_type = DatasetType.ALL
     is_test = False
     ds = TaskDataset(dataset_type=dataset_type, data_multiplier=data_multiplier)
-
+    dss = TaskDataset(dataset_type=DatasetType.ALL_SMALL, data_multiplier=data_multiplier)
     print("Length of dataset:", len(ds))
     print("Number of original tasks:", ds.num_of_original_tasks)
     print("Number of total tasks:", ds.num_of_total_tasks)

@@ -803,14 +803,15 @@ TRAIN_GRID_LOADERS = [
     ARCAGI2_TRAIN
 ]
 
+
 ARC_TRAIN = [ARCAGI2_TRAIN]
 
 VAL_GRID_LOADERS = [ARCAGI2_EVAL]
 
 
-
 class DatasetType(str, Enum):
     ALL = "all"
+    ALL_SMALL = "all_small"
     TRAIN = "train"  # Current train collection
     ARC_TRAIN = "arc_train"
     VAL = "val"    # Current val collection
@@ -841,6 +842,7 @@ class DatasetType(str, Enum):
 # Map enum values to their corresponding loaders
 DATASET_LOADERS = {
     DatasetType.ALL: TRAIN_GRID_LOADERS + VAL_GRID_LOADERS,
+    DatasetType.ALL_SMALL: TRAIN_GRID_LOADERS[1:] + VAL_GRID_LOADERS,
     DatasetType.TRAIN: TRAIN_GRID_LOADERS,
     DatasetType.ARC_TRAIN: ARC_TRAIN,
     DatasetType.VAL: VAL_GRID_LOADERS,
