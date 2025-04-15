@@ -3,7 +3,7 @@ from functools import partial
 import logging
 import concurrent.futures
 import pickle
-from pips.data import DATASET_LOADERS, ArcTask, ArrayTransform, ColorPermutation, DatasetType, Example, Grid, ARCAGI1_TRAIN
+from pips.data import DATASET_LOADERS, ArcTask, ArrayTransform, ColorPermutation, DatasetType, Example
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
@@ -14,8 +14,6 @@ import hashlib
 import random  # Add import for random sampling
 
 logger = logging.getLogger(__name__)
-
-logging.basicConfig(level=logging.INFO)
 
 #%%
 
@@ -228,7 +226,7 @@ def process_task_loader(loader, output_file, num_train=3, num_test=1):
     logger.info(f"Saved {len(valid_tasks)} tasks to {output_file} for {loader.name}")
 
 
-def load_task_loaders(loaders, cache_dir=Path('.cache'), verbose=False):
+def load_task_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache', verbose=False):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Sort loaders by name
@@ -278,7 +276,7 @@ def load_task_loaders(loaders, cache_dir=Path('.cache'), verbose=False):
 
 class TaskDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
-                 cache_dir=Path(__file__).resolve().parent / '.cache',
+                 cache_dir=Path(__file__).resolve().parent.parent / '.cache',
                  max_tasks: int = None,
                  seed: int = 42,
                  data_multiplier: int = 1):
@@ -472,7 +470,7 @@ class TaskDataset(Dataset):
 
 class ExampleDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
-                 cache_dir=Path(__file__).resolve().parent / '.cache',
+                 cache_dir=Path(__file__).resolve().parent.parent / '.cache',
                  max_examples: int = None,
                  seed: int = 42,
                  data_multiplier: int = 1,
