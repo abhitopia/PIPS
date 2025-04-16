@@ -288,19 +288,9 @@ class GridAutoEncoder(nn.Module):
         - RMSNorm: Weight=1.0
         - Position embeddings in Transformer: Already initialized in TransformerAutoEncoder
         """
-        # Define a set to track modules we've already processed
-        processed_modules = set()
         
         def init_weights(module):
             # Skip if we've already processed this module
-            if id(module) in processed_modules:
-                return
-            processed_modules.add(id(module))
-            
-            # Skip the GridAutoEncoder itself to avoid recursion
-            if module is self:
-                return
-                
             if isinstance(module, nn.Linear):
                 # Initialize linear weights with normal distribution
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
@@ -322,7 +312,7 @@ class GridAutoEncoder(nn.Module):
                 # Initialize embedding weights
                 nn.init.normal_(module.weight, mean=0.0, std=0.02)
             # Only call reset_parameters on PyTorch built-in modules, not our custom modules
-            elif hasattr(module, 'reset_parameters') and callable(module.reset_parameters):
+            elif hasattr(module, 'reset_parameters') and module is not self:
                 module.reset_parameters()
             else:
                 # Handle custom parameters that are directly attached to the module
@@ -339,7 +329,7 @@ class GridAutoEncoder(nn.Module):
                             else:
                                 nn.init.zeros_(param)
         
-        # Apply initialization recursively
+        # First initialize our own parameters (not recursively)
         self.apply(init_weights)
 
     def conv_encode(self, x):

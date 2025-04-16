@@ -663,7 +663,7 @@ class REPL(nn.Module):
                 # Use module's own reset_parameters if available
                 module.reset_parameters()
             else:
-                # Handle any custom nn.Parameter objects that weren't caught by the above
+                # Handle custom parameters that are directly attached to the module
                 for name, param in module.named_parameters(recurse=False):
                     if param.requires_grad:
                         if param.dim() > 1:
