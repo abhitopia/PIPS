@@ -277,6 +277,70 @@ class GridAutoEncoder(nn.Module):
         
         
         self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Initialize all parameters following standard practices for this architecture.
+        - Embeddings: Normal distribution with std=0.02
+        - Linear layers: Normal distribution with std=0.02
+        - Conv/ConvTranspose layers: Normal distribution with std=0.02
+        - BatchNorm: Default PyTorch initialization (weight=1, bias=0)
+        - RMSNorm: Weight=1.0
+        - Position embeddings in Transformer: Already initialized in TransformerAutoEncoder
+        """
+        # Define a set to track modules we've already processed
+        processed_modules = set()
+        
+        def init_weights(module):
+            # Skip if we've already processed this module
+            if id(module) in processed_modules:
+                return
+            processed_modules.add(id(module))
+            
+            # Skip the GridAutoEncoder itself to avoid recursion
+            if module is self:
+                return
+                
+            if isinstance(module, nn.Linear):
+                # Initialize linear weights with normal distribution
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, (nn.Conv2d, nn.ConvTranspose2d)):
+                # Initialize conv weights with normal distribution
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.BatchNorm2d):
+                # BatchNorm uses ones for weights and zeros for bias
+                nn.init.constant_(module.weight, 1.0)
+                nn.init.constant_(module.bias, 0.0)
+            elif isinstance(module, nn.RMSNorm):
+                # Initialize layer norm parameters
+                nn.init.constant_(module.weight, 1.0)
+            elif isinstance(module, nn.Embedding):
+                # Initialize embedding weights
+                nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            # Only call reset_parameters on PyTorch built-in modules, not our custom modules
+            elif hasattr(module, 'reset_parameters') and callable(module.reset_parameters):
+                module.reset_parameters()
+            else:
+                # Handle custom parameters that are directly attached to the module
+                for name, param in module.named_parameters(recurse=False):
+                    if param.requires_grad:
+                        if param.dim() > 1:
+                            # For matrices/tensors, use normal initialization
+                            nn.init.normal_(param, mean=0.0, std=0.02)
+                        else:
+                            # For vectors (1D tensors), initialize to zeros
+                            # except for special cases like RMSNorm weights
+                            if 'norm' in name and 'weight' in name:
+                                nn.init.ones_(param)
+                            else:
+                                nn.init.zeros_(param)
+        
+        # Apply initialization recursively
+        self.apply(init_weights)
 
     def conv_encode(self, x):
         x = x.permute(0, 3, 1, 2) # [batch, n_emb, grid_height, grid_width] 

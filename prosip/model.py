@@ -3,7 +3,7 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
-from prosip.interpreter import REPL, REPLConfig
+from prosip.repl import REPL, REPLConfig
 from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
@@ -57,7 +57,7 @@ class ProSIPConfig:
             activation=self.activation,
             dropout=self.dropout
         )
-        self.interpreter_config = REPLConfig(
+        self.repl_config = REPLConfig(
             n_layer=self.n_layer_interpreter,
             n_dim=self.n_dim,
             n_head=self.n_head,
@@ -66,7 +66,8 @@ class ProSIPConfig:
             ffn_dim=self.n_dim * 4,
             lora_rank=self.lora_rank,
             mlp_layers=self.lora_mlp_layers,
-            mlp_dim=self.lora_mlp_dim
+            mlp_dim=self.lora_mlp_dim,
+            n_state=self.latent_height * self.latent_width
         )
 
 class ProSIPModel(nn.Module):
@@ -78,7 +79,22 @@ class ProSIPModel(nn.Module):
         self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
         self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
         self.autoencoder = GridAutoEncoder(config.autoencoder_config)
-        self.interpreter = REPL(config.interpreter_config)
+        self.interpreter = REPL(config.repl_config)
+        
+        self.reset_parameters()
+        
+    def reset_parameters(self):
+        """Initialize parameters for ProSIPModel.
+        - Embeddings: Normal distribution with std=0.02
+        - Also calls reset_parameters on submodules that have it
+        """
+        # Initialize embeddings
+        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
+        
+        # Call reset_parameters on submodules that have their own implementations
+        self.autoencoder.reset_parameters()
+        self.interpreter.reset_parameters()
 
     def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor, num_iterations: int = 1) -> torch.Tensor:
         # tasks is BxNx2xHxW
@@ -127,4 +143,5 @@ if __name__ == "__main__":
 
     model = ProSIPModel(prosip_config)
     
+    output = model(input_grids, output_grids, program_batch, num_iterations=2)
     output = model(input_grids, output_grids, program_batch, num_iterations=2)
