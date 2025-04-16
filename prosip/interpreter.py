@@ -216,7 +216,7 @@ class SubroutineExecutor(nn.Module):
         """
         Args:
             state: Tensor of shape [batch_size, seq_len, embed_dim]
-            subroutine_embedding: Tensor of shape [batch_size, seq_len, embed_dim]
+            subroutine: Tensor of shape [batch_size, seq_len, embed_dim]
         Returns:
             Processed next state tensor of shape [batch_size, seq_len, embed_dim]
         """
