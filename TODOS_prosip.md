@@ -11,10 +11,12 @@
 - [x] Subroutine Executor should take subroutine embeddings and previous state to generate next state
 - [x] A next subroutine depends on the previous state and the iteration and the master program
 - [x] The intermediate outputs are extracted from the state using output extractor
-- [ ] Create MultiHeadAttention with RoPE
-- [ ] A subroutine must come from a set of available sub-routines (use subroutine selector using embedding)
-- [ ] Do proper initialization of the modules all throughout the code
+- [x] Create MultiHeadAttention with RoPE
+- [x] Do proper initialization of the modules all throughout the code
+- [ ] Add rank_attn  and rank_ffn to the config
 
+## Archived
+- [ ] A subroutine must come from a set of available sub-routines (use subroutine selector using embedding), This is desirable but not required for now
 
 
 interpreter(input, program, num_iterations) -> outputs

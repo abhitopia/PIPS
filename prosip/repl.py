@@ -164,7 +164,7 @@ class LoRALinear(nn.Module):
         return base_out + adaptation
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_dim, n_head, dropout, rope=None):
+    def __init__(self, n_dim, n_head, dropout, lora_rank=0, rope=None, mlp_layers=1, mlp_dim=128, activation="gelu"):
         super().__init__()
         self.rope = rope
         self.n_dim = n_dim
@@ -175,13 +175,40 @@ class MultiHeadAttention(nn.Module):
         self.q_proj = nn.Linear(n_dim, n_dim, bias=False)
         self.k_proj = nn.Linear(n_dim, n_dim, bias=False)
         self.v_proj = nn.Linear(n_dim, n_dim, bias=False)
-        # output projection
         self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
+
+        # Dynamic LoRA adapters for Query and Value:
+        self.lora_q = LoRALinear(self.q_proj, lora_rank) if lora_rank > 0 else None
+        self.lora_v = LoRALinear(self.v_proj, lora_rank) if lora_rank > 0 else None
+        
+        # Hypernetworks to generate LoRA parameters for Q and V.
+        # These map a per-token subroutine (task embedding) to parameters for the dynamic update.
+        self.hypernetwork_q = HyperNetwork(
+            task_embedding_dim=n_dim,
+            target_dim_A=n_dim,  # output dimension for A: same as output dim of q_proj
+            target_dim_B=n_dim,  # input dimension for B: same as input dim of q_proj
+            rank=lora_rank,
+            num_hidden_layers=mlp_layers,
+            hidden_dim=mlp_dim,
+            activation=get_activation_fn(activation, return_module=True),
+            dropout=dropout
+        ) if lora_rank > 0 else None
+        self.hypernetwork_v = HyperNetwork(
+            task_embedding_dim=n_dim,
+            target_dim_A=n_dim,  # for v_proj; similar to above
+            target_dim_B=n_dim,
+            rank=lora_rank,
+            num_hidden_layers=mlp_layers,
+            hidden_dim=mlp_dim,
+            activation=get_activation_fn(activation, return_module=True),
+            dropout=dropout
+        ) if lora_rank > 0 else None
 
     def forward(self,
             q: Tensor, 
             k: Tensor,
             v: Tensor,
+            subroutine: Optional[Tensor] = None,
             positions: Optional[Tensor] = None,
             attn_mask: Optional[Tensor] = None,
             kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
@@ -207,13 +234,30 @@ class MultiHeadAttention(nn.Module):
         assert kT == vT, "Sequence length mismatch"
         assert qD == kD == vD, "Dimension mismatch"
 
-
         B = qB
         D = qD
-
-        q = self.q_proj(q)
+               # --- Dynamic Q and V Projection ---
+        if subroutine is not None:
+            # Flatten subroutine to generate dynamic LoRA parameters:
+            seq_len = subroutine.size(1)
+            sub_flat = subroutine.view(B * seq_len, -1)
+            # For Query:
+            A_q, B_q = self.hypernetwork_q(sub_flat)  # shapes: [B*seq_len, n_dim, attn_rank] and [B*seq_len, attn_rank, n_dim]
+            A_q = A_q.view(B, seq_len, self.q_proj.out_features, self.lora_q.rank)
+            B_q = B_q.view(B, seq_len, self.lora_q.rank, self.q_proj.in_features)
+            # Similarly for Value:
+            A_v, B_v = self.hypernetwork_v(sub_flat)
+            A_v = A_v.view(B, seq_len, self.v_proj.out_features, self.lora_v.rank)
+            B_v = B_v.view(B, seq_len, self.lora_v.rank, self.v_proj.in_features)
+            
+            # Apply dynamic LoRA adapters for Q and V.
+            # Note: LoRALinear returns the result of base_layer(x) plus the learned adapter.
+            q = self.lora_q(q, A_q, B_q)
+            v = self.lora_v(v, A_v, B_v)
+        else:
+            q = self.q_proj(q)
+            v = self.v_proj(v)
         k = self.k_proj(k)
-        v = self.v_proj(v)
 
         # Reshape for multi-head attention, but do not transpose yet!
         q = q.view(B, qT, self.n_head, D // self.n_head).transpose(1, 2) # (B, n_head, T, head_dim)
@@ -308,8 +352,8 @@ class HyperNetwork(nn.Module):
     
 
 class DynamicTransformerEncoderLayer(nn.Module):
-    def __init__(self, embed_dim, ffn_dim, task_embedding_dim, rank, num_heads,
-                 activation="relu", dropout=0.0, lora_mlp_layers=1, lora_mlp_dim=128, rope=None):
+    def __init__(self, embed_dim, ffn_dim, task_embedding_dim, rank, num_heads, lora_mlp_layers, lora_mlp_dim,
+                 activation, dropout=0.0, rope=None):
         """
         Args:
             embed_dim (int): Embedding dimension for the transformer.
@@ -322,10 +366,15 @@ class DynamicTransformerEncoderLayer(nn.Module):
         """
         super(DynamicTransformerEncoderLayer, self).__init__()
         self.embed_dim = embed_dim
-        # self.self_attn = nn.MultiheadAttention(embed_dim=embed_dim, num_heads=num_heads,
-        #                                        dropout=dropout, batch_first=True, bias=False)
         
-        self.self_attn = MultiHeadAttention(n_dim=embed_dim, n_head=num_heads, dropout=dropout, rope=rope)
+        self.self_attn = MultiHeadAttention(n_dim=embed_dim, 
+                                            n_head=num_heads, 
+                                            dropout=dropout, 
+                                            rope=rope,
+                                            lora_rank=rank,
+                                            mlp_layers=lora_mlp_layers,
+                                            mlp_dim=lora_mlp_dim,
+                                            activation=activation)
         self.norm1 = nn.RMSNorm(embed_dim)
         self.dropout1 = nn.Dropout(dropout)
 
@@ -351,7 +400,7 @@ class DynamicTransformerEncoderLayer(nn.Module):
                                          activation=get_activation_fn(activation, return_module=True),
                                          dropout=dropout)
 
-    def forward(self, src, task_embedding):
+    def forward(self, src, subroutine):
         """
         Args:
             src: Tensor of shape [B, seq_len, embed_dim]
@@ -362,14 +411,14 @@ class DynamicTransformerEncoderLayer(nn.Module):
         """
         # --- Self-Attention Sublayer with Pre-Norm ---
         normed_src = self.norm1(src)
-        attn_output, _ = self.self_attn(normed_src, normed_src, normed_src)
+        attn_output, _ = self.self_attn(normed_src, normed_src, normed_src, subroutine=subroutine)
         src = src + self.dropout1(attn_output)
 
         # --- Feed-Forward Sublayer with Dynamic LoRA and Pre-Norm ---
         normed_src = self.norm2(src)
         B, seq_len, _ = normed_src.shape
         # Flatten the token dimension for the hypernetwork.
-        task_flat = task_embedding.view(B * seq_len, -1)  # [B*seq_len, task_embedding_dim]
+        task_flat = subroutine.view(B * seq_len, -1)  # [B*seq_len, task_embedding_dim]
         # Obtain LoRA parameters from hypernetwork.
         A_params_flat, B_params_flat = self.hypernetwork(task_flat)
         # Reshape to per-token shape.
@@ -429,7 +478,7 @@ class SubroutineExecutor(nn.Module):
 class SubroutineGeneratorLayer(nn.Module):
     def __init__(self, embed_dim, num_heads, activation, ffn_dim=None, dropout=0.0, rope=None):
         super(SubroutineGeneratorLayer, self).__init__()
-        self.self_attn = MultiHeadAttention(n_dim=embed_dim, n_head=num_heads, dropout=dropout, rope=rope)
+        self.self_attn = MultiHeadAttention(n_dim=embed_dim, n_head=num_heads, dropout=dropout, rope=rope, lora_rank=0)
         self.norm_kv = nn.RMSNorm(embed_dim)
         self.norm_q = nn.RMSNorm(embed_dim)
         self.dropout1 = nn.Dropout(dropout)
