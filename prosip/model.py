@@ -4,6 +4,7 @@ import tempfile
 from typing import Any, Dict, Optional
 from dataclasses import asdict, dataclass, field
 from functools import partial
+from rich import print
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -352,6 +353,10 @@ class ProSIPTrainingModule(pl.LightningModule):
     
     def on_train_start(self):
         super().on_train_start()
+        # Count model parameters after model is fully initialized
+        model_parameters = sum(p.numel() for n, p in self.named_parameters() if p.requires_grad and 'program_embedding' not in n)
+        print(f"Number of parameters in the model (excluding program embedding): {model_parameters}")
+        print(f"Expected size of the model: {model_parameters * 4 / 10**6} MB")
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
@@ -559,7 +564,6 @@ def train(
     """Train a DVAE model with the given configuration."""
     
 
-    print(experiment_config)
     # Create default acceleration config if none provided
     if acceleration is None:
         acceleration = AccelerationConfig()
@@ -587,6 +591,8 @@ def train(
     )
 
     experiment_config.model_config.program_vocab = len(tokenizer)
+
+    print(experiment_config)
 
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")
@@ -618,11 +624,11 @@ def train(
         callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='Prediction/sample_accuracy',
+                monitor='Prediction/sample_accuracy_val',
                 save_top_k=3,
                 mode='max',
                 auto_insert_metric_name=False,
-                filename='best-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy:.4f}',
+                filename='best-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy_val:.4f}',
                 wandb_verbose=debug_mode
             ),
             ModelCheckpointWithWandbSync(
@@ -632,7 +638,7 @@ def train(
                 save_top_k=2,
                 every_n_train_steps=20 if debug_mode else val_check_interval,
                 auto_insert_metric_name=False,
-                filename='backup-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy:.4f}',
+                filename='backup-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy_val:.4f}',
                 wandb_verbose=debug_mode
             )
         ])
@@ -693,6 +699,8 @@ def train(
         fig.savefig(output_file)
         plt.close(fig)  # Close the figure to free memory
         return
+
+    # Parameter counting moved to on_train_start method
 
     trainer.fit(
         model, 
