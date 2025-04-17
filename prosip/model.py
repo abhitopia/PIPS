@@ -1,9 +1,14 @@
 from dataclasses import dataclass
+from functools import partial
+import os
 from typing import Optional
 import torch
 import torch.nn as nn
+from torch.utils.data import DataLoader
+from pips.data import DatasetType
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
 from prosip.repl import REPL, REPLConfig
+from prosip.task_dataset import ExampleDataset, collate_fn_project, worker_init_fn
 from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
@@ -41,6 +46,8 @@ class ProSIPConfig:
 
         if self.lora_mlp_dim is None:
             self.lora_mlp_dim = self.n_dim
+
+        self.padding_idx = self.n_vocab - 1
 
         self.autoencoder_config = GridAutoEncoderConfig(
             n_vocab=self.n_vocab,
@@ -124,10 +131,66 @@ class ProSIPModel(nn.Module):
         print(decoded_output_grids.shape)
         print(decoded_input_grids.shape)
 
-        pass
+
+def create_dataloaders(
+    batch_size: int,
+    data_multiplier: int = 1,
+    train_ds: DatasetType = DatasetType.ALL,
+    val_ds: DatasetType = DatasetType.ALL_SMALL,
+    padding_idx: int = 15,
+    max_grid_height: int = 32,
+    max_grid_width: int = 32
+):
+    train_ex_ds = ExampleDataset(dataset_type=train_ds, 
+                                 data_multiplier=data_multiplier, 
+                                 is_test=False)
+    
+    val_ex_ds = ExampleDataset(dataset_type=val_ds, 
+                               data_multiplier=1,
+                               is_test=True)
+    
+    tokenizer = train_ex_ds.get_program_tokenizer()
+
+
+    collate_fn = partial(collate_fn_project, 
+                    program_tokenizer=tokenizer,
+                    pad_value=padding_idx,
+                    max_height=max_grid_height,
+                    max_width=max_grid_width,
+                    flatten=False)
+
+    num_workers = min(8, os.cpu_count() or 1)
+
+
+    train_loader = DataLoader(
+        train_ex_ds, 
+        collate_fn=collate_fn,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        shuffle=True,
+        worker_init_fn=worker_init_fn,
+        drop_last=True,
+        persistent_workers=True,
+    )
+
+    val_loader = DataLoader(
+        val_ex_ds, 
+        collate_fn=collate_fn,
+        batch_size=batch_size,
+        num_workers=num_workers,
+        worker_init_fn=worker_init_fn,
+        shuffle=False,
+        drop_last=True,
+        persistent_workers=True,
+    )
+
+    return train_loader, val_loader
 
 
 if __name__ == "__main__":
+
+    train_loader, val_loader = create_dataloaders(batch_size=4, data_multiplier=1, train_ds=DatasetType.ALL, val_ds=DatasetType.ALL_SMALL, padding_idx=15, max_grid_height=32, max_grid_width=32)
+
     P = 2048
     V = 16
     B = 4 

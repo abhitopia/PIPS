@@ -468,6 +468,80 @@ class TaskDataset(Dataset):
         self.data = None
         self.indices = None
 
+    def get_example(self, task_idx, example_idx, is_test=False):
+        """
+        Get a specific example from a task without loading the entire task.
+        
+        Args:
+            task_idx: Index of the task
+            example_idx: Index of the example within the task
+            is_test: Whether to get a test example or train example
+            
+        Returns:
+            An Example object
+        """
+        # Initialize data if not already done
+        if self.data is None:
+            self._initialize_data()
+        
+
+        
+        # Determine if this needs permutation
+        # This is just to get the augmentation_round information
+        original_length = self._num_original_tasks
+        augmentation_round = task_idx // original_length
+        base_idx = task_idx % original_length
+
+        # Get the original task data
+        task = self.data[base_idx]
+
+        # Prepare the specific example without reconstructing the entire task
+        if is_test:
+            # Test example
+            prefix = 'test'
+            max_examples = 1  # Based on fixed size used in process_task_loader
+        else:
+            # Train example
+            prefix = 'train'
+            max_examples = 3  # Based on fixed size used in process_task_loader
+        
+        # Ensure example_idx is valid
+        if example_idx >= max_examples:
+            raise IndexError(f"Example index {example_idx} out of range (0-{max_examples-1})")
+        
+        # Get input and output grids with their original shapes
+        input_grid = task[f'{prefix}_input_{example_idx+1}']
+        output_grid = task[f'{prefix}_output_{example_idx+1}']
+        
+        # Get original shapes
+        input_h = task[f'{prefix}_input_{example_idx+1}_shape_h']
+        input_w = task[f'{prefix}_input_{example_idx+1}_shape_w']
+        output_h = task[f'{prefix}_output_{example_idx+1}_shape_h']
+        output_w = task[f'{prefix}_output_{example_idx+1}_shape_w']
+        
+        # Extract actual grids using original shapes
+        input_array = input_grid[:input_h, :input_w]
+        output_array = output_grid[:output_h, :output_w]
+        
+        # Create Example object
+        example = Example(
+            idx=example_idx,
+            input=input_array,
+            output=output_array,
+            program_id=task['program_id'],
+            task_id=task['task_id'],
+            dataset=task['dataset'],
+            color_perm=ColorPermutation.from_name(task['color_perm']),
+            transform=ArrayTransform[task['transform']],
+            is_test=is_test
+        )
+        
+        # Apply permutation if needed (for augmentation rounds > 0)
+        if augmentation_round > 0:
+            example = example.permute(seed=task_idx)
+        
+        return example
+
 class ExampleDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
                  cache_dir=Path(__file__).resolve().parent.parent / '.cache',
@@ -564,14 +638,15 @@ class ExampleDataset(Dataset):
         task_idx = base_idx // self.examples_per_task
         example_idx = base_idx % self.examples_per_task
         
-        # Get the task from the TaskDataset, which handles permutation internally
-        task = self.task_dataset[task_idx + augmentation_round * self.task_dataset.num_of_original_tasks]
+        # Calculate the actual task_idx accounting for augmentation
+        actual_task_idx = task_idx + augmentation_round * self.task_dataset.num_of_original_tasks
         
-        # Return the appropriate example based on is_test flag
-        if self.is_test:
-            return task.test[example_idx]
-        else:
-            return task.train[example_idx]
+        # Use the direct access method to get just the example we need
+        return self.task_dataset.get_example(
+            task_idx=actual_task_idx,
+            example_idx=example_idx,
+            is_test=self.is_test
+        )
     
     def unload(self):
         """Reset the internal state of the dataset"""
@@ -680,13 +755,17 @@ if __name__ == "__main__":
 
     # Test TaskDataset
     print(ds[0])
+    print(ds[0].train[0])
+    print(ds.get_example(0, 0, is_test=False))
     print(ds[0+ds.num_of_original_tasks])
-    print(ds[0+ds.num_of_original_tasks].train[0])
+    print(ds[0+ds.num_of_original_tasks].test[0])
+    print(ds.get_example(0+ds.num_of_original_tasks, 0, is_test=True))
     print(ds[0+ds.num_of_original_tasks].train[0].input)
 
     print(ds[1])
     print(ds[1+ds.num_of_original_tasks])
     print(ds[1+ds.num_of_original_tasks].train[0])
+    print(ds.get_example(1+ds.num_of_original_tasks, 0, is_test=False))
     print(ds[1+ds.num_of_original_tasks].train[0].input)
     
     
