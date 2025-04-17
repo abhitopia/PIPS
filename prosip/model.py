@@ -135,18 +135,21 @@ class ProSIPModel(nn.Module):
 def create_dataloaders(
     batch_size: int,
     data_multiplier: int = 1,
-    train_ds: DatasetType = DatasetType.ALL,
-    val_ds: DatasetType = DatasetType.ALL_SMALL,
+    ds_type: DatasetType = DatasetType.ALL,
     padding_idx: int = 15,
+    num_train_examples: int = None,
+    num_val_examples: int = None,
     max_grid_height: int = 32,
     max_grid_width: int = 32
 ):
-    train_ex_ds = ExampleDataset(dataset_type=train_ds, 
+    train_ex_ds = ExampleDataset(dataset_type=ds_type, 
                                  data_multiplier=data_multiplier, 
+                                 max_examples=num_train_examples,
                                  is_test=False)
     
-    val_ex_ds = ExampleDataset(dataset_type=val_ds, 
+    val_ex_ds = ExampleDataset(dataset_type=ds_type, 
                                data_multiplier=1,
+                               max_examples=num_val_examples,
                                is_test=True)
     
     tokenizer = train_ex_ds.get_program_tokenizer()
@@ -184,29 +187,31 @@ def create_dataloaders(
         persistent_workers=True,
     )
 
-    return train_loader, val_loader
+    print("Number of batches in training set: ", len(train_loader))
+    print("Number of batches in validation set: ", len(val_loader))
+    return train_loader, val_loader, tokenizer
 
 
 if __name__ == "__main__":
 
-    train_loader, val_loader = create_dataloaders(batch_size=4, data_multiplier=1, train_ds=DatasetType.ALL, val_ds=DatasetType.ALL_SMALL, padding_idx=15, max_grid_height=32, max_grid_width=32)
+    train_loader, val_loader, tokenizer = create_dataloaders(batch_size=4, 
+                                                  data_multiplier=1, 
+                                                  ds_type=DatasetType.ALL, 
+                                                  padding_idx=15,
+                                                  max_grid_height=32, 
+                                                  max_grid_width=32,
+                                                  num_val_examples=1000)
+    batch = next(iter(train_loader))
 
-    P = 2048
-    V = 16
-    B = 4 
-    N = 3
-    H = 32
-    W = 32
-    S = H * W
+    input_grids, output_grids, program_ids, attributes = batch
 
-    # Create a batch of demonstrations
-    input_grids = torch.randint(0, V, (B, H, W))
-    output_grids = torch.randint(0, V, (B, H, W))
-    program_batch = torch.randint(0, P, (B,))
+    print(input_grids.shape)
+    print(output_grids.shape)
+    print(program_ids.shape)
+    print(attributes)
 
-    prosip_config = ProSIPConfig()
+    prosip_config = ProSIPConfig(program_vocab=len(tokenizer))
 
     model = ProSIPModel(prosip_config)
-    
-    output = model(input_grids, output_grids, program_batch, num_iterations=2)
-    output = model(input_grids, output_grids, program_batch, num_iterations=2)
+    output = model(input_grids, output_grids, program_ids, num_iterations=2)
+    output = model(input_grids, output_grids, program_ids, num_iterations=2)
