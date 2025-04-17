@@ -642,7 +642,7 @@ class REPLConfig:
     n_head: int = 4
     dropout: float = 0.0
     activation: str = "relu"
-    max_iterations: int = 12
+    num_iterations: int = 12
     n_state: int = 1024 # Number of tokens in the state
     ffn_dim: Optional[int] = None
     use_rope: bool = True
@@ -682,14 +682,14 @@ class REPL(nn.Module):
                                         n_dim=config.n_dim, 
                                         n_head=config.n_head, 
                                         activation=config.activation, 
-                                        max_iterations=config.max_iterations, 
+                                        max_iterations=config.num_iterations, 
                                         ffn_dim=config.ffn_dim, 
                                         dropout=config.dropout, 
                                         lora_rank=config.lora_rank, 
                                         mlp_layers=config.mlp_layers, 
                                         mlp_dim=config.mlp_dim,
                                         rope=self.rope)
-        
+        self.num_iterations = config.num_iterations
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -727,13 +727,13 @@ class REPL(nn.Module):
             
         self.apply(init_weights)
 
-    def forward(self, input, program, num_iterations=1):
+    def forward(self, input, program):
         # input is BxSxD | program is BxD
         outputs = []
         prev_state = self.state_constructor(input, program)
         
         # Process through transformer encoder
-        for it in range(num_iterations):
+        for it in range(self.num_iterations):
             # Generate the subroutine for this iteration
             next_state, output_iter = self.interpreter(prev_state, program, it)
             outputs.append(output_iter)

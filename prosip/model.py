@@ -13,7 +13,6 @@ from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
 class ProSIPConfig:
-    # Common config
     n_dim: int = 256
     n_head: int = 4
     activation: str = "gelu"
@@ -23,6 +22,7 @@ class ProSIPConfig:
     n_layer_interpreter_gen: int = 2
     dropout: float = 0.0
     program_vocab: int = 2048
+    num_iterations: int = 1
 
     # Autoencoder config
     latent_height: int = 8
@@ -76,7 +76,8 @@ class ProSIPConfig:
             lora_rank=self.lora_rank,
             mlp_layers=self.lora_mlp_layers,
             mlp_dim=self.lora_mlp_dim,
-            n_state=self.latent_height * self.latent_width
+            n_state=self.latent_height * self.latent_width,
+            num_iterations=self.num_iterations
         )
 
 class ProSIPModel(nn.Module):
@@ -105,32 +106,39 @@ class ProSIPModel(nn.Module):
         self.autoencoder.reset_parameters()
         self.interpreter.reset_parameters()
 
-    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor, num_iterations: int = 1) -> torch.Tensor:
+    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
         # tasks is BxNx2xHxW
-        B, H, W = input_grids.shape
-
         encoded_input_grids = self.autoencoder.encode(input_grids) # B, n_latent, n_dim
         encoded_output_grids = self.autoencoder.encode(output_grids) # B, n_latent, n_dim
 
         program_embeds = self.program_embedding(program_ids) # B, n_dim
         
         # Now reshape them to (B, N*n_latent, n_dim)
-        intermediate_embeddings = self.interpreter.forward(encoded_input_grids, program_embeds, num_iterations)
+        intermediate_embeddings = self.interpreter.forward(encoded_input_grids, program_embeds)
+        last_embeddings = intermediate_embeddings[-1]
 
-        loss = vectorized_monotonic_trajectory_loss(intermediate_embeddings, 
+        trajectory_loss = vectorized_monotonic_trajectory_loss(intermediate_embeddings, 
                                                     encoded_input_grids, 
                                                     encoded_output_grids,
                                                     margin=self.trajectory_margin)
 
-        print("intermediate_embeddings.shape", intermediate_embeddings.shape)
-        print("loss", loss)
-
-        decoded_output_grids = self.autoencoder.decode(encoded_output_grids)
         decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
+        decoded_output_grids = self.autoencoder.decode(encoded_output_grids) # B, H, W
+        predicted_output_grids = self.autoencoder.decode(last_embeddings)
 
-        print(decoded_output_grids.shape)
-        print(decoded_input_grids.shape)
+        # Calculate Cross Entropy Loss between input_grids and decoded_input_grids
+        input_reconstruction_loss = nn.functional.cross_entropy(decoded_input_grids.view(-1, self.config.n_vocab), input_grids.view(-1))
+        output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
+        reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
+        prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
 
+        loss_dict = {
+            "reconstruction_loss": reconstruction_loss,
+            "prediction_loss": prediction_loss,
+            "trajectory_loss": trajectory_loss
+        }
+
+        return decoded_input_grids, decoded_output_grids, predicted_output_grids, loss_dict
 
 def create_dataloaders(
     batch_size: int,
@@ -140,7 +148,8 @@ def create_dataloaders(
     num_train_examples: int = None,
     num_val_examples: int = None,
     max_grid_height: int = 32,
-    max_grid_width: int = 32
+    max_grid_width: int = 32,
+    num_workers: int = min(8, os.cpu_count() or 1)
 ):
     train_ex_ds = ExampleDataset(dataset_type=ds_type, 
                                  data_multiplier=data_multiplier, 
@@ -162,18 +171,15 @@ def create_dataloaders(
                     max_width=max_grid_width,
                     flatten=False)
 
-    num_workers = min(8, os.cpu_count() or 1)
-
-
     train_loader = DataLoader(
         train_ex_ds, 
         collate_fn=collate_fn,
         batch_size=batch_size,
         num_workers=num_workers,
         shuffle=True,
-        worker_init_fn=worker_init_fn,
+        worker_init_fn=worker_init_fn if num_workers > 0 else None,
         drop_last=True,
-        persistent_workers=True,
+        persistent_workers=True if num_workers > 0 else False,
     )
 
     val_loader = DataLoader(
@@ -181,10 +187,10 @@ def create_dataloaders(
         collate_fn=collate_fn,
         batch_size=batch_size,
         num_workers=num_workers,
-        worker_init_fn=worker_init_fn,
+        worker_init_fn=worker_init_fn if num_workers > 0 else None,
         shuffle=False,
         drop_last=True,
-        persistent_workers=True,
+        persistent_workers=True if num_workers > 0 else False,
     )
 
     print("Number of batches in training set: ", len(train_loader))
@@ -200,6 +206,7 @@ if __name__ == "__main__":
                                                   padding_idx=15,
                                                   max_grid_height=32, 
                                                   max_grid_width=32,
+                                                  num_workers=0,
                                                   num_val_examples=1000)
     batch = next(iter(train_loader))
 
@@ -213,5 +220,13 @@ if __name__ == "__main__":
     prosip_config = ProSIPConfig(program_vocab=len(tokenizer))
 
     model = ProSIPModel(prosip_config)
-    output = model(input_grids, output_grids, program_ids, num_iterations=2)
-    output = model(input_grids, output_grids, program_ids, num_iterations=2)
+    # model = torch.torch.compile(
+    #             model,
+    #             fullgraph=True,
+    #             mode="reduce-overhead",
+    #             backend="inductor"
+    #         )
+
+    for i in range(10):
+        print(f"Iteration {i}")
+        output = model(input_grids, output_grids, program_ids)
