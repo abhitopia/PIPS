@@ -147,7 +147,7 @@ class LoRALinear(nn.Module):
 
         B, seq_len, in_features = x.size()
         # Flatten the first two dimensions to process per-token.
-        x_flat = x.view(B * seq_len, in_features)  # [B*seq_len, in_features]
+        x_flat = x.reshape(B * seq_len, in_features)  # [B*seq_len, in_features]
         # For B_params: shape [B, seq_len, rank, in_features] -> flatten to [B*seq_len, rank, in_features]
         B_flat = B_params.view(B * seq_len, self.rank, in_features)
         # For A_params: shape [B, seq_len, out_features, rank] -> flatten to [B*seq_len, out_features, rank]
@@ -240,7 +240,7 @@ class MultiHeadAttention(nn.Module):
         if subroutine is not None:
             # Flatten subroutine to generate dynamic LoRA parameters:
             seq_len = subroutine.size(1)
-            sub_flat = subroutine.view(B * seq_len, -1)
+            sub_flat = subroutine.reshape(B * seq_len, -1)
             # For Query:
             A_q, B_q = self.hypernetwork_q(sub_flat)  # shapes: [B*seq_len, n_dim, attn_rank] and [B*seq_len, attn_rank, n_dim]
             A_q = A_q.view(B, seq_len, self.q_proj.out_features, self.lora_q.rank)
@@ -418,7 +418,7 @@ class DynamicTransformerEncoderLayer(nn.Module):
         normed_src = self.norm2(src)
         B, seq_len, _ = normed_src.shape
         # Flatten the token dimension for the hypernetwork.
-        task_flat = subroutine.view(B * seq_len, -1)  # [B*seq_len, task_embedding_dim]
+        task_flat = subroutine.reshape(B * seq_len, -1)  # [B*seq_len, task_embedding_dim]
         # Obtain LoRA parameters from hypernetwork.
         A_params_flat, B_params_flat = self.hypernetwork(task_flat)
         # Reshape to per-token shape.
@@ -729,6 +729,7 @@ class REPL(nn.Module):
 
     def forward(self, input, program):
         # input is BxSxD | program is BxD
+        
         outputs = []
         prev_state = self.state_constructor(input, program)
         

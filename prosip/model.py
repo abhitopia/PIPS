@@ -1,14 +1,35 @@
-from dataclasses import dataclass
-from functools import partial
 import os
-from typing import Optional
+from pathlib import Path
+import tempfile
+from typing import Any, Dict, Optional
+from dataclasses import asdict, dataclass, field
+from functools import partial
+
+import numpy as np
+import matplotlib.pyplot as plt
+
 import torch
 import torch.nn as nn
+from torch.optim import AdamW
+from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
+from torch import Tensor
+from torch.serialization import add_safe_globals  # Add this import at the top
+
+import pytorch_lightning as pl
+from pytorch_lightning.loggers import WandbLogger
+from pytorch_lightning.tuner.tuning import Tuner
+
+
+from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
+from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.data import DatasetType
+from pips.misc.acceleration_config import AccelerationConfig
+
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
 from prosip.repl import REPL, REPLConfig
-from prosip.task_dataset import ExampleDataset, collate_fn_project, worker_init_fn
+from prosip.utils import normalize_state_dict, load_model_weights
+from prosip.task_dataset import ExampleDataset, Tokenizer, collate_fn_project, worker_init_fn
 from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
@@ -79,6 +100,13 @@ class ProSIPConfig:
             n_state=self.latent_height * self.latent_width,
             num_iterations=self.num_iterations
         )
+
+    def to_dict(self):
+        return asdict(self)
+    
+    @classmethod
+    def from_dict(cls, config_dict: dict):
+        return cls(**config_dict)
 
 class ProSIPModel(nn.Module):
     def __init__(self, config: ProSIPConfig):
@@ -198,9 +226,484 @@ def create_dataloaders(
     return train_loader, val_loader, tokenizer
 
 
+@dataclass
+class ProSIPExperimentConfig:
+    """Configuration for training hyperparameters and schedules"""
+    # Model configuration
+    model_config: ProSIPConfig = field(default_factory=ProSIPConfig)
+    
+    # General training parameters
+    seed: int | None = None  # None means random seed
+    batch_size: int = 64
+    max_steps: int = 1_000_000
+    gradient_clip_val: float = 1.0
+    accumulate_grad_batches: int = 1
+    
+    # Learning rate parameters
+    learning_rate: float = 1e-4  # Consistent with Dalle-E paper
+    lr_min: float = 1e-6  # Minimum learning rate to be reached after decay
+    warmup_steps_lr: int = 10_000
+    decay_steps_lr: int | None = None
+    weight_decay: float = 1e-4  # Consistent with Dalle-E paper
+    
+    # Commitment loss parameters
+    trajectory_margin: float = 0.1
+    beta_reconstruction: float = 1.0
+    beta_prediction: float = 1.0
+    beta_trajectory: float = 1.0
+
+    # Dataset parameters
+    dataset: DatasetType = DatasetType.ALL
+    limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
+    limit_validation_samples: int | None = None  # Limit the number of validation samples. None means use all samples.
+    data_multiplier: int = 2  # How many times to repeat the dataset
+    
+    # Other parameters
+    model_src: str | None = None
+
+    def __post_init__(self):
+        if self.accumulate_grad_batches < 1:
+            raise ValueError("accumulate_grad_batches must be >= 1")
+            
+        # Generate random seed if none provided
+        if self.seed is None:
+            self.seed = np.random.randint(0, 2**32 - 1)
+
+        # Cap warmup steps at max_steps and ensure warmup + transition <= max_steps
+      
+        # For learning rate (special case - using original name)
+        self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
+        if self.decay_steps_lr is None:
+            self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
+
+    def to_dict(self) -> dict:
+        """Convert config to a dictionary."""
+        config_dict = {}
+        for field in self.__dataclass_fields__:
+            value = getattr(self, field)
+            # Handle nested VQVAEConfig
+            if field == 'model_config':
+                config_dict[field] = value.to_dict()
+            # Handle DatasetType enum
+            elif isinstance(value, DatasetType):
+                config_dict[field] = value.name
+            else:
+                config_dict[field] = value
+        return config_dict
+
+    @classmethod
+    def from_dict(cls, config_dict: dict) -> 'ProSIPExperimentConfig':
+        """Create config from a dictionary."""
+        # Create a copy to avoid modifying the input
+        config = config_dict.copy()
+        
+        # Handle nested VQVAEConfig
+        if isinstance(config.get('model_config'), dict):
+            config['model_config'] = ProSIPConfig.from_dict(config['model_config'])
+        
+        # Handle DatasetType fields
+        if 'dataset' in config:
+            config['dataset'] = DatasetType[config['dataset']]
+            
+        return cls(**config)
+
+    @staticmethod
+    def from_checkpoint(checkpoint_path: str) -> 'ProSIPExperimentConfig':
+        # Add our custom classes to safe globals
+        add_safe_globals([ProSIPExperimentConfig, ProSIPConfig])
+        ckpt = torch.load(checkpoint_path, weights_only=False, map_location='cpu')
+        config = ckpt['hyper_parameters']['experiment_config']
+        assert isinstance(config, ProSIPExperimentConfig)
+        return config
+    
+
+class ProSIPTrainingModule(pl.LightningModule):
+    def __init__(self, experiment_config: ProSIPExperimentConfig, tokenizer: Tokenizer, compile_model: bool = False):
+        super(ProSIPTrainingModule, self).__init__()
+        self.experiment_config = experiment_config
+        self.model_config = experiment_config.model_config
+        self.model = None
+        self.pad_idx = experiment_config.model_config.padding_idx
+        self.learning_rate = experiment_config.learning_rate
+        self.compile_model = compile_model
+        self.tokenizer = tokenizer
+        self.save_hyperparameters()
+
+    def configure_model(self):
+        """
+        Compile the model after device placement.
+        This gets called in on_fit_start so that the model is already on GPU.
+        """
+        if self.model is not None:
+            return
+
+        self.model = ProSIPModel(self.model_config)
+        
+        if self.compile_model:
+            print("Compiling model using torch.compile...")
+            self.model = torch.compile(
+                self.model,
+                fullgraph=True,
+                mode="reduce-overhead",
+                backend="inductor"
+            )
+        else:
+            print("Model compilation disabled; skipping torch.compile.")
+    
+    def on_train_start(self):
+        super().on_train_start()
+
+    def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
+        if self.model is None:
+            self.configure_model()
+        ckpt_state_dict = checkpoint["state_dict"]
+        current_state_dict = self.state_dict()
+        new_state_dict = normalize_state_dict(current_state_dict, ckpt_state_dict)
+        checkpoint["state_dict"] = new_state_dict
+        print(f"Loaded all model weights")
+
+
+    def compute_accuracies(self, logits: Tensor, target: Tensor):
+         # Calculate token accuracy excluding padding tokens.
+        non_padding_mask = (target != self.pad_idx)  # Shape: [B, H, W]
+        predictions = logits.argmax(dim=-1)  # Shape: [B, H, W]
+
+        # Simple token accuracy calculation - must filter out padding tokens
+        total_non_padding_tokens = non_padding_mask.sum().float()
+        correct_non_padding_tokens = ((predictions == target) & non_padding_mask).sum().float()
+        token_accuracy = correct_non_padding_tokens / total_non_padding_tokens
+
+        # Sample accuracy - a sample is correct if ALL tokens match (including padding)
+        sample_correct = torch.all(predictions == target, dim=(1, 2)).float()  # Shape: [B]
+        sample_accuracy = sample_correct.mean()
+
+        return token_accuracy, sample_accuracy
+
+
+    def forward(self, input_grids: Tensor, output_grids: Tensor, program_ids: Tensor,
+                beta_reconstruction: Tensor = torch.tensor(1.0), 
+                beta_prediction: Tensor = torch.tensor(1.0),
+                beta_trajectory: Tensor = torch.tensor(1.0)):
+        
+        # Forward pass with provided scheduled parameters.
+        decoded_input_grids, decoded_output_grids, predicted_output_grids, loss_dict = self.model.forward(input_grids, output_grids, program_ids)
+        input_token_accuracy, input_sample_accuracy = self.compute_accuracies(decoded_input_grids, input_grids)
+        output_token_accuracy, output_sample_accuracy = self.compute_accuracies(decoded_output_grids, output_grids)
+        prediction_token_accuracy, prediction_sample_accuracy = self.compute_accuracies(predicted_output_grids, output_grids) 
+        
+        # Compute total loss in a way that maintains the computational graph.
+        # Scale the KLD losses by the number of latents (similar to Dalle-E paper).
+        raw_losses = {
+            'loss(Reconstruction)': loss_dict['reconstruction_loss'],
+            'loss(Prediction)': loss_dict['prediction_loss'],
+            'loss(Trajectory)': loss_dict['trajectory_loss'],
+        }
+        
+        # Compute weighted losses for total loss.
+        weighted_losses = {
+            'loss(Reconstruction)': raw_losses['loss(Reconstruction)'] * beta_reconstruction,
+            'loss(Prediction)': raw_losses['loss(Prediction)'] * beta_prediction,
+            'loss(Trajectory)': raw_losses['loss(Trajectory)'] * beta_trajectory,
+        }
+        
+        total_loss = sum(weighted_losses.values())
+        
+        # Return tensor values; logging callbacks can detach/convert them as needed.
+        return {
+            'loss': total_loss,
+            **raw_losses,
+            'token_accuracy(Input)': input_token_accuracy,
+            'sample_accuracy(Input)': input_sample_accuracy,
+            'token_accuracy(Output)': output_token_accuracy,
+            'sample_accuracy(Output)': output_sample_accuracy,
+            'token_accuracy(Prediction)': prediction_token_accuracy,
+            'sample_accuracy(Prediction)': prediction_sample_accuracy,
+        }
+
+    def training_step(self, batch, batch_idx):
+        torch.compiler.cudagraph_mark_step_begin()
+        input_grids, output_grids, program_ids, attributes = batch
+
+        beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
+        beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
+        beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
+
+        output_dict = self(
+            input_grids=input_grids,
+            output_grids=output_grids,
+            program_ids=program_ids,
+            beta_reconstruction=beta_reconstruction,
+            beta_prediction=beta_prediction,
+            beta_trajectory=beta_trajectory
+        )
+
+        output_dict['beta(Reconstruction)'] = beta_reconstruction
+        output_dict['beta(Prediction)'] = beta_prediction
+        output_dict['beta(Trajectory)'] = beta_trajectory
+
+        self.log_metrics(output_dict, 'train', batch[0].size(0))
+
+        return output_dict
+
+    def validation_step(self, batch, batch_idx):
+        torch.compiler.cudagraph_mark_step_begin()
+        input_grids, output_grids, program_ids, attributes = batch
+
+        # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).
+        beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
+        beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
+        beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
+
+        output_dict = self(
+            input_grids=input_grids,
+            output_grids=output_grids,
+            program_ids=program_ids,
+            beta_reconstruction=beta_reconstruction,
+            beta_prediction=beta_prediction,
+            beta_trajectory=beta_trajectory
+        )
+
+        self.log_metrics(output_dict, 'val', batch[0].size(0))
+        return output_dict
+
+    def configure_optimizers(self):
+        # Get all parameters that require gradients
+        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
+        
+        # Split parameters based on dimensionality
+        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+
+        # This excludes biases and BatchNorm or LayerNorm
+        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+
+        optim_groups = [
+            {'params': decay_params, 'weight_decay': self.experiment_config.weight_decay},
+            {'params': nodecay_params, 'weight_decay': 0.0}
+        ]
+        
+        optimizer = AdamW(
+            optim_groups,
+            lr=self.learning_rate,
+            betas=(0.9, 0.999),
+            eps=1e-8,
+            fused=True if torch.cuda.is_available() else False
+        )
+        
+        # Noam scheduler with linear warmup and cosine decay using lr-specific warmup
+        def lr_lambda(step):
+            warmup_steps = self.experiment_config.warmup_steps_lr
+            min_lr_factor = self.experiment_config.lr_min / self.experiment_config.learning_rate  # Use config value
+            
+            if step < warmup_steps:
+                # Linear warmup
+                return float(step) / float(max(1, warmup_steps))
+            elif step < self.experiment_config.decay_steps_lr + warmup_steps:
+                # Cosine decay from 1.0 to min_lr_factor
+                progress = float(step - warmup_steps) / float(max(1, self.experiment_config.max_steps - warmup_steps))
+                return min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
+            else:
+                return min_lr_factor
+        
+        scheduler = LambdaLR(optimizer, lr_lambda)
+        
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": {
+                "scheduler": scheduler,
+                "interval": "step",
+                "frequency": 1
+            }
+        }
+
+
+    def log_metrics(self, metrics: Dict[str, float], phase: str, batch_size: int):
+
+        assert phase in ['train', 'val']
+
+        # Process each metric in the outputs dictionary
+        for key, value in metrics.items():
+            # Skip WandB Images since we handle them separately
+            # Handle the main loss separately.
+            if key == 'loss':
+                metric_name = f'Loss/{key}_{phase}'  # Default format.
+            # Handle metrics with categories - loss(CE), loss(MI), etc.
+            elif '(' in key and ')' in key:
+                category = key.split('(')[-1].split(')')[0]  # Extract category.
+                metric_name = f'{category}/{key.split("(")[0]}_{phase}'  # Format as "category/metric_phase"
+            # Handle any remaining metrics.
+            elif key.strip():
+                metric_name = f'{key.capitalize()}/{key}_{phase}'
+            
+            sync_dist = False if phase == 'train' else True
+            on_step = True if phase == 'train' else False
+            on_epoch = True if phase == 'val' else False
+            self.log(metric_name, value, on_step=on_step, on_epoch=on_epoch, batch_size=batch_size, logger=True, sync_dist=sync_dist)
+
+
+def train(
+    experiment_config: ProSIPExperimentConfig,
+    run_name: str,
+    project_name: str,
+    checkpoint_dir: Path,
+    debug_mode: bool = False,
+    wandb_logging: bool = True,
+    val_check_interval: int | None = None,
+    resume_from: str | None = None,
+    acceleration: AccelerationConfig | None = None,
+    lr_find: bool = False,
+    grad_log_interval: int = 100,
+    visualization_interval: int = 100,
+    num_grids_to_visualize: int = 4
+) -> None:
+    """Train a DVAE model with the given configuration."""
+    
+
+    print(experiment_config)
+    # Create default acceleration config if none provided
+    if acceleration is None:
+        acceleration = AccelerationConfig()
+    
+    # Set all random seeds
+    seed = experiment_config.seed
+    pl.seed_everything(seed, workers=True)
+    
+    # Apply acceleration settings
+    acceleration.apply_settings()
+
+    # Disable validation if val_check_interval is negative
+    validation_disabled = val_check_interval is not None and val_check_interval < 0
+   
+    # Create dataloaders - use values from experiment_config
+    train_loader, val_loader, tokenizer = create_dataloaders(
+        batch_size=experiment_config.batch_size,
+        data_multiplier=experiment_config.data_multiplier,
+        ds_type=experiment_config.dataset,
+        padding_idx=experiment_config.model_config.padding_idx,
+        num_train_examples=experiment_config.limit_training_samples,
+        num_val_examples=experiment_config.limit_validation_samples,
+        max_grid_height=experiment_config.model_config.grid_height,
+        max_grid_width=experiment_config.model_config.grid_width,
+    )
+
+    experiment_config.model_config.program_vocab = len(tokenizer)
+
+    if validation_disabled:
+        print("Validation disabled. Checkpoints will not be saved.")
+        print("Training batches won't be permuted either.")
+        val_loader = None
+        val_check_interval = None
+
+    # Initialize wandb logger
+    wandb_logger = WandbLogger(
+        project=project_name,
+        name=run_name,
+        id=run_name,
+        version=run_name,
+        log_model=False,
+        save_dir=checkpoint_dir,
+        reinit=True,
+        mode="disabled" if not wandb_logging else "online",
+        config=experiment_config.to_dict()
+    )
+
+    # Only add checkpoint callbacks if validation is enabled
+    callbacks = [ CustomRichProgressBar()]
+
+    # if debug_mode:
+    #     gradient_check_callback = GradientCheckCallback()
+    #     callbacks.append(gradient_check_callback)
+    
+    if not validation_disabled:
+        callbacks.extend([
+            ModelCheckpointWithWandbSync(
+                wandb_model_suffix="best",
+                monitor='Prediction/sample_accuracy',
+                save_top_k=3,
+                mode='max',
+                auto_insert_metric_name=False,
+                filename='best-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy:.4f}',
+                wandb_verbose=debug_mode
+            ),
+            ModelCheckpointWithWandbSync(
+                wandb_model_suffix="backup",
+                monitor='step',
+                mode='max',
+                save_top_k=2,
+                every_n_train_steps=20 if debug_mode else val_check_interval,
+                auto_insert_metric_name=False,
+                filename='backup-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy:.4f}',
+                wandb_verbose=debug_mode
+            )
+        ])
+
+
+    # profiler = pl.profilers.PyTorchProfiler()
+
+    trainer = pl.Trainer(
+        # profiler=profiler,
+        default_root_dir=tempfile.gettempdir() if lr_find else None,
+        log_every_n_steps=1,
+        num_sanity_val_steps=0,
+        enable_progress_bar=True,
+        accelerator=acceleration.device,
+        precision=acceleration.precision,
+        devices='auto',
+        logger=wandb_logger,
+        gradient_clip_val=experiment_config.gradient_clip_val,
+        accumulate_grad_batches=experiment_config.accumulate_grad_batches,
+        callbacks=callbacks,
+        max_epochs=-1,
+        max_steps=experiment_config.max_steps,
+        limit_train_batches=100 if lr_find else None,
+        limit_val_batches=0 if lr_find or validation_disabled else (10 if debug_mode else None),
+        val_check_interval=None if lr_find or validation_disabled else val_check_interval,
+        enable_model_summary=not lr_find
+        # detect_anomaly=True if debug_mode else False
+    )
+
+    with trainer.init_module():
+        # Initialize the model
+        model = ProSIPTrainingModule(
+            experiment_config,
+            tokenizer,
+            compile_model=acceleration.compile_model
+        )
+
+        # Load weights if a model source is specified
+        if experiment_config.model_src:
+            load_model_weights(model, experiment_config.model_src, project_name, checkpoint_dir)
+        # wandb_logger.watch(model, log='parameters', log_graph=True, log_freq=100)
+
+    if lr_find:
+        tuner = Tuner(trainer)
+        # For lr_find, only use train_loader
+        lr_finder = tuner.lr_find(
+            model,
+            train_loader,
+            val_dataloaders=None,  # Disable validation during lr_find
+            update_attr=False
+        )
+        
+        print("\nLearning rate finder results:")
+        print(f"Suggested learning rate: {lr_finder.suggestion()}")
+        
+        fig = lr_finder.plot(suggest=True)
+        output_file = os.path.join(os.getcwd(), f"lr_finder_{run_name}.png")
+        fig.savefig(output_file)
+        plt.close(fig)  # Close the figure to free memory
+        return
+
+    trainer.fit(
+        model, 
+        train_loader, 
+        val_loader, 
+        ckpt_path=resume_from
+    )
+
 if __name__ == "__main__":
 
-    train_loader, val_loader, tokenizer = create_dataloaders(batch_size=4, 
+    train_loader, val_loader, tokenizer = create_dataloaders(batch_size=64, 
                                                   data_multiplier=1, 
                                                   ds_type=DatasetType.ALL, 
                                                   padding_idx=15,
@@ -215,7 +718,7 @@ if __name__ == "__main__":
     print(input_grids.shape)
     print(output_grids.shape)
     print(program_ids.shape)
-    print(attributes)
+    # print(attributes)
 
     prosip_config = ProSIPConfig(program_vocab=len(tokenizer))
 
@@ -230,3 +733,32 @@ if __name__ == "__main__":
     for i in range(10):
         print(f"Iteration {i}")
         output = model(input_grids, output_grids, program_ids)
+
+
+    # experiment_config = ProSIPExperimentConfig(batch_size=4)
+    # run_name = "prosip-test"
+    # project_name = "prosip-test-project"
+    # checkpoint_dir = Path("checkpoints")
+    # debug_mode = False
+    # wandb_logging = True
+    # val_check_interval = 100
+
+    # print(experiment_config)
+
+    # acceleration = AccelerationConfig(
+    #     compile_model=False
+    # )
+
+    # train(experiment_config, 
+    #       run_name, 
+    #       project_name, 
+    #       checkpoint_dir, 
+    #       debug_mode, 
+    #       wandb_logging, 
+    #       val_check_interval, 
+    #       resume_from=None, 
+    #       acceleration=acceleration, 
+    #       lr_find=False, 
+    #       grad_log_interval=100, 
+    #       visualization_interval=100, 
+    #       num_grids_to_visualize=4)
