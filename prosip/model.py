@@ -14,7 +14,8 @@ class ProSIPConfig:
     activation: str = "gelu"
     n_vocab: int = 16
     n_layer_encoder: int = 4
-    n_layer_interpreter: int = 2
+    n_layer_interpreter_exec: int = 2
+    n_layer_interpreter_gen: int = 2
     dropout: float = 0.0
     program_vocab: int = 2048
 
@@ -58,7 +59,8 @@ class ProSIPConfig:
             dropout=self.dropout
         )
         self.repl_config = REPLConfig(
-            n_layer=self.n_layer_interpreter,
+            n_layer_exec=self.n_layer_interpreter_exec,
+            n_layer_gen=self.n_layer_interpreter_gen,
             n_dim=self.n_dim,
             n_head=self.n_head,
             dropout=self.dropout,

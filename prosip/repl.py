@@ -548,12 +548,12 @@ class SubroutineGenerator(nn.Module):
 
 
 class Interpreter(nn.Module):
-    def __init__(self, n_layer, n_dim, n_head, activation, max_iterations, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
+    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, max_iterations, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
         super(Interpreter, self).__init__()
 
          # Create a proper iteration embedding
         self.subroutine_generator = SubroutineGenerator(
-            num_layers=n_layer,
+            num_layers=n_layer_gen,
             embed_dim=n_dim,
             num_heads=n_head,
             activation=activation,
@@ -563,7 +563,7 @@ class Interpreter(nn.Module):
             rope=rope)
 
         self.subroutine_executor = SubroutineExecutor(
-            num_layers=n_layer,
+            num_layers=n_layer_exec,
             embed_dim=n_dim,
             ffn_dim=ffn_dim,
             task_embedding_dim=n_dim,
@@ -576,7 +576,7 @@ class Interpreter(nn.Module):
             rope=rope)
         
         self.output_extractor = SubroutineExecutor(
-            num_layers=n_layer,  
+            num_layers=n_layer_exec,  
             embed_dim=n_dim,
             ffn_dim=ffn_dim,
             task_embedding_dim=n_dim,
@@ -601,11 +601,11 @@ class Interpreter(nn.Module):
 
 
 class StateConstructor(nn.Module):
-    def __init__(self, n_layer, n_dim, n_head, activation, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
+    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
         super(StateConstructor, self).__init__()
            # Create a proper iteration embedding
         self.subroutine_generator = SubroutineGenerator(
-            num_layers=n_layer,
+            num_layers=n_layer_gen,
             embed_dim=n_dim,
             num_heads=n_head,
             activation=activation,
@@ -614,7 +614,7 @@ class StateConstructor(nn.Module):
             rope=rope)
 
         self.subroutine_executor = SubroutineExecutor(
-            num_layers=n_layer,
+            num_layers=n_layer_exec,
             embed_dim=n_dim,
             ffn_dim=ffn_dim,
             task_embedding_dim=n_dim,
@@ -638,7 +638,6 @@ class StateConstructor(nn.Module):
 class REPLConfig:
 
     # Base Transformer parameters
-    n_layer: int = 2
     n_dim: int = 256
     n_head: int = 4
     dropout: float = 0.0
@@ -648,12 +647,14 @@ class REPLConfig:
     ffn_dim: Optional[int] = None
     use_rope: bool = True
 
+    # Split layer configuration
+    n_layer_exec: int = 2  # Number of layers for SubroutineExecutor
+    n_layer_gen: int = 2   # Number of layers for SubroutineGenerator
+
     # LoRA parameters
     lora_rank: int = 8
     mlp_layers: int = 2
     mlp_dim: int = 128
-    
-
 
     def __post_init__(self):
         if self.ffn_dim is None:
@@ -665,7 +666,8 @@ class REPL(nn.Module):
         super(REPL, self).__init__()
 
         self.rope = RotaryPositionalEmbeddings(dim=config.n_dim // config.n_head, max_seq_len=1024) if config.use_rope else None
-        self.state_constructor = StateConstructor(n_layer=config.n_layer, 
+        self.state_constructor = StateConstructor(n_layer_exec=config.n_layer_exec, 
+                                                  n_layer_gen=config.n_layer_gen,
                                                   n_dim=config.n_dim, 
                                                   n_head=config.n_head, 
                                                   activation=config.activation, 
@@ -675,7 +677,8 @@ class REPL(nn.Module):
                                                   mlp_layers=config.mlp_layers, 
                                                   mlp_dim=config.mlp_dim,
                                                   rope=self.rope)
-        self.interpreter = Interpreter(n_layer=config.n_layer, 
+        self.interpreter = Interpreter(n_layer_exec=config.n_layer_exec, 
+                                        n_layer_gen=config.n_layer_gen,
                                         n_dim=config.n_dim, 
                                         n_head=config.n_head, 
                                         activation=config.activation, 
