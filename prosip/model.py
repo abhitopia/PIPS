@@ -261,6 +261,8 @@ class ProSIPExperimentConfig:
     lr_min: float = 1e-6  # Minimum learning rate to be reached after decay
     warmup_steps_lr: int = 10_000
     decay_steps_lr: int | None = None
+    adamw_betas_1: float = 0.9
+    adamw_betas_2: float = 0.999
     weight_decay: float = 1e-4  # Consistent with Dalle-E paper
     
     # Commitment loss parameters
@@ -565,7 +567,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         optimizer = AdamW(
             optim_groups,
             lr=self.learning_rate,
-            betas=(0.9, 0.999),
+            betas=(self.experiment_config.adamw_betas_1, self.experiment_config.adamw_betas_2),
             eps=1e-8,
             fused=True if torch.cuda.is_available() else False
         )
