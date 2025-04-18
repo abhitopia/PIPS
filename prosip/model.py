@@ -626,7 +626,7 @@ def train(
                 wandb_model_suffix="best",
                 monitor='Prediction/loss_val',
                 save_top_k=3,
-                mode='max',
+                mode='min',
                 auto_insert_metric_name=False,
                 filename='best-step{step:07d}-Loss{Prediction/loss_val:.4f}',
                 wandb_verbose=debug_mode
