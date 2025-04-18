@@ -137,8 +137,8 @@ class ProSIPModel(nn.Module):
 
     def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
         # tasks is BxNx2xHxW
-        encoded_input_grids = self.autoencoder.encode(input_grids) # B, n_latent, n_dim
-        encoded_output_grids = self.autoencoder.encode(output_grids) # B, n_latent, n_dim
+        encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
+        encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=torch.tensor(0, device=output_grids.device)) # B, n_latent, n_dim
 
         program_embeds = self.program_embedding(program_ids) # B, n_dim
         
