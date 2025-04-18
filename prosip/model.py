@@ -146,7 +146,6 @@ class ProSIPModel(nn.Module):
         # tasks is BxNx2xHxW
         encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
         encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=torch.tensor(0, device=output_grids.device)) # B, n_latent, n_dim
-
         program_embeds = self.program_embedding(program_ids) # B, n_dim
         
         # Now reshape them to (B, N*n_latent, n_dim)
@@ -403,13 +402,14 @@ class ProSIPTrainingModule(pl.LightningModule):
 
         return token_accuracy, sample_accuracy
 
-    def data_accuracy(self, predictions: Dict[str, Tensor], target: Tensor, attributes: List[Dict], phase: str):
+    def data_accuracy(self, predictions: Dict[str, Tensor], target: Tensor, input_target: Tensor, attributes: List[Dict], phase: str):
         """
         Compute and log accuracy metrics broken down by dataset attribute.
         
         Args:
             predictions: Dictionary with keys 'input', 'output', 'predicted' containing prediction tensors
-            target: Target tensor to compare against
+            target: Target tensor to compare against for output/predicted
+            input_target: Target tensor to compare against for input
             attributes: List of attribute dictionaries with dataset information
             phase: 'train' or 'val' indicating which phase we're in
         """
@@ -433,7 +433,12 @@ class ProSIPTrainingModule(pl.LightningModule):
             for pred_type, pred_tensor in predictions.items():
                 # Filter predictions by dataset mask
                 dataset_preds = pred_tensor[dataset_mask]
-                dataset_targets = target[dataset_mask]
+                
+                # Use the appropriate target based on prediction type
+                if pred_type == 'input':
+                    dataset_targets = input_target[dataset_mask]
+                else:
+                    dataset_targets = target[dataset_mask]
                 
                 if len(dataset_preds) == 0:
                     continue
@@ -514,7 +519,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
         # Calculate and log dataset-specific accuracies
-        self.data_accuracy(predictions, output_grids, attributes, 'train')
+        self.data_accuracy(predictions, output_grids, input_grids, attributes, 'train')
 
         return output_dict
 
@@ -538,7 +543,7 @@ class ProSIPTrainingModule(pl.LightningModule):
 
         self.log_metrics(output_dict, 'val', batch[0].size(0))
         # Calculate and log dataset-specific accuracies
-        self.data_accuracy(predictions, output_grids, attributes, 'val')
+        self.data_accuracy(predictions, output_grids, input_grids, attributes, 'val')
         
         return output_dict
 
