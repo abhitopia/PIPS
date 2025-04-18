@@ -248,7 +248,6 @@ class ProSIPExperimentConfig:
     weight_decay: float = 1e-4  # Consistent with Dalle-E paper
     
     # Commitment loss parameters
-    trajectory_margin: float = 0.1
     beta_reconstruction: float = 1.0
     beta_prediction: float = 1.0
     beta_trajectory: float = 1.0
