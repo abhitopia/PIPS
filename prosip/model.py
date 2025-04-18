@@ -168,13 +168,23 @@ class ProSIPModel(nn.Module):
         reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
         prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
 
+        input_predictions = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
+        output_predictions = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+        predicted_predictions = predicted_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+
+        predictions = {
+            "input": input_predictions,
+            "output": output_predictions,
+            "predicted": predicted_predictions
+        }
+
         loss_dict = {
             "reconstruction_loss": reconstruction_loss,
             "prediction_loss": prediction_loss,
             "trajectory_loss": trajectory_loss
         }
 
-        return decoded_input_grids, decoded_output_grids, predicted_output_grids, loss_dict
+        return predictions, loss_dict
 
 def create_dataloaders(
     batch_size: int,
@@ -379,11 +389,9 @@ class ProSIPTrainingModule(pl.LightningModule):
         print(f"Loaded all model weights")
 
 
-    def compute_accuracies(self, logits: Tensor, target: Tensor):
+    def compute_accuracies(self, predictions: Tensor, target: Tensor):
          # Calculate token accuracy excluding padding tokens.
         non_padding_mask = (target != self.pad_idx)  # Shape: [B, H, W]
-        predictions = logits.argmax(dim=-1)  # Shape: [B, H, W]
-
         # Simple token accuracy calculation - must filter out padding tokens
         total_non_padding_tokens = non_padding_mask.sum().float()
         correct_non_padding_tokens = ((predictions == target) & non_padding_mask).sum().float()
@@ -402,10 +410,10 @@ class ProSIPTrainingModule(pl.LightningModule):
                 beta_trajectory: Tensor = torch.tensor(1.0)):
         
         # Forward pass with provided scheduled parameters.
-        decoded_input_grids, decoded_output_grids, predicted_output_grids, loss_dict = self.model.forward(input_grids, output_grids, program_ids)
-        input_token_accuracy, input_sample_accuracy = self.compute_accuracies(decoded_input_grids, input_grids)
-        output_token_accuracy, output_sample_accuracy = self.compute_accuracies(decoded_output_grids, output_grids)
-        prediction_token_accuracy, prediction_sample_accuracy = self.compute_accuracies(predicted_output_grids, output_grids) 
+        predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids)
+        input_token_accuracy, input_sample_accuracy = self.compute_accuracies(predictions["input"], input_grids)
+        output_token_accuracy, output_sample_accuracy = self.compute_accuracies(predictions["output"], output_grids)
+        prediction_token_accuracy, prediction_sample_accuracy = self.compute_accuracies(predictions["predicted"], output_grids) 
         
         # Compute total loss in a way that maintains the computational graph.
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper).
