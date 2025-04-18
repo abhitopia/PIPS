@@ -646,6 +646,7 @@ class REPLConfig:
     n_state: int = 1024 # Number of tokens in the state
     ffn_dim: Optional[int] = None
     use_rope: bool = True
+    rope_base: int = 10000
 
     # Split layer configuration
     n_layer_exec: int = 2  # Number of layers for SubroutineExecutor
@@ -665,7 +666,7 @@ class REPL(nn.Module):
     def __init__(self, config: REPLConfig):
         super(REPL, self).__init__()
 
-        self.rope = RotaryPositionalEmbeddings(dim=config.n_dim // config.n_head, max_seq_len=1024) if config.use_rope else None
+        self.rope = RotaryPositionalEmbeddings(dim=config.n_dim // config.n_head, max_seq_len=1024, base=config.rope_base) if config.use_rope else None
         self.state_constructor = StateConstructor(n_layer_exec=config.n_layer_exec, 
                                                   n_layer_gen=config.n_layer_gen,
                                                   n_dim=config.n_dim, 
@@ -682,7 +683,7 @@ class REPL(nn.Module):
                                         n_dim=config.n_dim, 
                                         n_head=config.n_head, 
                                         activation=config.activation, 
-                                        max_iterations=config.num_iterations, 
+                                        max_iterations=100,   # Set to 100 to ease loading old checkpoints
                                         ffn_dim=config.ffn_dim, 
                                         dropout=config.dropout, 
                                         lora_rank=config.lora_rank, 

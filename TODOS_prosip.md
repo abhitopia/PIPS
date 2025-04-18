@@ -1,3 +1,9 @@
+# Updates 18th April 2025
+- [x] Provide dummy max_iterations to ease loading old checkpoints
+- [ ] Add ability to freeze autoencoder
+- [ ] Add dataset based logging
+
+
 - [x] Make activation function configurable
 - [x] Introduce depth embedding for the interpreter
 - [x] Figure out which BARC datasets to use

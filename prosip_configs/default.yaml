@@ -4,7 +4,7 @@ experiment_config:
     n_head: 4
     n_layer_interpreter_exec: 2
     n_layer_interpreter_gen: 2
-    num_iterations: 12
+    num_iterations: 1
 
     margin: 0.1
     program_vocab: 2048
@@ -36,7 +36,6 @@ experiment_config:
   warmup_steps_lr: 10000
   decay_steps_lr: null
   weight_decay: 0.00
-  trajectory_margin: 0.1
   beta_reconstruction: 1.0
   beta_prediction: 1.0
   beta_trajectory: 0.1

@@ -58,6 +58,7 @@ class ProSIPConfig:
 
     # Trajectory loss config
     margin: float = 0.0
+    rope_base: int = 4000
 
     # LoRA parameters
     lora_rank: int = 8
@@ -99,7 +100,8 @@ class ProSIPConfig:
             mlp_layers=self.lora_mlp_layers,
             mlp_dim=self.lora_mlp_dim,
             n_state=self.latent_height * self.latent_width,
-            num_iterations=self.num_iterations
+            num_iterations=self.num_iterations,
+            rope_base=self.rope_base
         )
 
     def to_dict(self):
