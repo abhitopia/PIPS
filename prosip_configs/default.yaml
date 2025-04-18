@@ -44,6 +44,7 @@ experiment_config:
   limit_validation_samples: 2048
   data_multiplier: 2
   model_src: null
+  freeze_autoencoder: true
 project_config:
   run_name: fair-eagle-004
   project_name: prosip-v1

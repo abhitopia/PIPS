@@ -137,6 +137,11 @@ class ProSIPModel(nn.Module):
         self.autoencoder.reset_parameters()
         self.interpreter.reset_parameters()
 
+    def freeze_autoencoder(self):
+        print("NOTE: Freezing autoencoder")
+        for param in self.autoencoder.parameters():
+            param.requires_grad = False
+
     def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
         # tasks is BxNx2xHxW
         encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
@@ -262,6 +267,7 @@ class ProSIPExperimentConfig:
     
     # Other parameters
     model_src: str | None = None
+    freeze_autoencoder: bool = False
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -358,6 +364,9 @@ class ProSIPTrainingModule(pl.LightningModule):
         model_parameters = sum(p.numel() for n, p in self.named_parameters() if p.requires_grad and 'program_embedding' not in n)
         print(f"Number of parameters in the model (excluding program embedding): {model_parameters}")
         print(f"Expected size of the model: {model_parameters * 4 / 10**6} MB")
+
+        if self.experiment_config.freeze_autoencoder:
+            self.model.freeze_autoencoder()
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""
