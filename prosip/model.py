@@ -624,11 +624,11 @@ def train(
         callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='Prediction/sample_accuracy_val',
+                monitor='Prediction/loss_val',
                 save_top_k=3,
                 mode='max',
                 auto_insert_metric_name=False,
-                filename='best-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy_val:.4f}',
+                filename='best-step{step:07d}-Loss{Prediction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             ),
             ModelCheckpointWithWandbSync(
@@ -638,7 +638,7 @@ def train(
                 save_top_k=2,
                 every_n_train_steps=20 if debug_mode else val_check_interval,
                 auto_insert_metric_name=False,
-                filename='backup-step{step:07d}-SampleAccuracy{Prediction/sample_accuracy_val:.4f}',
+                filename='backup-step{step:07d}-Loss{Prediction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             )
         ])
