@@ -1,7 +1,7 @@
 import os
 from pathlib import Path
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 from dataclasses import asdict, dataclass, field
 from functools import partial
 from rich import print
@@ -403,6 +403,52 @@ class ProSIPTrainingModule(pl.LightningModule):
 
         return token_accuracy, sample_accuracy
 
+    def data_accuracy(self, predictions: Dict[str, Tensor], target: Tensor, attributes: List[Dict], phase: str):
+        """
+        Compute and log accuracy metrics broken down by dataset attribute.
+        
+        Args:
+            predictions: Dictionary with keys 'input', 'output', 'predicted' containing prediction tensors
+            target: Target tensor to compare against
+            attributes: List of attribute dictionaries with dataset information
+            phase: 'train' or 'val' indicating which phase we're in
+        """
+        # Extract unique datasets from attributes
+        datasets = {attr['dataset'] for attr in attributes}
+        
+        # Calculate accuracies for each dataset
+        for dataset in datasets:
+            # Create mask for this dataset
+            dataset_mask = torch.tensor([attr['dataset'] == dataset for attr in attributes], 
+                                       device=target.device)
+            
+            # # Skip if no samples for this dataset
+            # if not dataset_mask.any():
+            #     continue
+                
+            # Count samples for this dataset (for proper batch size logging)
+            dataset_sample_count = dataset_mask.sum().item()
+            
+            # For each prediction type (input, output, predicted)
+            for pred_type, pred_tensor in predictions.items():
+                # Filter predictions by dataset mask
+                dataset_preds = pred_tensor[dataset_mask]
+                dataset_targets = target[dataset_mask]
+                
+                if len(dataset_preds) == 0:
+                    continue
+                    
+                # Compute accuracies for this dataset and prediction type
+                token_acc, sample_acc = self.compute_accuracies(dataset_preds, dataset_targets)
+                
+                # Create metrics dict for logging
+                metrics = {
+                    f'token_accuracy_{pred_type}({dataset})': token_acc,
+                    f'sample_accuracy_{pred_type}({dataset})': sample_acc,
+                }
+                
+                # Log metrics for this dataset
+                self.log_metrics(metrics, phase, dataset_sample_count)
 
     def forward(self, input_grids: Tensor, output_grids: Tensor, program_ids: Tensor,
                 beta_reconstruction: Tensor = torch.tensor(1.0), 
@@ -433,7 +479,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         total_loss = sum(weighted_losses.values())
         
         # Return tensor values; logging callbacks can detach/convert them as needed.
-        return {
+        return predictions, {
             'loss': total_loss,
             **raw_losses,
             'token_accuracy(Input)': input_token_accuracy,
@@ -452,7 +498,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
         beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
 
-        output_dict = self(
+        predictions, output_dict = self(
             input_grids=input_grids,
             output_grids=output_grids,
             program_ids=program_ids,
@@ -466,6 +512,9 @@ class ProSIPTrainingModule(pl.LightningModule):
         output_dict['beta(Trajectory)'] = beta_trajectory
 
         self.log_metrics(output_dict, 'train', batch[0].size(0))
+        
+        # Calculate and log dataset-specific accuracies
+        self.data_accuracy(predictions, output_grids, attributes, 'train')
 
         return output_dict
 
@@ -478,7 +527,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
         beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
 
-        output_dict = self(
+        predictions,output_dict = self(
             input_grids=input_grids,
             output_grids=output_grids,
             program_ids=program_ids,
@@ -488,6 +537,9 @@ class ProSIPTrainingModule(pl.LightningModule):
         )
 
         self.log_metrics(output_dict, 'val', batch[0].size(0))
+        # Calculate and log dataset-specific accuracies
+        self.data_accuracy(predictions, output_grids, attributes, 'val')
+        
         return output_dict
 
     def configure_optimizers(self):

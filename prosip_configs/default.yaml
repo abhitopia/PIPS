@@ -46,7 +46,7 @@ experiment_config:
   model_src: null
   freeze_autoencoder: true
 project_config:
-  run_name: fair-eagle-004
+  run_name: fair-eagle-dataset
   project_name: prosip-v1
   checkpoint_dir: prosip_runs
   val_check_interval: 1000

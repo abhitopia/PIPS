@@ -1,7 +1,7 @@
 # Updates 18th April 2025
 - [x] Provide dummy max_iterations to ease loading old checkpoints
 - [x] Add ability to freeze autoencoder
-- [ ] Add dataset based logging
+- [x] Add dataset based logging
 
 
 - [x] Make activation function configurable
