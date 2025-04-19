@@ -5,7 +5,18 @@ import torch.nn as nn
 from prosip.utils import get_activation_fn
 
 def is_power_of_two(n):
-    return n > 0 and (n & (n - 1)) == 0
+    """Check if a number is a power of two.
+    Works for both integers and floats."""
+    # If n is very close to an integer, convert it
+    if isinstance(n, float):
+        # For floating point numbers, use a mathematical check
+        # A power of 2 has log2(n) as an integer
+        if n <= 0:
+            return False
+        return math.isclose(2**round(math.log2(n)), n, rel_tol=1e-9)
+    else:
+        # For integers, use the bitwise method which is more efficient
+        return n > 0 and (n & (n - 1)) == 0
 
 
 
@@ -84,12 +95,25 @@ class ConvAutoEncoder(nn.Module):
             self.decoder = nn.Identity()
             self.encode_norm = nn.Identity()
             self.decode_norm = nn.Identity()
+            self.adaptive_pool = nn.Identity()
+            self.adaptive_upsample = None
             return
             
-        # Compute required downsampling factor
-        required_downsampling = int(math.log2(input_resolution / final_resolution))
-        if 2 ** required_downsampling != input_resolution / final_resolution:
-            raise ValueError("input_resolution / final_resolution must be a power of 2")
+        self.input_resolution = input_resolution
+        self.final_resolution = final_resolution
+
+        # Use power-of-2 downsampling as an approximation, then adapt to exact size
+        if is_power_of_two(input_resolution / final_resolution):
+            # Original power-of-2 case
+            required_downsampling = int(math.log2(input_resolution / final_resolution))
+            use_adaptive = False
+        else:
+            # For non-power-of-2, find the closest power of 2 that's smaller or equal
+            # This gives us a reasonable number of downsampling layers
+            ratio = input_resolution / final_resolution
+            required_downsampling = math.floor(math.log2(ratio))
+            use_adaptive = True
+
         if num_blocks < required_downsampling:
             raise ValueError("num_blocks must be at least log2(input_resolution/final_resolution)")
 
@@ -111,6 +135,26 @@ class ConvAutoEncoder(nn.Module):
                 ResidualConvBlock(channels, channels, num_convs=num_convs, stride=strides[i], activation=activation)
             )
 
+        # Calculate the intermediate resolution after encoder blocks
+        self.intermediate_resolution = input_resolution // (2 ** required_downsampling)
+            
+        # Add adaptive pooling to get exact resolution if needed
+        if use_adaptive:
+            self.adaptive_pool = nn.AdaptiveAvgPool2d((final_resolution, final_resolution))
+        else:
+            self.adaptive_pool = nn.Identity()
+            
+        # For the decoder, we'll need to upsample from final_resolution to intermediate_resolution
+        # if we used adaptive pooling
+        if use_adaptive and self.intermediate_resolution != final_resolution:
+            self.adaptive_upsample = nn.Upsample(
+                size=(self.intermediate_resolution, self.intermediate_resolution),
+                mode='bilinear',
+                align_corners=False
+            )
+        else:
+            self.adaptive_upsample = None
+
         # Build decoder blocks by reversing the strides order.
         decoder_strides = strides[::-1]
         for i in range(num_blocks):
@@ -127,6 +171,9 @@ class ConvAutoEncoder(nn.Module):
         x = self.initial_conv(x)
         x = self.encoder(x)
         
+        # Apply adaptive pooling if needed
+        x = self.adaptive_pool(x)
+        
         # Apply RMSNorm if requested (need to reshape for RMSNorm then reshape back)
         if not isinstance(self.encode_norm, nn.Identity):
             # Reshape from [B, C, H, W] to [B, H, W, C] for RMSNorm
@@ -138,6 +185,10 @@ class ConvAutoEncoder(nn.Module):
         return x
 
     def decode(self, x):
+        # Apply adaptive upsampling if needed
+        if self.adaptive_upsample is not None:
+            x = self.adaptive_upsample(x)
+            
         x = self.decoder(x)
         
         # Apply RMSNorm if requested (need to reshape for RMSNorm then reshape back)
@@ -229,11 +280,11 @@ class GridAutoEncoderConfig:
         # assert self.n_dim % self.n_emb == 0
         # assert self.n_dim / self.n_emb == 2**int(math.log2(self.n_dim / self.n_emb))
 
-        assert self.grid_height % self.latent_height == 0, "grid_height must be divisible by latent_height"
-        assert self.grid_width % self.latent_width == 0, "grid_width must be divisible by latent_width"
+        # assert self.grid_height % self.latent_height == 0, "grid_height must be divisible by latent_height"
+        # assert self.grid_width % self.latent_width == 0, "grid_width must be divisible by latent_width"
 
-        assert is_power_of_two(self.latent_height), "latent_height must be a power of 2"
-        assert is_power_of_two(self.latent_width), "latent_width must be a power of 2"
+        # assert is_power_of_two(self.latent_height), "latent_height must be a power of 2"
+        # assert is_power_of_two(self.latent_width), "latent_width must be a power of 2"
 
         self.n_codes = self.latent_height * self.latent_width
         self.latent_resolution = self.latent_height

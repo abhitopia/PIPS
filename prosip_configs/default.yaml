@@ -14,8 +14,8 @@ experiment_config:
     lora_mlp_dim: 256
     grid_height: 32
     grid_width: 32
-    latent_height: 8
-    latent_width: 8
+    latent_height: 5
+    latent_width: 5
     conv_block_size: 2
     n_conv_blocks: 2
     n_layer_encoder: 4
