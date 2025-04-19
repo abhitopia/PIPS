@@ -1,0 +1,56 @@
+experiment_config:
+  model_config:
+    n_dim: 256
+    n_head: 8
+    n_layer_interpreter_exec: 1
+    n_layer_interpreter_gen: 1
+    n_layer_encoder: 1
+    num_iterations: 12
+
+    margin: 0.0
+    program_vocab: 2048
+    
+    # LoRA parameters
+    lora_rank: 4
+    lora_mlp_layers: 1
+    lora_mlp_dim: 512
+    grid_height: 32
+    grid_width: 32
+    latent_height: 8
+    latent_width: 8
+    conv_block_size: 2
+    n_conv_blocks: 2
+    n_vocab: 16
+    activation: gelu
+
+    encode_norm: true
+    decode_norm: true
+    dropout: 0.0
+
+  seed: 42
+  batch_size: 96
+  max_steps: 1000000
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  learning_rate: 1.0e-04
+  lr_min: 1.0e-06
+  warmup_steps_lr: 100
+  decay_steps_lr: null
+  adamw_betas_1: 0.9
+  adamw_betas_2: 0.999
+  weight_decay: 0.00
+  beta_reconstruction: 0.75
+  beta_prediction: 1.0
+  beta_trajectory: 0.0001
+  dataset: ALL
+  limit_training_samples: null
+  limit_validation_samples: 100000
+  data_multiplier: 1
+  model_src: v12_dataset/backup/45000
+  freeze_autoencoder: false
+project_config:
+  run_name: v13_dataset
+  project_name: prosip-v2
+  checkpoint_dir: prosip_runs
+  val_check_interval: 1000
+  viz_interval: 1000
