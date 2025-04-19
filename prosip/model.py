@@ -30,7 +30,7 @@ from pips.misc.acceleration_config import AccelerationConfig
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
 from prosip.repl import REPL, REPLConfig
 from prosip.utils import normalize_state_dict, load_model_weights
-from prosip.task_dataset import ExampleDataset, Tokenizer, collate_fn_project, worker_init_fn
+from prosip.task_dataset import ExampleDataset, TaskDataset, Tokenizer, worker_init_fn
 from prosip.trajectory_loss import vectorized_monotonic_trajectory_loss
 
 @dataclass
@@ -187,6 +187,7 @@ class ProSIPModel(nn.Module):
 
 def create_dataloaders(
     batch_size: int,
+    group_by_program: bool = False,
     data_multiplier: int = 1,
     ds_type: DatasetType = DatasetType.ALL,
     padding_idx: int = 15,
@@ -196,30 +197,54 @@ def create_dataloaders(
     max_grid_width: int = 32,
     num_workers: int = min(8, os.cpu_count() or 1)
 ):
-    train_ex_ds = ExampleDataset(dataset_type=ds_type, 
-                                 data_multiplier=data_multiplier, 
-                                 max_examples=num_train_examples,
-                                 is_test=False)
     
-    val_ex_ds = ExampleDataset(dataset_type=ds_type, 
-                               data_multiplier=1,
-                               max_examples=num_val_examples,
-                               is_test=True)
+
+    if group_by_program:
+        train_ex_ds = TaskDataset(dataset_type=ds_type, 
+                                  max_tasks=num_train_examples // 3 if num_train_examples is not None else None,
+                                  data_multiplier=data_multiplier)
+        
+        val_ex_ds = TaskDataset(dataset_type=ds_type, 
+                                  max_tasks=num_val_examples if num_val_examples is not None else None,
+                                  data_multiplier=data_multiplier)
+    else:
+        train_ex_ds = ExampleDataset(dataset_type=ds_type, 
+                                    data_multiplier=data_multiplier, 
+                                    max_examples=num_train_examples,
+                                    is_test=False)
+        
+        val_ex_ds = ExampleDataset(dataset_type=ds_type, 
+                                data_multiplier=1,
+                                max_examples=num_val_examples,
+                                is_test=True)
     
     tokenizer = train_ex_ds.get_program_tokenizer()
 
 
-    collate_fn = partial(collate_fn_project, 
-                    program_tokenizer=tokenizer,
-                    pad_value=padding_idx,
-                    max_height=max_grid_height,
-                    max_width=max_grid_width,
-                    flatten=False)
+    kwargs = {
+        "program_tokenizer": tokenizer,
+        "pad_value": padding_idx,
+        "max_height": max_grid_height,
+        "max_width": max_grid_width,
+        "flatten": False
+    }
+
+    if group_by_program:
+        collate_fn_train = partial(train_ex_ds.collate_fn_project, **kwargs, is_test=False)
+        collate_fn_val = partial(val_ex_ds.collate_fn_project, **kwargs, is_test=True)
+        train_batch_size = batch_size // 3
+        val_batch_size = batch_size * 2
+    else:
+        collate_fn_train = partial(ExampleDataset.collate_fn_project, **kwargs)
+        collate_fn_val = partial(ExampleDataset.collate_fn_project, **kwargs)
+        train_batch_size = batch_size
+        val_batch_size = batch_size * 2
+   
 
     train_loader = DataLoader(
         train_ex_ds, 
-        collate_fn=collate_fn,
-        batch_size=batch_size,
+        collate_fn=collate_fn_train,
+        batch_size=train_batch_size,
         num_workers=num_workers,
         shuffle=True,
         worker_init_fn=worker_init_fn if num_workers > 0 else None,
@@ -229,8 +254,8 @@ def create_dataloaders(
 
     val_loader = DataLoader(
         val_ex_ds, 
-        collate_fn=collate_fn,
-        batch_size=batch_size,
+        collate_fn=collate_fn_val,
+        batch_size=val_batch_size,
         num_workers=num_workers,
         worker_init_fn=worker_init_fn if num_workers > 0 else None,
         shuffle=False,
@@ -238,6 +263,7 @@ def create_dataloaders(
         persistent_workers=True if num_workers > 0 else False,
     )
 
+    print(f"Train batch size: {train_batch_size * 3 if group_by_program else train_batch_size}, Val batch size: {val_batch_size}")
     print("Number of batches in training set: ", len(train_loader))
     print("Number of batches in validation set: ", len(val_loader))
     return train_loader, val_loader, tokenizer
@@ -259,7 +285,7 @@ class ProSIPExperimentConfig:
     # Learning rate parameters
     learning_rate: float = 1e-4  # Consistent with Dalle-E paper
     lr_min: float = 1e-6  # Minimum learning rate to be reached after decay
-    warmup_steps_lr: int = 10_000
+    warmup_steps_lr: int = 1_000
     decay_steps_lr: int | None = None
     adamw_betas_1: float = 0.9
     adamw_betas_2: float = 0.999
@@ -272,6 +298,7 @@ class ProSIPExperimentConfig:
 
     # Dataset parameters
     dataset: DatasetType = DatasetType.ALL
+    group_by_program: bool = False
     limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
     limit_validation_samples: int | None = None  # Limit the number of validation samples. None means use all samples.
     data_multiplier: int = 2  # How many times to repeat the dataset
@@ -657,6 +684,7 @@ def train(
    
     # Create dataloaders - use values from experiment_config
     train_loader, val_loader, tokenizer = create_dataloaders(
+        group_by_program=experiment_config.group_by_program,
         batch_size=experiment_config.batch_size,
         data_multiplier=experiment_config.data_multiplier,
         ds_type=experiment_config.dataset,

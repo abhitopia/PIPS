@@ -62,7 +62,6 @@ class Tokenizer:
     def __len__(self):
         return len(self.token2idx)
 
-
 class ProgramTokenizer(Tokenizer):
     def __init__(self):
         super().__init__(frozen=False)
@@ -76,7 +75,6 @@ class ProgramTokenizer(Tokenizer):
                     print(f'Adding token: {token}')
                 self.add_token(t)
         self.frozen = True
-
 
 def process_task_loader(loader, output_file, num_train=3, num_test=1):
     if output_file.exists():
@@ -225,7 +223,6 @@ def process_task_loader(loader, output_file, num_train=3, num_test=1):
     np.save(output_file, task_data)
     logger.info(f"Saved {len(valid_tasks)} tasks to {output_file} for {loader.name}")
 
-
 def load_task_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent / '.cache', verbose=False):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
@@ -273,6 +270,13 @@ def load_task_loaders(loaders, cache_dir=Path(__file__).resolve().parent.parent 
     return all_data
 
 
+# Define the NamedTuple for the collate function output
+class EXAMPLE(NamedTuple):
+    input_grids: torch.Tensor
+    output_grids: torch.Tensor
+    program_ids: torch.Tensor
+    attributes: List[Dict[str, any]]
+
 
 class TaskDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
@@ -316,7 +320,6 @@ class TaskDataset(Dataset):
         temp_data = load_task_loaders(loaders, self.cache_dir, verbose=True)
         self._num_original_tasks = len(temp_data)
         del temp_data  # Clean up the temporary mapping
-
 
     @property
     def num_of_original_tasks(self):
@@ -484,8 +487,6 @@ class TaskDataset(Dataset):
         if self.data is None:
             self._initialize_data()
         
-
-        
         # Determine if this needs permutation
         # This is just to get the augmentation_round information
         original_length = self._num_original_tasks
@@ -541,6 +542,41 @@ class TaskDataset(Dataset):
             example = example.permute(seed=task_idx)
         
         return example
+
+    def get_program_tokenizer(self):
+        filename = f'program_tokenizer_{self.dataset_type.name}_{self.data_multiplier}.pkl'
+        cache_file = self.cache_dir / filename
+
+        if cache_file.exists():
+            print(f"Loading program tokenizer from {cache_file}")
+            return pickle.load(cache_file.open('rb'))
+
+        tokenizer = ProgramTokenizer()
+        program_ids = []
+        for idx in tqdm(range(len(self)), desc="Building program tokenizer"):
+            program_ids.append(self.get_example(idx, 0).uid)
+
+        tokenizer.build(program_ids)
+
+        with open(cache_file, 'wb') as f:
+            print(f"Saving program tokenizer to {cache_file}")
+            pickle.dump(tokenizer, f)
+        return tokenizer
+    
+    @staticmethod
+    def collate_fn_project(task_batch, program_tokenizer, pad_value=-1, is_test=False, device=torch.device('cpu'), max_height=32, max_width=32, flatten=True):    
+        batch = []
+        for task in task_batch:
+            batch += task.test if is_test else task.train
+
+        return ExampleDataset.collate_fn_project(batch=batch, 
+                                                 program_tokenizer=program_tokenizer,
+                                                 pad_value=pad_value,
+                                                 device=device,
+                                                 max_height=max_height,
+                                                 max_width=max_width,
+                                                 flatten=flatten)
+
 
 class ExampleDataset(Dataset):
     def __init__(self, dataset_type: DatasetType = DatasetType.TRAIN, 
@@ -653,25 +689,53 @@ class ExampleDataset(Dataset):
         self.task_dataset.unload()
         self.indices = None
 
-
     def get_program_tokenizer(self):
-        filename = f'program_tokenizer_{self.task_dataset.dataset_type.name}_{self.data_multiplier}_{self.is_test}.pkl'
-        cache_file = self.task_dataset.cache_dir / filename
-
-        if cache_file.exists():
-            print(f"Loading program tokenizer from {cache_file}")
-            return pickle.load(cache_file.open('rb'))
-
-        tokenizer = ProgramTokenizer()
+        return self.task_dataset.get_program_tokenizer()
+    
+    @staticmethod
+    def collate_fn_project(batch, program_tokenizer, pad_value=-1, device=torch.device('cpu'), max_height=32, max_width=32, flatten=True):    
+        flattened_input_grids = []
+        flattened_output_grids = []
         program_ids = []
-        for idx in tqdm(range(len(self)), desc="Building program tokenizer"):
-            program_ids.append(self[idx].uid)
-        tokenizer.build(program_ids)
+        attributes = []
 
-        with open(cache_file, 'wb') as f:
-            print(f"Saving program tokenizer to {cache_file}")
-            pickle.dump(tokenizer, f)
-        return tokenizer
+        for example in batch:
+            # Flatten each grid with optional EOS markers and padding
+
+            input_grids, output_grids = example.input, example.output
+
+            projected_input_grids = input_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+            projected_output_grids = output_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
+
+            flattened_input_grids.append(projected_input_grids.flatten() if flatten else projected_input_grids)
+            flattened_output_grids.append(projected_output_grids.flatten() if flatten else projected_output_grids)
+
+            program_ids.append(program_tokenizer.encode(example.uid)[0])
+
+            # Collect attributes and convert numpy types to native Python types
+            attributes.append({
+                'idx': int(example.idx),
+                'program_id': str(example.program_id),
+                'task_id': str(example.task_id),
+                'dataset': str(example.dataset),
+                'color_perm': str(example.color_perm),
+                'transform': str(example.transform),
+                'is_test': bool(example.is_test),
+            })
+
+        # Convert the lists of numpy arrays to tensors
+        flattened_input_grids = np.array(flattened_input_grids)
+        flattened_output_grids = np.array(flattened_output_grids)
+        program_ids = np.array(program_ids)
+
+        # Convert to torch tensors and move to device
+        flattened_input_grids = torch.tensor(flattened_input_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+        flattened_output_grids = torch.tensor(flattened_output_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+        program_ids = torch.tensor(program_ids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
+        return EXAMPLE(input_grids=flattened_input_grids, 
+                    output_grids=flattened_output_grids, 
+                    program_ids=program_ids, 
+                    attributes=attributes)
 
 # Update the worker_init_fn to be simpler
 def worker_init_fn(worker_id):
@@ -683,69 +747,14 @@ def worker_init_fn(worker_id):
         dataset._initialize_data()
 
 
-# Define the NamedTuple for the collate function output
-class EXAMPLE(NamedTuple):
-    input_grids: torch.Tensor
-    output_grids: torch.Tensor
-    program_ids: torch.Tensor
-    attributes: List[Dict[str, any]]
-
-
-
-def collate_fn_project(batch, program_tokenizer, pad_value=-1, device=torch.device('cpu'), max_height=32, max_width=32, flatten=True):    
-    flattened_input_grids = []
-    flattened_output_grids = []
-    program_ids = []
-    attributes = []
-
-    for example in batch:
-        # Flatten each grid with optional EOS markers and padding
-
-        input_grids, output_grids = example.input, example.output
-
-        projected_input_grids = input_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
-        projected_output_grids = output_grids.project(new_height=max_height, new_width=max_width, pad_value=pad_value)
-
-        flattened_input_grids.append(projected_input_grids.flatten() if flatten else projected_input_grids)
-        flattened_output_grids.append(projected_output_grids.flatten() if flatten else projected_output_grids)
-
-        program_ids.append(program_tokenizer.encode(example.uid)[0])
-
-        # Collect attributes and convert numpy types to native Python types
-        attributes.append({
-            'idx': int(example.idx),
-            'program_id': str(example.program_id),
-            'task_id': str(example.task_id),
-            'dataset': str(example.dataset),
-            'color_perm': str(example.color_perm),
-            'transform': str(example.transform),
-            'is_test': bool(example.is_test),
-        })
-
-    # Convert the lists of numpy arrays to tensors
-    flattened_input_grids = np.array(flattened_input_grids)
-    flattened_output_grids = np.array(flattened_output_grids)
-    program_ids = np.array(program_ids)
-
-
-    # Convert to torch tensors and move to device
-    flattened_input_grids = torch.tensor(flattened_input_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
-    flattened_output_grids = torch.tensor(flattened_output_grids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
-    program_ids = torch.tensor(program_ids, dtype=torch.long, requires_grad=False).to(device, non_blocking=True)
-    return EXAMPLE(input_grids=flattened_input_grids, 
-                   output_grids=flattened_output_grids, 
-                   program_ids=program_ids, 
-                   attributes=attributes)
-
-
-
-
 if __name__ == "__main__":
 
     data_multiplier = 2
     dataset_type = DatasetType.ALL
     is_test = False
     ds = TaskDataset(dataset_type=dataset_type, data_multiplier=data_multiplier)
+
+    tknzr = ds.get_program_tokenizer()
     dss = TaskDataset(dataset_type=DatasetType.ALL_SMALL, data_multiplier=data_multiplier)
     print("Length of dataset:", len(ds))
     print("Number of original tasks:", ds.num_of_original_tasks)
@@ -815,7 +824,7 @@ if __name__ == "__main__":
     # Test with DataLoader
     print("\nTesting with DataLoader:")
 
-    collate_fn = partial(collate_fn_project, 
+    collate_fn = partial(ExampleDataset.collate_fn_project, 
                          program_tokenizer=tokenizer,
                          pad_value=-1,
                          max_height=32,

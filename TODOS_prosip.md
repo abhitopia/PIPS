@@ -1,3 +1,7 @@
+# 19th April 2025
+- [x] Add group_by_program to data loading option
+- [ ] Add E&M training option
+
 # Updates 18th April 2025
 - [x] Provide dummy max_iterations to ease loading old checkpoints
 - [x] Add ability to freeze autoencoder
