@@ -28,7 +28,7 @@ experiment_config:
   max_steps: 200000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  learning_rate: 0.0001
+  learning_rate: 0.0
   lr_min: 1.0e-06
   warmup_steps_lr: 5000
   decay_steps_lr: null
@@ -49,7 +49,7 @@ experiment_config:
   train_only_program_embeddings: false
   freeze_autoencoder: false
 project_config:
-  run_name: v6_em
+  run_name: v7_em
   project_name: prosip-v1-em
   checkpoint_dir: prosip_runs
   val_check_interval: 1000
