@@ -142,6 +142,22 @@ class ProSIPModel(nn.Module):
         for param in self.autoencoder.parameters():
             param.requires_grad = False
 
+    def freeze(self):
+        for param in self.parameters():
+            param.requires_grad = False
+
+    def unfreeze(self):
+        for param in self.parameters():
+            param.requires_grad = True
+
+    def freeze_program_embeddings(self):
+        for param in self.program_embedding.parameters():
+            param.requires_grad = False
+        
+    def unfreeze_program_embeddings(self):
+        for param in self.program_embedding.parameters():
+            param.requires_grad = True
+
     def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
         # tasks is BxNx2xHxW
         encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
@@ -306,6 +322,8 @@ class ProSIPExperimentConfig:
     # Other parameters
     model_src: str | None = None
     freeze_autoencoder: bool = False
+    em_start_epoch: int | None = None
+    m_step_lr_multiplier: float = 10.0
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -321,6 +339,12 @@ class ProSIPExperimentConfig:
         self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
         if self.decay_steps_lr is None:
             self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
+
+    def set_em_start_step(self, dataloader_length: int):
+        if self.em_start_epoch is None:
+            self.em_start_step = None
+        else:
+            self.em_start_step = (self.em_start_epoch * dataloader_length // self.accumulate_grad_batches)
 
     def to_dict(self) -> dict:
         """Convert config to a dictionary."""
@@ -375,6 +399,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         self.tokenizer = tokenizer
         self.save_hyperparameters()
 
+
     def configure_model(self):
         """
         Compile the model after device placement.
@@ -416,6 +441,24 @@ class ProSIPTrainingModule(pl.LightningModule):
         checkpoint["state_dict"] = new_state_dict
         print(f"Loaded all model weights")
 
+    def on_train_batch_start(self, batch, batch_idx, dataloader_idx=0):
+        # Check if we should use EM training
+        current_step = self.trainer.global_step
+        em_start_step = self.experiment_config.em_start_step
+
+        if em_start_step is None or current_step < em_start_step:
+            return
+        
+        # Determine if this is an E-step or M-step
+        is_e_step = ((current_step - em_start_step) % 2 == 0)
+        if is_e_step:
+            # E-step: freeze program embeddings
+            self.unfreeze()
+            self.model.freeze_program_embeddings()
+        else:
+            # M-step: freeze everything except program embeddings
+            self.freeze()
+            self.model.unfreeze_program_embeddings()
 
     def compute_accuracies(self, predictions: Tensor, target: Tensor):
          # Calculate token accuracy excluding padding tokens.
@@ -451,10 +494,6 @@ class ProSIPTrainingModule(pl.LightningModule):
             dataset_mask = torch.tensor([attr['dataset'] == dataset for attr in attributes], 
                                        device=target.device)
             
-            # # Skip if no samples for this dataset
-            # if not dataset_mask.any():
-            #     continue
-                
             # Count samples for this dataset (for proper batch size logging)
             dataset_sample_count = dataset_mask.sum().item()
             
@@ -468,9 +507,6 @@ class ProSIPTrainingModule(pl.LightningModule):
                     dataset_targets = input_target[dataset_mask]
                 else:
                     dataset_targets = target[dataset_mask]
-                
-                if len(dataset_preds) == 0:
-                    continue
                     
                 # Compute accuracies for this dataset and prediction type
                 token_acc, sample_acc = self.compute_accuracies(dataset_preds, dataset_targets)
@@ -606,13 +642,19 @@ class ProSIPTrainingModule(pl.LightningModule):
             
             if step < warmup_steps:
                 # Linear warmup
-                return float(step) / float(max(1, warmup_steps))
+                base_factor = float(step) / float(max(1, warmup_steps))
             elif step < self.experiment_config.decay_steps_lr + warmup_steps:
                 # Cosine decay from 1.0 to min_lr_factor
                 progress = float(step - warmup_steps) / float(max(1, self.experiment_config.max_steps - warmup_steps))
-                return min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
+                base_factor = min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
             else:
-                return min_lr_factor
+                base_factor = min_lr_factor
+
+            em_start_step = self.experiment_config.em_start_step
+            if em_start_step is not None and step >= em_start_step:
+                base_factor *= self.experiment_config.m_step_lr_multiplier
+
+            return base_factor
         
         scheduler = LambdaLR(optimizer, lr_lambda)
         
@@ -696,8 +738,10 @@ def train(
     )
 
     experiment_config.model_config.program_vocab = len(tokenizer)
+    experiment_config.set_em_start_step(len(train_loader))
 
     print(experiment_config)
+    print("EM start step: ", experiment_config.em_start_step)
 
     if validation_disabled:
         print("Validation disabled. Checkpoints will not be saved.")

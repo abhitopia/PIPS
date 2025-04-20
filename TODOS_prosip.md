@@ -1,6 +1,8 @@
 # 19th April 2025
 - [x] Add group_by_program to data loading option
-- [ ] Add E&M training option
+- [x] Add E&M training option
+- [ ] Log parameters, especially learning rate
+
 
 # Updates 18th April 2025
 - [x] Provide dummy max_iterations to ease loading old checkpoints
