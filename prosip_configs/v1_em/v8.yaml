@@ -40,6 +40,7 @@ experiment_config:
   beta_reconstruction: 1.0
   beta_prediction: 1.0
   beta_trajectory: 0.0001
+  beta_alignment: 0.0
   dataset: ALL
   group_by_program: true
   limit_training_samples: null
