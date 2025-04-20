@@ -103,7 +103,8 @@ class ProSIPConfig:
             mlp_dim=self.lora_mlp_dim,
             n_state=self.latent_height * self.latent_width,
             num_iterations=self.num_iterations,
-            rope_base=self.rope_base
+            rope_base=self.rope_base,
+            use_rope=True
         )
 
     def to_dict(self):

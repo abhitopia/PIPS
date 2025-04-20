@@ -509,7 +509,7 @@ class SubroutineGeneratorLayer(nn.Module):
         state = state + self.dropout1(attn_output) # BxSxD
 
         # --- Feed-Forward Sublayer with Pre-Norm ---
-        out_ffn1 = self.ffn_linear1(state) # BxSxD
+        out_ffn1 = self.ffn_linear1(self.norm2(state)) # BxSxD
         out_activated = self.activation(out_ffn1) # BxSxD
         out_ffn2 = self.ffn_linear2(out_activated) # BxSxD
         # Add residual connection.
