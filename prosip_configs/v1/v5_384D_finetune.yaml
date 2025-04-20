@@ -57,5 +57,5 @@ project_config:
   run_name: v5_384D_finetune
   project_name: prosip-v3
   checkpoint_dir: prosip_runs
-  val_check_interval: 2000
-  viz_interval: 2000
+  val_check_interval: 1000
+  viz_interval: 1000
