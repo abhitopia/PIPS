@@ -140,7 +140,6 @@ class ProSIPModel(nn.Module):
         self.interpreter.reset_parameters()
 
     def freeze_autoencoder(self):
-        print("NOTE: Freezing autoencoder")
         for param in self.autoencoder.parameters():
             param.requires_grad = False
 
@@ -323,6 +322,7 @@ class ProSIPExperimentConfig:
     
     # Other parameters
     model_src: str | None = None
+    train_only_program_embeddings: bool = False
     freeze_autoencoder: bool = False
     em_start_epoch: int | None = None
     m_step_lr_multiplier: float = 10.0
@@ -431,7 +431,13 @@ class ProSIPTrainingModule(pl.LightningModule):
         print(f"Expected size of the model: {model_parameters * 4 / 10**6} MB")
 
         if self.experiment_config.freeze_autoencoder:
+            print("NOTE: Freezing autoencoder")
             self.model.freeze_autoencoder()
+        
+        if self.experiment_config.train_only_program_embeddings:
+            print("NOTE: Freezing everything except program embeddings")
+            self.model.freeze()
+            self.model.unfreeze_program_embeddings()
 
     def on_load_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Handle loading checkpoints with different state dict keys and handle mismatched codebook sizes."""

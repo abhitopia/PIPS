@@ -46,6 +46,7 @@ experiment_config:
   limit_validation_samples: null
   data_multiplier: 2
   model_src: null
+  train_only_program_embeddings: false
   freeze_autoencoder: false
 project_config:
   run_name: swift-robin-276
