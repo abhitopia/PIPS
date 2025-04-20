@@ -461,11 +461,11 @@ class ProSIPTrainingModule(pl.LightningModule):
         is_e_step = ((current_step - em_start_step) % 2 == 0)
         if is_e_step:
             # E-step: freeze program embeddings
-            self.unfreeze()
+            self.model.unfreeze()
             self.model.freeze_program_embeddings()
         else:
             # M-step: freeze everything except program embeddings
-            self.freeze()
+            self.model.freeze()
             self.model.unfreeze_program_embeddings()
 
     def compute_accuracies(self, predictions: Tensor, target: Tensor):
@@ -569,7 +569,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         }
 
     def training_step(self, batch, batch_idx):
-        torch.compiler.cudagraph_mark_step_begin()
+        # torch.compiler.cudagraph_mark_step_begin()
         input_grids, output_grids, program_ids, attributes = batch
 
         beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
@@ -597,7 +597,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         return output_dict
 
     def validation_step(self, batch, batch_idx):
-        torch.compiler.cudagraph_mark_step_begin()
+        # torch.compiler.cudagraph_mark_step_begin()
         input_grids, output_grids, program_ids, attributes = batch
 
         # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).

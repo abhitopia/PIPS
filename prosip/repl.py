@@ -63,7 +63,8 @@ class RotaryPositionalEmbeddings(nn.Module):
 
     def _device(self):
         # Helper method to get device of theta if it exists
-        return self.theta.device if hasattr(self, 'theta') else 'cpu'
+        device = next(self.parameters()).device if list(self.parameters()) else torch.device('cpu')
+        return device
 
     @autocast('cuda', enabled=False)
     def build_rope_cache(self, max_seq_len: int = 4096) -> None:
