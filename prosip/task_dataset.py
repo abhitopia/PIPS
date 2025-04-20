@@ -307,7 +307,7 @@ class TaskDataset(Dataset):
             self._init_len_without_data()
             
         # Generate deterministic indices if needed
-        if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks():
+        if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks:
             self._generate_indices()
 
     def _init_len_without_data(self):
