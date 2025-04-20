@@ -183,6 +183,7 @@ class ProSIPModel(nn.Module):
         output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
         reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
         prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
+        latent_alignment_loss = nn.functional.mse_loss(last_embeddings, encoded_output_grids)
 
         input_predictions = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
         output_predictions = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
@@ -197,7 +198,8 @@ class ProSIPModel(nn.Module):
         loss_dict = {
             "reconstruction_loss": reconstruction_loss,
             "prediction_loss": prediction_loss,
-            "trajectory_loss": trajectory_loss
+            "trajectory_loss": trajectory_loss,
+            "alignment_loss": latent_alignment_loss
         }
 
         return predictions, loss_dict
@@ -312,7 +314,7 @@ class ProSIPExperimentConfig:
     beta_reconstruction: float = 1.0
     beta_prediction: float = 1.0
     beta_trajectory: float = 1.0
-
+    beta_alignment: float = 0.0
     # Dataset parameters
     dataset: DatasetType = DatasetType.ALL
     group_by_program: bool = False
@@ -531,7 +533,8 @@ class ProSIPTrainingModule(pl.LightningModule):
     def forward(self, input_grids: Tensor, output_grids: Tensor, program_ids: Tensor,
                 beta_reconstruction: Tensor = torch.tensor(1.0), 
                 beta_prediction: Tensor = torch.tensor(1.0),
-                beta_trajectory: Tensor = torch.tensor(1.0)):
+                beta_trajectory: Tensor = torch.tensor(1.0),
+                beta_alignment: Tensor = torch.tensor(0.0)):
         
         # Forward pass with provided scheduled parameters.
         predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids)
@@ -545,6 +548,7 @@ class ProSIPTrainingModule(pl.LightningModule):
             'loss(Reconstruction)': loss_dict['reconstruction_loss'],
             'loss(Prediction)': loss_dict['prediction_loss'],
             'loss(Trajectory)': loss_dict['trajectory_loss'],
+            'loss(Alignment)': loss_dict['alignment_loss']
         }
         
         # Compute weighted losses for total loss.
@@ -552,6 +556,7 @@ class ProSIPTrainingModule(pl.LightningModule):
             'loss(Reconstruction)': raw_losses['loss(Reconstruction)'] * beta_reconstruction,
             'loss(Prediction)': raw_losses['loss(Prediction)'] * beta_prediction,
             'loss(Trajectory)': raw_losses['loss(Trajectory)'] * beta_trajectory,
+            'loss(Alignment)': raw_losses['loss(Alignment)'] * beta_alignment
         }
         
         total_loss = sum(weighted_losses.values())
@@ -575,6 +580,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
         beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
+        beta_alignment = torch.tensor(self.experiment_config.beta_alignment, device=input_grids.device)
 
         predictions, output_dict = self(
             input_grids=input_grids,
@@ -582,12 +588,14 @@ class ProSIPTrainingModule(pl.LightningModule):
             program_ids=program_ids,
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
-            beta_trajectory=beta_trajectory
+            beta_trajectory=beta_trajectory,
+            beta_alignment=beta_alignment
         )
 
         output_dict['beta(Reconstruction)'] = beta_reconstruction
         output_dict['beta(Prediction)'] = beta_prediction
         output_dict['beta(Trajectory)'] = beta_trajectory
+        output_dict['beta(Alignment)'] = beta_alignment
 
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
@@ -604,6 +612,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
         beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
+        beta_alignment = torch.tensor(self.experiment_config.beta_alignment, device=input_grids.device)
 
         predictions,output_dict = self(
             input_grids=input_grids,
@@ -611,7 +620,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             program_ids=program_ids,
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
-            beta_trajectory=beta_trajectory
+            beta_trajectory=beta_trajectory,
+            beta_alignment=beta_alignment
         )
 
         self.log_metrics(output_dict, 'val', batch[0].size(0))
