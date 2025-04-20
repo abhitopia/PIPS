@@ -660,7 +660,10 @@ class ProSIPTrainingModule(pl.LightningModule):
 
             em_start_step = self.experiment_config.em_start_step
             if em_start_step is not None and step >= em_start_step:
-                base_factor *= self.experiment_config.m_step_lr_multiplier
+                is_e_step = ((step - em_start_step) % 2 == 0)
+                is_m_step = not is_e_step
+                if is_m_step:
+                    base_factor *= self.experiment_config.m_step_lr_multiplier
 
             return base_factor
         
