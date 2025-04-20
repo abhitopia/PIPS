@@ -20,6 +20,8 @@ from torch.serialization import add_safe_globals  # Add this import at the top
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.tuner.tuning import Tuner
+from pytorch_lightning.callbacks import LearningRateMonitor
+
 
 
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
@@ -762,8 +764,11 @@ def train(
         config=experiment_config.to_dict()
     )
 
+    lr_monitor = LearningRateMonitor(logging_interval="step", log_momentum=True, log_weight_decay=True)   # or "epoch"
+
+
     # Only add checkpoint callbacks if validation is enabled
-    callbacks = [ CustomRichProgressBar()]
+    callbacks = [ CustomRichProgressBar(), lr_monitor]
 
     # if debug_mode:
     #     gradient_check_callback = GradientCheckCallback()
