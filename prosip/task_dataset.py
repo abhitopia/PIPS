@@ -346,7 +346,7 @@ class TaskDataset(Dataset):
             self._num_original_tasks = len(self.data)
             
             # Generate indices if needed and not already done
-            if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks():
+            if self.max_tasks is not None and self.max_tasks < self.num_of_total_tasks:
                 if self.indices is None:
                     self._generate_indices()
 
