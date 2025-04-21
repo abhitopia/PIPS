@@ -304,6 +304,7 @@ class ProSIPExperimentConfig:
     # Learning rate parameters
     learning_rate: float = 1e-4  # Consistent with Dalle-E paper
     lr_min: float = 1e-6  # Minimum learning rate to be reached after decay
+    program_embedding_lr_multiplier: float = 0.1 # Multiplier for embedding LR relative to main LR
     warmup_steps_lr: int = 1_000
     decay_steps_lr: int | None = None
     adamw_betas_1: float = 0.9
@@ -327,7 +328,6 @@ class ProSIPExperimentConfig:
     train_only_program_embeddings: bool = False
     freeze_autoencoder: bool = False
     em_start_epoch: int | None = None
-    m_step_lr_multiplier: float = 10.0
 
     def __post_init__(self):
         if self.accumulate_grad_batches < 1:
@@ -631,54 +631,77 @@ class ProSIPTrainingModule(pl.LightningModule):
         return output_dict
 
     def configure_optimizers(self):
-        # Get all parameters that require gradients
-        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
-        
-        # Split parameters based on dimensionality
-        decay_params = [p for n, p in param_dict.items() if p.dim() >= 2]
+        # Get parameters specifically from the program embedding module
+        program_embedding_param_ids = set(id(p) for p in self.model.program_embedding.parameters())
 
-        # This excludes biases and BatchNorm or LayerNorm
-        nodecay_params = [p for n, p in param_dict.items() if p.dim() < 2]
+        # Separate other parameters into decay and no-decay groups
+        decay_params_other = []
+        nodecay_params_other = []
+        program_embedding_params = []
+
+        for name, param in self.model.named_parameters(): # Iterate over model parameters
+            if not param.requires_grad:
+                continue
+
+            param_id = id(param)
+            if param_id in program_embedding_param_ids:
+                program_embedding_params.append(param)
+                # print(f"Found program embedding param: {name}") # Optional: for debugging
+            else:
+                # Apply weight decay to matrices (conv kernels, linear weights)
+                if param.dim() >= 2:
+                    decay_params_other.append(param)
+                    # print(f"Found decay param: {name}") # Optional: for debugging
+                # No weight decay for biases, norms, 1D params
+                else:
+                    nodecay_params_other.append(param)
+                    # print(f"Found no-decay param: {name}") # Optional: for debugging
+
+        # Define the main learning rate and the embedding learning rate
+        main_lr = self.learning_rate
+        embedding_lr = main_lr * self.experiment_config.program_embedding_lr_multiplier
 
         optim_groups = [
-            {'params': decay_params, 'weight_decay': self.experiment_config.weight_decay},
-            {'params': nodecay_params, 'weight_decay': 0.0}
+            {'params': decay_params_other, 'lr': main_lr, 'weight_decay': self.experiment_config.weight_decay},
+            {'params': nodecay_params_other, 'lr': main_lr, 'weight_decay': 0.0},
+            # Group for program embeddings with specific (lower) LR and no weight decay
+            {'params': program_embedding_params, 'lr': embedding_lr, 'weight_decay': 0.0}
         ]
-        
+
+
+        # Verify parameter counts (optional, for debugging)
+        num_prog_emb = sum(p.numel() for p in program_embedding_params)
+        num_decay = sum(p.numel() for p in decay_params_other)
+        num_nodecay = sum(p.numel() for p in nodecay_params_other)
+        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Total Params: {total_params}, ProgEmb: {num_prog_emb}, Decay: {num_decay}, NoDecay: {num_nodecay}")
+        assert total_params == num_prog_emb + num_decay + num_nodecay, "Parameter misallocation in optimizer groups!"
+
         optimizer = AdamW(
             optim_groups,
-            lr=self.learning_rate,
+            lr=main_lr, # Default LR (overridden by group LRs)
             betas=(self.experiment_config.adamw_betas_1, self.experiment_config.adamw_betas_2),
             eps=1e-8,
             fused=True if torch.cuda.is_available() else False
         )
-        
+
         # Noam scheduler with linear warmup and cosine decay using lr-specific warmup
         def lr_lambda(step):
             warmup_steps = self.experiment_config.warmup_steps_lr
-            min_lr_factor = self.experiment_config.lr_min / self.experiment_config.learning_rate  # Use config value
-            
+            min_lr_factor = self.experiment_config.lr_min / self.experiment_config.learning_rate
+
             if step < warmup_steps:
-                # Linear warmup
                 base_factor = float(step) / float(max(1, warmup_steps))
-            elif step < self.experiment_config.decay_steps_lr + warmup_steps:
-                # Cosine decay from 1.0 to min_lr_factor
+            elif step < self.experiment_config.max_steps: # Use max_steps directly if decay_steps_lr is None or large
                 progress = float(step - warmup_steps) / float(max(1, self.experiment_config.max_steps - warmup_steps))
                 base_factor = min_lr_factor + 0.5 * (1.0 - min_lr_factor) * (1.0 + np.cos(np.pi * progress))
             else:
                 base_factor = min_lr_factor
 
-            em_start_step = self.experiment_config.em_start_step
-            if em_start_step is not None and step >= em_start_step:
-                is_e_step = ((step - em_start_step) % 2 == 0)
-                is_m_step = not is_e_step
-                if is_m_step:
-                    base_factor *= self.experiment_config.m_step_lr_multiplier
-
             return base_factor
-        
+
         scheduler = LambdaLR(optimizer, lr_lambda)
-        
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": {

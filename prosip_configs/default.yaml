@@ -33,7 +33,7 @@ experiment_config:
   warmup_steps_lr: 1000
   decay_steps_lr: 999000
   em_start_epoch: 0
-  m_step_lr_multiplier: 10
+  program_embedding_lr_multiplier: 0.1
   adamw_betas_1: 0.9
   adamw_betas_2: 0.999
   weight_decay: 0.0001
