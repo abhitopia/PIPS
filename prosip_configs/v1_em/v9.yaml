@@ -45,12 +45,12 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   # --- Learning Rate Schedule ---
-  learning_rate: 0.0001 # Base LR for main network
-  lr_min: 1.0e-06       # Minimum LR after decay
+  learning_rate: 0.00005 # Base LR for main network
+  lr_min: 5.0e-07       # Minimum LR after decay
   # Use 1/10th LR for program embeddings (as discussed)
   program_embedding_lr_multiplier: 0.1
   # Warmup proportional to total steps
-  warmup_steps_lr: 10000
+  warmup_steps_lr: 1000
   decay_steps_lr: null # Let it decay over (max_steps - warmup_steps_lr)
   # --- Optimizer Details ---
   adamw_betas_1: 0.9
@@ -72,13 +72,13 @@ experiment_config:
   # Data multiplier helps reuse sparse data
   data_multiplier: 2 # Can increase (e.g., 3-5) if needed
   # --- Loading & Freezing ---
-  model_src: null # Set path to resume from checkpoint if needed
+  model_src: v14/best/30324 # Set path to resume from checkpoint if needed
   train_only_program_embeddings: false # Train whole model initially
   freeze_autoencoder: false          # Train whole model initially
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v14 # CHANGE ME to a descriptive name
+  run_name: v15 # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints
