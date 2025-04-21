@@ -45,8 +45,8 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   # --- Learning Rate Schedule ---
-  learning_rate: 0.00005 # Base LR for main network
-  lr_min: 5.0e-07       # Minimum LR after decay
+  learning_rate: 1.44e-6 # Base LR for main network
+  lr_min: 1.44e-8       # Minimum LR after decay
   # Use 1/10th LR for program embeddings (as discussed)
   program_embedding_lr_multiplier: 0.1
   # Warmup proportional to total steps
@@ -61,8 +61,8 @@ experiment_config:
   beta_reconstruction: 0.5 # Crucial for basic grid structure
   beta_prediction: 1.0     # Crucial for predicting the output
   # Increased auxiliary loss weights for guidance with sparse data
-  beta_trajectory: 0.00001
-  beta_alignment: 0.0001
+  beta_trajectory: 0.0
+  beta_alignment: 0.0
   # --- Dataset Configuration ---
   dataset: ALL # Or specify your dataset name
   # Grouping is essential given N=3 examples per program
@@ -78,7 +78,7 @@ experiment_config:
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v15 # CHANGE ME to a descriptive name
+  run_name: v16 # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints
