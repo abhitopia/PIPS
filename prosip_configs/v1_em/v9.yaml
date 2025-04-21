@@ -33,9 +33,9 @@ experiment_config:
     # RoPE base
     rope_base: 4000
     # LoRA parameters (as discussed)
-    lora_rank: 16
-    lora_mlp_layers: 2
-    lora_mlp_dim: 256
+    rank: 16
+    mlp_layers: 2
+    mlp_dim: 256
   # --- Training Hyperparameters ---
   seed: 42 # Or null for random
   # Batch size: Results in 64 program batches (192 examples / 3 per program)
