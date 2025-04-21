@@ -549,15 +549,22 @@ class Interpreter(nn.Module):
             **lora_kwargs)
         
         self.norm_out_proj = nn.RMSNorm(n_dim)
+        self.norm_subroutine = nn.RMSNorm(n_dim)
 
     def forward(self, prev_state, program, iteration: int):
         # input: BxSxD | program: BxD | iteration: int
 
-        subroutine = self.subroutine_generator(prev_state, program, iteration)
-        next_state = self.subroutine_executor(prev_state, subroutine)
+        # Generate the raw subroutine
+        subroutine_raw = self.subroutine_generator(prev_state, program, iteration)
+
+        # Normalize the subroutine before using it for LoRA generation/application
+        subroutine_normed = self.norm_subroutine(subroutine_raw)
+
+        # Executor uses the normalized subroutine
+        next_state = self.subroutine_executor(prev_state, subroutine_normed)
 
         # Extract the output state from the next_state
-        output_iter = self.output_projection(self.norm_out_proj(next_state), subroutine)
+        output_iter = self.output_projection(self.norm_out_proj(next_state), subroutine_normed)
 
         return next_state, output_iter
 
@@ -589,11 +596,18 @@ class StateConstructor(nn.Module):
             num_layers=n_layer_exec,
             **common_kwargs,
             **lora_kwargs)
-    
+        
+        self.norm_subroutine = nn.RMSNorm(n_dim)
+
     def forward(self, input, program):
         # input: BxSxD | program: BxD
-        subroutine = self.subroutine_generator(input, program, 0)
-        state = self.subroutine_executor(input, subroutine)
+
+        # Generate and normalize the subroutine
+        subroutine_raw = self.subroutine_generator(input, program, 0)
+        subroutine_normed = self.norm_subroutine(subroutine_raw)
+
+        # Execute using the normalized subroutine
+        state = self.subroutine_executor(input, subroutine_normed)
         return state
         
 
