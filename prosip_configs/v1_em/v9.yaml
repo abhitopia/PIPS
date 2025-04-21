@@ -1,0 +1,87 @@
+experiment_config:
+  model_config:
+    # Core model capacity
+    n_dim: 256
+    n_head: 8
+    activation: gelu
+    # n_vocab: Set by your dataset (e.g., 16)
+    n_vocab: 16
+    # Autoencoder Transformer layers
+    n_layer_encoder: 4
+    # REPL layers (Gen deeper than Exec)
+    n_layer_interpreter_exec: 2
+    n_layer_interpreter_gen: 4
+    # Regularization
+    dropout: 0.0
+    # program_vocab: Will be set dynamically by tokenizer size (~100k)
+    program_vocab: 100000 # Placeholder, will be overridden
+    # Number of REPL steps
+    num_iterations: 8
+    # Autoencoder latent dimensions
+    latent_height: 8
+    latent_width: 8
+    # Autoencoder convolutional layers
+    conv_block_size: 2
+    n_conv_blocks: 2
+    # Grid dimensions (Set by your dataset)
+    grid_height: 32
+    grid_width: 32
+    encode_norm: true
+    decode_norm: true
+    # Trajectory loss margin
+    margin: 0.0
+    # RoPE base
+    rope_base: 4000
+    # LoRA parameters (as discussed)
+    lora_rank: 16
+    lora_mlp_layers: 2
+    lora_mlp_dim: 256
+  # --- Training Hyperparameters ---
+  seed: 42 # Or null for random
+  # Batch size: Results in 64 program batches (192 examples / 3 per program)
+  batch_size: 192
+  # Training duration (adjust based on convergence/compute)
+  max_steps: 500000
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  # --- Learning Rate Schedule ---
+  learning_rate: 0.0001 # Base LR for main network
+  lr_min: 1.0e-06       # Minimum LR after decay
+  # Use 1/10th LR for program embeddings (as discussed)
+  program_embedding_lr_multiplier: 0.1
+  # Warmup proportional to total steps
+  warmup_steps_lr: 10000
+  decay_steps_lr: null # Let it decay over (max_steps - warmup_steps_lr)
+  # --- Optimizer Details ---
+  adamw_betas_1: 0.9
+  adamw_betas_2: 0.999
+  # Slightly increased weight decay for regularization
+  weight_decay: 0.00001
+  # --- Loss Weights ---
+  beta_reconstruction: 1.0 # Crucial for basic grid structure
+  beta_prediction: 1.0     # Crucial for predicting the output
+  # Increased auxiliary loss weights for guidance with sparse data
+  beta_trajectory: 0.01
+  beta_alignment: 0.01
+  # --- Dataset Configuration ---
+  dataset: ALL # Or specify your dataset name
+  # Grouping is essential given N=3 examples per program
+  group_by_program: true
+  limit_training_samples: null # Use all training data
+  limit_validation_samples: 50000 # Limit validation examples for speed
+  # Data multiplier helps reuse sparse data
+  data_multiplier: 2 # Can increase (e.g., 3-5) if needed
+  # --- Loading & Freezing ---
+  model_src: null # Set path to resume from checkpoint if needed
+  train_only_program_embeddings: false # Train whole model initially
+  freeze_autoencoder: false          # Train whole model initially
+  em_start_epoch: null               # Keep EM disabled
+# --- Project Logging & Checkpointing ---
+project_config:
+  run_name: v9 # CHANGE ME to a descriptive name
+  project_name: prosip_v4  # Your WandB project name
+  checkpoint_dir: prosip_runs     # Directory to save checkpoints
+  # How often to run validation and save checkpoints
+  val_check_interval: 1000
+  # How often to generate visualizations (if implemented)
+  viz_interval: 1000
