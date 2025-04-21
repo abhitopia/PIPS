@@ -326,7 +326,7 @@ class GridAutoEncoder(nn.Module):
                                                         decode_norm=config.decode_norm,
                                                         activation=config.activation)
         
-        
+        self.proj_in_norm = nn.RMSNorm(config.n_dim)
         self.out_proj = nn.Linear(config.n_dim, config.n_vocab, bias=False)
         self.reset_parameters()
 
@@ -404,7 +404,6 @@ class GridAutoEncoder(nn.Module):
     def conv_decode(self, x):
         x = self.conv_autoencoder.decode(x) # [batch, n_dim, grid_height, grid_width]
         x = x.permute(0, 2, 3, 1) # [batch, grid_height, grid_width, n_dim]
-        x = self.out_proj(x) # [batch, grid_height, grid_width, n_vocab]
         return x
     
     def apply_mask(self, x: torch.Tensor, mask_percentage: torch.Tensor) -> torch.Tensor:
@@ -423,7 +422,8 @@ class GridAutoEncoder(nn.Module):
     
     def decode(self, x):
         x_trans = self.trans_decode(x) # [batch, n_latent, n_dim]
-        logits = self.conv_decode(x_trans) # [batch, n_dim, grid_height, grid_width]
+        x_conv = self.conv_decode(x_trans) # [batch, n_dim, grid_height, grid_width]
+        logits = self.out_proj(self.proj_in_norm(x_conv)) # [batch, grid_height, grid_width, n_vocab]
         return logits
 
     def forward(self, x, mask_percentage: torch.Tensor = torch.tensor(0.0)):
