@@ -45,8 +45,8 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   # --- Learning Rate Schedule ---
-  learning_rate: 1.44e-6 # Base LR for main network
-  lr_min: 1.44e-8       # Minimum LR after decay
+  learning_rate: 1.0e-7 # Base LR for main network
+  lr_min: 1.0e-8       # Minimum LR after decay
   # Use 1/10th LR for program embeddings (as discussed)
   program_embedding_lr_multiplier: 0.1
   # Warmup proportional to total steps
