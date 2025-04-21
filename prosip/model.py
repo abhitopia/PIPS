@@ -419,7 +419,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             self.model = torch.compile(
                 self.model,
                 fullgraph=True,
-                mode="reduce-overhead",
+                # mode="reduce-overhead", 
+                mode="max-autotune",
                 backend="inductor"
             )
         else:
@@ -682,7 +683,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             lr=main_lr, # Default LR (overridden by group LRs)
             betas=(self.experiment_config.adamw_betas_1, self.experiment_config.adamw_betas_2),
             eps=1e-8,
-            fused=True if torch.cuda.is_available() else False
+            # fused=True if torch.cuda.is_available() else False
+            fused=False
         )
 
         # Noam scheduler with linear warmup and cosine decay using lr-specific warmup
