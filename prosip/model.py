@@ -781,6 +781,7 @@ def train(
         num_val_examples=experiment_config.limit_validation_samples,
         max_grid_height=experiment_config.model_config.grid_height,
         max_grid_width=experiment_config.model_config.grid_width,
+        num_workers=8
     )
 
     experiment_config.model_config.program_vocab = len(tokenizer)
