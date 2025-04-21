@@ -419,8 +419,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             self.model = torch.compile(
                 self.model,
                 fullgraph=True,
-                # mode="reduce-overhead", 
-                mode="max-autotune",
+                mode="reduce-overhead", 
+                # mode="max-autotune",
                 backend="inductor"
             )
         else:
