@@ -63,14 +63,14 @@ class ProSIPConfig:
     rope_base: int = 4000
 
     # LoRA parameters
-    lora_rank: int = 8
-    lora_mlp_layers: int = 2
-    lora_mlp_dim: Optional[int] = None
+    rank: int = 8
+    mlp_layers: int = 2
+    mlp_dim: Optional[int] = None
 
     def __post_init__(self):
 
-        if self.lora_mlp_dim is None:
-            self.lora_mlp_dim = self.n_dim
+        if self.mlp_dim is None:
+            self.mlp_dim = self.n_dim
 
         self.padding_idx = self.n_vocab - 1
 
@@ -97,10 +97,9 @@ class ProSIPConfig:
             n_head=self.n_head,
             dropout=self.dropout,
             activation=self.activation,
-            ffn_dim=self.n_dim * 4,
-            lora_rank=self.lora_rank,
-            mlp_layers=self.lora_mlp_layers,
-            mlp_dim=self.lora_mlp_dim,
+            rank=self.rank,
+            mlp_layers=self.mlp_layers,
+            mlp_dim=self.mlp_dim,
             n_state=self.latent_height * self.latent_width,
             num_iterations=self.num_iterations,
             rope_base=self.rope_base,

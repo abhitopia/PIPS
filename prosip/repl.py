@@ -121,89 +121,132 @@ class RotaryPositionalEmbeddings(nn.Module):
         return x_out.type_as(x)
 
 
-class LoRALinear(nn.Module):
-    def __init__(self, base_layer: nn.Linear, rank: int):
+class HyperNetwork(nn.Module):
+    def __init__(self, task_embedding_dim, target_dim_A, target_dim_B, rank, mlp_layers, mlp_dim, activation, dropout):
         """
         Args:
-            base_layer: A preexisting nn.Linear layer.
-            rank: The rank for the low-rank update.
+            task_embedding_dim (int): Size of the task embedding.
+            target_dim_A (int): Output dimension for A matrix (typically ffn_dim).
+            target_dim_B (int): Input dimension for B matrix (typically embed_dim).
+            rank (int): Rank for the low-rank factorization.
+            mlp_layers (int): Number of hidden layers in the MLP.
+            mlp_dim (int): Dimension of the hidden layers.
+            activation (callable): Activation function class (e.g. nn.ReLU).
+            dropout (float): Dropout rate between layers.
         """
-        super(LoRALinear, self).__init__()
-        self.base_layer = base_layer  # Expected shape: [out_features, in_features]
+        super(HyperNetwork, self).__init__()
+        self.target_dim_A = target_dim_A
+        self.target_dim_B = target_dim_B
         self.rank = rank
-        self.out_features = base_layer.out_features
-        self.in_features = base_layer.in_features
 
-    def forward(self, x, A_params, B_params):
+        # Build two MLPs to generate the parameters for the low-rank matrices.
+        self.fc_A = _build_mlp(task_embedding_dim, target_dim_A * rank,
+                                    mlp_layers, mlp_dim, activation, dropout)
+        self.fc_B = _build_mlp(task_embedding_dim, rank * target_dim_B,
+                                    mlp_layers, mlp_dim, activation, dropout)
+
+
+    def forward(self, task_embedding):
         """
         Args:
-            x: Tensor of shape [B, seq_len, in_features]
-            A_params: Tensor of shape [B, seq_len, out_features, rank]
-            B_params: Tensor of shape [B, seq_len, rank, in_features]
+            task_embedding: Tensor of shape [batch_size, task_embedding_dim]
         Returns:
-            Tensor of shape [B, seq_len, out_features]
+            A_params: Tensor of shape [batch_size, target_dim_A, rank]
+            B_params: Tensor of shape [batch_size, rank, target_dim_B]
         """
-        # Compute the base output using the original layer.
-        base_out = self.base_layer(x)  # Shape: [B, seq_len, out_features]
+        A = self.fc_A(task_embedding)  # [batch_size, target_dim_A * rank]
+        B = self.fc_B(task_embedding)  # [batch_size, rank * target_dim_B]
+        A_params = A.view(-1, self.target_dim_A, self.rank)
+        B_params = B.view(-1, self.rank, self.target_dim_B)
+        return A_params, B_params
 
-        B, seq_len, in_features = x.size()
-        # Flatten the first two dimensions to process per-token.
-        x_flat = x.reshape(B * seq_len, in_features)  # [B*seq_len, in_features]
-        # For B_params: shape [B, seq_len, rank, in_features] -> flatten to [B*seq_len, rank, in_features]
-        B_flat = B_params.view(B * seq_len, self.rank, in_features)
-        # For A_params: shape [B, seq_len, out_features, rank] -> flatten to [B*seq_len, out_features, rank]
-        A_flat = A_params.view(B * seq_len, self.out_features, self.rank)
-        
-        # Compute intermediate: for each token, do: x_i [1, in_features] @ B_flat_i^T -> [1, rank]
-        # Use torch.bmm over the flattened batch.
-        x_flat_unsq = x_flat.unsqueeze(1)  # [B*seq_len, 1, in_features]
-        intermediate = torch.bmm(x_flat_unsq, B_flat.transpose(1, 2))  # [B*seq_len, 1, rank]
-        # Compute adaptation: [B*seq_len, 1, rank] @ A_flat_i^T -> [B*seq_len, 1, out_features]
-        adaptation = torch.bmm(intermediate, A_flat.transpose(1, 2))  # [B*seq_len, 1, out_features]
-        adaptation = adaptation.squeeze(1).view(B, seq_len, self.out_features)
-        
-        return base_out + adaptation
+
+class DynamicLoRALinear(nn.Module):
+    def __init__(
+        self,
+        dim_in: int,
+        dim_out: int,
+        subroutine_dim: int,
+        rank: int,
+        mlp_layers: int,
+        mlp_dim: int,
+        activation: str,
+        dropout: float = 0.0,
+        bias: bool = False,
+    ):
+        super().__init__()
+        self.rank = rank
+        self.dim_in = dim_in
+        self.dim_out = dim_out
+        self.subroutine_dim = subroutine_dim
+
+        self.base = nn.Linear(dim_in, dim_out, bias=bias)
+        if rank > 0:
+            self.hyper = HyperNetwork(
+                task_embedding_dim=self.subroutine_dim,
+                target_dim_A=dim_out,
+                target_dim_B=dim_in,
+                rank=rank,
+                mlp_layers=mlp_layers,
+                mlp_dim=mlp_dim,
+                activation=get_activation_fn(activation, return_module=True),
+                dropout=dropout,
+            )
+
+    def forward(self, x: Tensor, subroutine: Optional[Tensor] = None) -> Tensor:
+            # canonicalize both 2-D and 3-D into a [B, T, D] problem
+            base_out = self.base(x)
+            if subroutine is None or self.rank == 0:
+                return base_out
+
+            is_flat = (base_out.dim() == 2)
+            if is_flat:
+                # assume x: [BT, D_in]; treat as B=BT, T=1
+                base_out = base_out.unsqueeze(1)                # → [BT, 1, D_in]
+                subroutine = subroutine.unsqueeze(1)
+
+            # now both x and (if present) subroutine are [B, T, D_in]
+            B, T, D = subroutine.shape
+
+            flat_sub = subroutine.view(B*T, D)
+            A_raw, B_raw = self.hyper(flat_sub)
+            A = A_raw.view(B, T, self.dim_out, self.rank)
+            Bm= B_raw.view(B, T, self.rank, self.dim_in)
+
+            inter = torch.einsum('bti,btri->btr', x, Bm)
+            adapt = torch.einsum('btr,btor->bto', inter, A)
+            out = base_out + adapt
+            
+            # if we started flat, squeeze back to [BT, D_out]
+            if is_flat:
+                out = out.reshape(-1, self.dim_out)
+
+            return out
+
 
 class MultiHeadAttention(nn.Module):
-    def __init__(self, n_dim, n_head, dropout, lora_rank=0, rope=None, mlp_layers=1, mlp_dim=128, activation="gelu"):
+    def __init__(self, n_dim, n_head, dropout, rank=0, rope=None, mlp_layers=1, mlp_dim=128, activation="gelu"):
         super().__init__()
         self.rope = rope
         self.n_dim = n_dim
         self.n_head = n_head
         self.dropout = dropout
         assert n_dim % n_head == 0
-        # key, query, value projections for all heads, but in a batch
-        self.q_proj = nn.Linear(n_dim, n_dim, bias=False)
-        self.k_proj = nn.Linear(n_dim, n_dim, bias=False)
-        self.v_proj = nn.Linear(n_dim, n_dim, bias=False)
-        self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
 
-        # Dynamic LoRA adapters for Query and Value:
-        self.lora_q = LoRALinear(self.q_proj, lora_rank) if lora_rank > 0 else None
-        self.lora_v = LoRALinear(self.v_proj, lora_rank) if lora_rank > 0 else None
-        
-        # Hypernetworks to generate LoRA parameters for Q and V.
-        # These map a per-token subroutine (task embedding) to parameters for the dynamic update.
-        self.hypernetwork_q = HyperNetwork(
-            task_embedding_dim=n_dim,
-            target_dim_A=n_dim,  # output dimension for A: same as output dim of q_proj
-            target_dim_B=n_dim,  # input dimension for B: same as input dim of q_proj
-            rank=lora_rank,
-            num_hidden_layers=mlp_layers,
-            hidden_dim=mlp_dim,
-            activation=get_activation_fn(activation, return_module=True),
-            dropout=dropout
-        ) if lora_rank > 0 else None
-        self.hypernetwork_v = HyperNetwork(
-            task_embedding_dim=n_dim,
-            target_dim_A=n_dim,  # for v_proj; similar to above
-            target_dim_B=n_dim,
-            rank=lora_rank,
-            num_hidden_layers=mlp_layers,
-            hidden_dim=mlp_dim,
-            activation=get_activation_fn(activation, return_module=True),
-            dropout=dropout
-        ) if lora_rank > 0 else None
+
+        lora_kwargs = {
+            "rank": rank,
+            "subroutine_dim": n_dim,
+            "mlp_layers": mlp_layers,
+            "mlp_dim": mlp_dim,
+            "activation": activation,
+            "dropout": dropout
+        }
+        # key, query, value projections for all heads, but in a batch
+        self.q_proj = DynamicLoRALinear(n_dim, n_dim, **lora_kwargs)
+        self.k_proj = DynamicLoRALinear(n_dim, n_dim, **lora_kwargs)
+        self.v_proj = DynamicLoRALinear(n_dim, n_dim, **lora_kwargs)
+        self.c_proj = DynamicLoRALinear(n_dim, n_dim, **lora_kwargs)
 
     def forward(self,
             q: Tensor, 
@@ -237,28 +280,10 @@ class MultiHeadAttention(nn.Module):
 
         B = qB
         D = qD
-               # --- Dynamic Q and V Projection ---
-        if subroutine is not None:
-            # Flatten subroutine to generate dynamic LoRA parameters:
-            seq_len = subroutine.size(1)
-            sub_flat = subroutine.reshape(B * seq_len, -1)
-            # For Query:
-            A_q, B_q = self.hypernetwork_q(sub_flat)  # shapes: [B*seq_len, n_dim, attn_rank] and [B*seq_len, attn_rank, n_dim]
-            A_q = A_q.view(B, seq_len, self.q_proj.out_features, self.lora_q.rank)
-            B_q = B_q.view(B, seq_len, self.lora_q.rank, self.q_proj.in_features)
-            # Similarly for Value:
-            A_v, B_v = self.hypernetwork_v(sub_flat)
-            A_v = A_v.view(B, seq_len, self.v_proj.out_features, self.lora_v.rank)
-            B_v = B_v.view(B, seq_len, self.lora_v.rank, self.v_proj.in_features)
-            
-            # Apply dynamic LoRA adapters for Q and V.
-            # Note: LoRALinear returns the result of base_layer(x) plus the learned adapter.
-            q = self.lora_q(q, A_q, B_q)
-            v = self.lora_v(v, A_v, B_v)
-        else:
-            q = self.q_proj(q)
-            v = self.v_proj(v)
-        k = self.k_proj(k)
+        
+        q = self.q_proj(q, subroutine)
+        v = self.v_proj(v, subroutine)
+        k = self.k_proj(k, subroutine)
 
         # Reshape for multi-head attention, but do not transpose yet!
         q = q.view(B, qT, self.n_head, D // self.n_head).transpose(1, 2) # (B, n_head, T, head_dim)
@@ -298,7 +323,7 @@ class MultiHeadAttention(nn.Module):
         attn_output = attn_output.transpose(1, 2).contiguous().view(B, qT, D)
 
         # Output projection
-        y = self.c_proj(attn_output)
+        y = self.c_proj(attn_output, subroutine)
 
         # Zero out NaN values, so they don't affect future computations
         # I have also verified that the it doesn't matter what the nan values are set to
@@ -307,54 +332,9 @@ class MultiHeadAttention(nn.Module):
         return y, new_kv_cache
 
 
-
-class HyperNetwork(nn.Module):
-    def __init__(self, task_embedding_dim, target_dim_A, target_dim_B, rank, num_hidden_layers, hidden_dim, activation, dropout):
-        """
-        Args:
-            task_embedding_dim (int): Size of the task embedding.
-            target_dim_A (int): Output dimension for A matrix (typically ffn_dim).
-            target_dim_B (int): Input dimension for B matrix (typically embed_dim).
-            rank (int): Rank for the low-rank factorization.
-            num_hidden_layers (int): Number of hidden layers in the MLP.
-            hidden_dim (int): Dimension of the hidden layers.
-            activation (callable): Activation function class (e.g. nn.ReLU).
-            dropout (float): Dropout rate between layers.
-        """
-        super(HyperNetwork, self).__init__()
-        self.target_dim_A = target_dim_A
-        self.target_dim_B = target_dim_B
-        self.rank = rank
-
-        # Build two MLPs to generate the parameters for the low-rank matrices.
-        self.fc_A = _build_mlp(task_embedding_dim, target_dim_A * rank,
-                                    num_hidden_layers, hidden_dim, activation, dropout)
-        self.fc_B = _build_mlp(task_embedding_dim, rank * target_dim_B,
-                                    num_hidden_layers, hidden_dim, activation, dropout)
-
-
-
-    def forward(self, task_embedding):
-        """
-        Args:
-            task_embedding: Tensor of shape [batch_size, task_embedding_dim]
-        Returns:
-            A_params: Tensor of shape [batch_size, target_dim_A, rank]
-            B_params: Tensor of shape [batch_size, rank, target_dim_B]
-        """
-        A = self.fc_A(task_embedding)  # [batch_size, target_dim_A * rank]
-        B = self.fc_B(task_embedding)  # [batch_size, rank * target_dim_B]
-        A_params = A.view(-1, self.target_dim_A, self.rank)
-        B_params = B.view(-1, self.rank, self.target_dim_B)
-        return A_params, B_params
-    
-
-
-    
-
 class DynamicTransformerEncoderLayer(nn.Module):
-    def __init__(self, embed_dim, ffn_dim, task_embedding_dim, rank, num_heads, lora_mlp_layers, lora_mlp_dim,
-                 activation, dropout=0.0, rope=None):
+    def __init__(self, embed_dim, rank, num_heads, mlp_layers, mlp_dim,
+                 activation, dropout=0.0, rope=None, ffn_dim=None):
         """
         Args:
             embed_dim (int): Embedding dimension for the transformer.
@@ -367,39 +347,33 @@ class DynamicTransformerEncoderLayer(nn.Module):
         """
         super(DynamicTransformerEncoderLayer, self).__init__()
         self.embed_dim = embed_dim
+
+        lora_kwargs = {
+            "rank": rank,
+            "mlp_layers": mlp_layers,
+            "mlp_dim": mlp_dim,
+            "activation": activation,
+            "dropout": dropout
+        }
+
+        if ffn_dim is None:
+            ffn_dim = embed_dim * 4
         
         self.self_attn = MultiHeadAttention(n_dim=embed_dim, 
                                             n_head=num_heads, 
-                                            dropout=dropout, 
                                             rope=rope,
-                                            lora_rank=rank,
-                                            mlp_layers=lora_mlp_layers,
-                                            mlp_dim=lora_mlp_dim,
-                                            activation=activation)
+                                            **lora_kwargs)
+                                            
         self.norm1 = nn.RMSNorm(embed_dim)
         self.dropout1 = nn.Dropout(dropout)
 
         # Feed-Forward Network components.
-        self.ffn_linear1 = nn.Linear(embed_dim, ffn_dim)
-        self.ffn_linear2 = nn.Linear(ffn_dim, embed_dim)
+        self.ffn_linear1 = DynamicLoRALinear(embed_dim, ffn_dim, subroutine_dim=embed_dim, **lora_kwargs, bias=False)
+        self.ffn_linear2 = DynamicLoRALinear(ffn_dim, embed_dim, subroutine_dim=embed_dim, **lora_kwargs, bias=False)
         # Using a helper to get the activation module.
         self.activation = get_activation_fn(activation, return_module=True)()
         self.norm2 = nn.RMSNorm(embed_dim)
         self.dropout2 = nn.Dropout(dropout)
-
-        # Wrap ffn_linear1 with a dynamic LoRA adapter.
-        self.lora_linear1 = LoRALinear(self.ffn_linear1, rank)
-        # Hypernetwork to generate LoRA parameters; note the dimensions:
-        # - For A: target dimension is ffn_dim.
-        # - For B: target dimension is embed_dim.
-        self.hypernetwork = HyperNetwork(task_embedding_dim=task_embedding_dim,
-                                         target_dim_A=ffn_dim,
-                                         target_dim_B=embed_dim,
-                                         rank=rank,
-                                         num_hidden_layers=lora_mlp_layers,
-                                         hidden_dim=lora_mlp_dim,
-                                         activation=get_activation_fn(activation, return_module=True),
-                                         dropout=dropout)
 
     def forward(self, src, subroutine):
         """
@@ -416,31 +390,20 @@ class DynamicTransformerEncoderLayer(nn.Module):
         src = src + self.dropout1(attn_output)
 
         # --- Feed-Forward Sublayer with Dynamic LoRA and Pre-Norm ---
-        normed_src = self.norm2(src)
-        B, seq_len, _ = normed_src.shape
-        # Flatten the token dimension for the hypernetwork.
-        task_flat = subroutine.reshape(B * seq_len, -1)  # [B*seq_len, task_embedding_dim]
-        # Obtain LoRA parameters from hypernetwork.
-        A_params_flat, B_params_flat = self.hypernetwork(task_flat)
-        # Reshape to per-token shape.
-        A_params = A_params_flat.view(B, seq_len, self.ffn_linear1.out_features, self.lora_linear1.rank)
-        B_params = B_params_flat.view(B, seq_len, self.lora_linear1.rank, self.embed_dim)
-        # Apply LoRA-adapted first FFN layer using per-token parameters.
-        out_ffn1 = self.lora_linear1(normed_src, A_params, B_params)
+        out_ffn1 = self.ffn_linear1(self.norm2(src), subroutine)
         out_activated = self.activation(out_ffn1)
-        out_ffn2 = self.ffn_linear2(out_activated)
+        out_ffn2 = self.ffn_linear2(out_activated, subroutine)
         src = src + self.dropout2(out_ffn2)
         return src
 
 
 class SubroutineExecutor(nn.Module):
-    def __init__(self, num_layers, embed_dim, ffn_dim, task_embedding_dim, rank, num_heads=8, dropout=0.1, activation="relu", lora_mlp_layers=1, lora_mlp_dim=128, rope=None):
+    def __init__(self, num_layers, embed_dim, rank, num_heads, mlp_layers, mlp_dim,
+                 activation, dropout=0.0, rope=None):
         """
         Args:
             num_layers (int): Number of transformer encoder layers.
             embed_dim (int): Embedding dimension.
-            ffn_dim (int): Inner dimension for feed-forward networks.
-            task_embedding_dim (int): Dimension of the task embeddings.
             rank (int): Low-rank dimension for dynamic LoRA.
             num_heads (int): Number of attention heads.
             dropout (float): Dropout rate.
@@ -450,14 +413,12 @@ class SubroutineExecutor(nn.Module):
    
         self.layers = nn.ModuleList([
             DynamicTransformerEncoderLayer(embed_dim=embed_dim, 
-                                           ffn_dim=ffn_dim, 
-                                           task_embedding_dim=task_embedding_dim, 
                                            rank=rank, 
                                            num_heads=num_heads, 
                                            activation=activation,
                                            dropout=dropout,
-                                           lora_mlp_layers=lora_mlp_layers,
-                                           lora_mlp_dim=lora_mlp_dim,
+                                           mlp_layers=mlp_layers,
+                                           mlp_dim=mlp_dim,
                                            rope=rope)
             for _ in range(num_layers)
         ])
@@ -479,7 +440,7 @@ class SubroutineExecutor(nn.Module):
 class SubroutineGeneratorLayer(nn.Module):
     def __init__(self, embed_dim, num_heads, activation, ffn_dim=None, dropout=0.0, rope=None):
         super(SubroutineGeneratorLayer, self).__init__()
-        self.self_attn = MultiHeadAttention(n_dim=embed_dim, n_head=num_heads, dropout=dropout, rope=rope, lora_rank=0)
+        self.self_attn = MultiHeadAttention(n_dim=embed_dim, n_head=num_heads, dropout=dropout, rope=rope, rank=0)
         self.norm_kv = nn.RMSNorm(embed_dim)
         self.norm_q = nn.RMSNorm(embed_dim)
         self.dropout1 = nn.Dropout(dropout)
@@ -488,8 +449,8 @@ class SubroutineGeneratorLayer(nn.Module):
             ffn_dim = embed_dim * 4
 
         # Feed-Forward Network components.
-        self.ffn_linear1 = nn.Linear(embed_dim, ffn_dim)
-        self.ffn_linear2 = nn.Linear(ffn_dim, embed_dim)
+        self.ffn_linear1 = nn.Linear(embed_dim, ffn_dim, bias=False)
+        self.ffn_linear2 = nn.Linear(ffn_dim, embed_dim, bias=False)
         self.activation = get_activation_fn(activation, return_module=True)()
         self.norm2 = nn.RMSNorm(embed_dim)
         self.dropout2 = nn.Dropout(dropout)
@@ -549,45 +510,39 @@ class SubroutineGenerator(nn.Module):
 
 
 class Interpreter(nn.Module):
-    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, max_iterations, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
+    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, max_iterations, dropout, rank, mlp_layers, mlp_dim, rope=None):
         super(Interpreter, self).__init__()
 
+
+        common_kwargs = {
+            "embed_dim": n_dim,
+            "num_heads": n_head,
+            "activation": activation,
+            "dropout": dropout,
+            "rope": rope
+        }
          # Create a proper iteration embedding
         self.subroutine_generator = SubroutineGenerator(
             num_layers=n_layer_gen,
-            embed_dim=n_dim,
-            num_heads=n_head,
-            activation=activation,
+            **common_kwargs,
             max_iterations=max_iterations,
-            ffn_dim=ffn_dim,
-            dropout=dropout,
-            rope=rope)
+            ffn_dim=None)
+        
+        lora_kwargs = {
+            "rank": rank,
+            "mlp_layers": mlp_layers,
+            "mlp_dim": mlp_dim,
+        }
 
         self.subroutine_executor = SubroutineExecutor(
             num_layers=n_layer_exec,
-            embed_dim=n_dim,
-            ffn_dim=ffn_dim,
-            task_embedding_dim=n_dim,
-            rank=lora_rank,
-            num_heads=n_head,
-            dropout=dropout,
-            activation=activation,   
-            lora_mlp_layers=mlp_layers,
-            lora_mlp_dim=mlp_dim,
-            rope=rope)
+            **common_kwargs,
+            **lora_kwargs)
         
         self.output_extractor = SubroutineExecutor(
             num_layers=n_layer_exec,  
-            embed_dim=n_dim,
-            ffn_dim=ffn_dim,
-            task_embedding_dim=n_dim,
-            rank=lora_rank,
-            num_heads=n_head,
-            dropout=dropout,
-            activation=activation,
-            lora_mlp_layers=mlp_layers,
-            lora_mlp_dim=mlp_dim,
-            rope=rope)
+            **common_kwargs,
+            **lora_kwargs)
         
     def forward(self, prev_state, program, iteration: int):
         # input: BxSxD | program: BxD | iteration: int
@@ -602,30 +557,32 @@ class Interpreter(nn.Module):
 
 
 class StateConstructor(nn.Module):
-    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, ffn_dim, dropout, lora_rank, mlp_layers, mlp_dim, rope=None):
+    def __init__(self, n_layer_exec, n_layer_gen, n_dim, n_head, activation, dropout, rank, mlp_layers, mlp_dim, rope=None):
         super(StateConstructor, self).__init__()
-           # Create a proper iteration embedding
+        common_kwargs = {
+            "embed_dim": n_dim,
+            "num_heads": n_head,
+            "activation": activation,
+            "dropout": dropout,
+            "rope": rope
+        }
+
+        lora_kwargs = {
+            "rank": rank,
+            "mlp_layers": mlp_layers,
+            "mlp_dim": mlp_dim,
+        }
+
         self.subroutine_generator = SubroutineGenerator(
             num_layers=n_layer_gen,
-            embed_dim=n_dim,
-            num_heads=n_head,
-            activation=activation,
+            **common_kwargs,
             max_iterations=1, # Only one iteration for the state constructor
-            dropout=dropout,
-            rope=rope)
+            )
 
         self.subroutine_executor = SubroutineExecutor(
             num_layers=n_layer_exec,
-            embed_dim=n_dim,
-            ffn_dim=ffn_dim,
-            task_embedding_dim=n_dim,
-            rank=lora_rank,
-            num_heads=n_head,
-            dropout=dropout,
-            activation=activation,   
-            lora_mlp_layers=mlp_layers,
-            lora_mlp_dim=mlp_dim,
-            rope=rope)
+            **common_kwargs,
+            **lora_kwargs)
     
     def forward(self, input, program):
         # input: BxSxD | program: BxD
@@ -645,7 +602,6 @@ class REPLConfig:
     activation: str = "relu"
     num_iterations: int = 12
     n_state: int = 1024 # Number of tokens in the state
-    ffn_dim: Optional[int] = None
     use_rope: bool = True
     rope_base: int = 10000
 
@@ -654,43 +610,38 @@ class REPLConfig:
     n_layer_gen: int = 2   # Number of layers for SubroutineGenerator
 
     # LoRA parameters
-    lora_rank: int = 8
+    rank: int = 8
     mlp_layers: int = 2
     mlp_dim: int = 128
-
-    def __post_init__(self):
-        if self.ffn_dim is None:
-            self.ffn_dim = self.n_dim * 4
 
 
 class REPL(nn.Module):
     def __init__(self, config: REPLConfig):
         super(REPL, self).__init__()
 
-        self.rope = RotaryPositionalEmbeddings(dim=config.n_dim // config.n_head, max_seq_len=1024, base=config.rope_base) if config.use_rope else None
-        self.state_constructor = StateConstructor(n_layer_exec=config.n_layer_exec, 
-                                                  n_layer_gen=config.n_layer_gen,
-                                                  n_dim=config.n_dim, 
-                                                  n_head=config.n_head, 
-                                                  activation=config.activation, 
-                                                  ffn_dim=config.ffn_dim, 
-                                                  dropout=config.dropout, 
-                                                  lora_rank=config.lora_rank, 
-                                                  mlp_layers=config.mlp_layers, 
-                                                  mlp_dim=config.mlp_dim,
-                                                  rope=self.rope)
-        self.interpreter = Interpreter(n_layer_exec=config.n_layer_exec, 
-                                        n_layer_gen=config.n_layer_gen,
-                                        n_dim=config.n_dim, 
-                                        n_head=config.n_head, 
-                                        activation=config.activation, 
-                                        max_iterations=100,   # Set to 100 to ease loading old checkpoints
-                                        ffn_dim=config.ffn_dim, 
-                                        dropout=config.dropout, 
-                                        lora_rank=config.lora_rank, 
-                                        mlp_layers=config.mlp_layers, 
-                                        mlp_dim=config.mlp_dim,
-                                        rope=self.rope)
+        self.rope = RotaryPositionalEmbeddings(dim=config.n_dim // config.n_head, 
+                                               max_seq_len=1024, base=config.rope_base) if config.use_rope else None
+
+        common_kwargs = {
+            "n_layer_exec": config.n_layer_exec,
+            "n_layer_gen": config.n_layer_gen,
+            "n_dim": config.n_dim,
+            "n_head": config.n_head,
+            "activation": config.activation,
+            "dropout": config.dropout,
+            "rope": self.rope
+        }
+
+        lora_kwargs = {
+            "rank": config.rank,
+            "mlp_layers": config.mlp_layers,
+            "mlp_dim": config.mlp_dim,
+        }
+        self.state_constructor = StateConstructor(**common_kwargs,
+                                                  **lora_kwargs)
+        self.interpreter = Interpreter( **common_kwargs,
+                                        max_iterations=100,   # Set to 100 to ease loading old checkpoints,
+                                        **lora_kwargs)
         self.num_iterations = config.num_iterations
         self.reset_parameters()
 
@@ -719,6 +670,7 @@ class REPL(nn.Module):
             else:
                 # Handle custom parameters that are directly attached to the module
                 for name, param in module.named_parameters(recurse=False):
+                    print(f"Initializing {name} of shape {param.shape}")
                     if param.requires_grad:
                         if param.dim() > 1:
                             # For matrices/tensors, use normal initialization
