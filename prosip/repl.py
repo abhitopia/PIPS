@@ -422,7 +422,8 @@ class SubroutineExecutor(nn.Module):
                                            rope=rope)
             for _ in range(num_layers)
         ])
-        self.norm = nn.RMSNorm(embed_dim)
+        # self.norm = nn.RMSNorm(embed_dim)
+        self.norm = nn.Identity()
 
     def forward(self, state, subroutine):
         """
@@ -494,7 +495,8 @@ class SubroutineGenerator(nn.Module):
             for _ in range(num_layers)
         ])  
 
-        self.norm = nn.RMSNorm(embed_dim)
+        # self.norm = nn.RMSNorm(embed_dim)
+        self.norm = nn.Identity()
 
     
     def forward(self, state, program, iteration: int):
@@ -546,6 +548,8 @@ class Interpreter(nn.Module):
             activation=activation,
             **lora_kwargs)
         
+        self.norm_out_proj = nn.RMSNorm(n_dim)
+
     def forward(self, prev_state, program, iteration: int):
         # input: BxSxD | program: BxD | iteration: int
 
@@ -553,7 +557,7 @@ class Interpreter(nn.Module):
         next_state = self.subroutine_executor(prev_state, subroutine)
 
         # Extract the output state from the next_state
-        output_iter = self.output_projection(next_state, subroutine)
+        output_iter = self.output_projection(self.norm_out_proj(next_state), subroutine)
 
         return next_state, output_iter
 
