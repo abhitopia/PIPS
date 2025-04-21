@@ -72,7 +72,7 @@ experiment_config:
   # Data multiplier helps reuse sparse data
   data_multiplier: 2 # Can increase (e.g., 3-5) if needed
   # --- Loading & Freezing ---
-  model_src: v14/best/30324 # Set path to resume from checkpoint if needed
+  model_src: v14/best/30234 # Set path to resume from checkpoint if needed
   train_only_program_embeddings: false # Train whole model initially
   freeze_autoencoder: false          # Train whole model initially
   em_start_epoch: null               # Keep EM disabled
