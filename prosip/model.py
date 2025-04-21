@@ -749,6 +749,7 @@ def train(
     resume_from: str | None = None,
     acceleration: AccelerationConfig | None = None,
     lr_find: bool = False,
+    num_workers: int = 8,
     grad_log_interval: int = 100,
     visualization_interval: int = 100,
     num_grids_to_visualize: int = 4
@@ -781,7 +782,7 @@ def train(
         num_val_examples=experiment_config.limit_validation_samples,
         max_grid_height=experiment_config.model_config.grid_height,
         max_grid_width=experiment_config.model_config.grid_width,
-        num_workers=8
+        num_workers=num_workers
     )
 
     experiment_config.model_config.program_vocab = len(tokenizer)

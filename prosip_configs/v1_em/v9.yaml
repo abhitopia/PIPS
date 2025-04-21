@@ -39,7 +39,7 @@ experiment_config:
   # --- Training Hyperparameters ---
   seed: 42 # Or null for random
   # Batch size: Results in 64 program batches (192 examples / 3 per program)
-  batch_size: 192
+  batch_size: 288
   # Training duration (adjust based on convergence/compute)
   max_steps: 500000
   gradient_clip_val: 1.0
@@ -78,7 +78,7 @@ experiment_config:
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v10 # CHANGE ME to a descriptive name
+  run_name: v11 # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints

@@ -66,6 +66,7 @@ def new_train(
     debug_mode: bool = typer.Option(False, "--debug", "-D", help="Enable debug mode"),
     lr_find: bool = typer.Option(False, "--lr-find", "-L", help="Enable learning rate finder"),
     compile_model: bool = typer.Option(True, "--no-compile", help="Disable model compilation", is_flag=True, flag_value=False),
+    num_workers: int = typer.Option(8, "--num-workers", "-W", help="Number of workers for dataloader"),
 ):
     """Train a model using configuration from a YAML file.
     
@@ -111,6 +112,7 @@ def new_train(
         grad_log_interval=1000,
         visualization_interval=project_config['viz_interval'],
         num_grids_to_visualize=4,
+        num_workers=num_workers,
         resume_from=None
     )
 
