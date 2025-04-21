@@ -84,7 +84,7 @@ def new_train(
     # Extract acceleration config and create AccelerationConfig instance
     acceleration_config = AccelerationConfig(
         device='auto',
-        precision='bf16-true',
+        precision='bf16-mixed',
         matmul_precision='high',
         compile_model=compile_model
     )
