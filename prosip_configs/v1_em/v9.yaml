@@ -56,13 +56,13 @@ experiment_config:
   adamw_betas_1: 0.9
   adamw_betas_2: 0.999
   # Slightly increased weight decay for regularization
-  weight_decay: 0.00001
+  weight_decay: 0.0
   # --- Loss Weights ---
   beta_reconstruction: 1.0 # Crucial for basic grid structure
   beta_prediction: 1.0     # Crucial for predicting the output
   # Increased auxiliary loss weights for guidance with sparse data
-  beta_trajectory: 0.01
-  beta_alignment: 0.01
+  beta_trajectory: 0.0001
+  beta_alignment: 0.0001
   # --- Dataset Configuration ---
   dataset: ALL # Or specify your dataset name
   # Grouping is essential given N=3 examples per program
@@ -78,7 +78,7 @@ experiment_config:
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v12 # CHANGE ME to a descriptive name
+  run_name: v13 # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints
