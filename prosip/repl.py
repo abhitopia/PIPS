@@ -539,9 +539,11 @@ class Interpreter(nn.Module):
             **common_kwargs,
             **lora_kwargs)
         
-        self.output_extractor = SubroutineExecutor(
-            num_layers=n_layer_exec,  
-            **common_kwargs,
+        self.output_projection = DynamicLoRALinear(
+            dim_in=n_dim,
+            dim_out=n_dim,
+            subroutine_dim=n_dim,
+            activation=activation,
             **lora_kwargs)
         
     def forward(self, prev_state, program, iteration: int):
@@ -551,7 +553,7 @@ class Interpreter(nn.Module):
         next_state = self.subroutine_executor(prev_state, subroutine)
 
         # Extract the output state from the next_state
-        output_iter = self.output_extractor(next_state, subroutine)
+        output_iter = self.output_projection(next_state, subroutine)
 
         return next_state, output_iter
 
