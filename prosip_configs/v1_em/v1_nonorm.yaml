@@ -41,12 +41,12 @@ experiment_config:
   # Batch size: Results in 64 program batches (192 examples / 3 per program)
   batch_size: 144
   # Training duration (adjust based on convergence/compute)
-  max_steps: 500000
+  max_steps: 100000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   # --- Learning Rate Schedule ---
-  learning_rate: 1.0e-3 # Base LR for main network
-  lr_min: 1.0e-5       # Minimum LR after decay
+  learning_rate: 1.0e-4 # Base LR for main network
+  lr_min: 1.0e-6       # Minimum LR after decay
   # Use 1/10th LR for program embeddings (as discussed)
   program_embedding_lr_multiplier: 0.1
   # Warmup proportional to total steps
