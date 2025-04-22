@@ -664,21 +664,22 @@ class LatentAutoEncoder(nn.Module):
         self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
         self.register_buffer('grid_pos_indices', grid_pos_indices, persistent=False)
 
-        # Apply weight initialization on registered modules.
-        self.apply(self._init_weights)
+        self.reset_parameters()
 
-    def _init_weights(self, module):
-        """Initialize weights like in Llama, but preserve VQEmbedding initialization."""
-        if isinstance(module, nn.Linear):
-            # For most linear layers, use standard normal initialization
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-            if module.bias is not None:
-                torch.nn.init.zeros_(module.bias)
-        elif isinstance(module, nn.Embedding):
-            # Skip VQEmbedding modules and the codebook specifically
-            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
-        elif isinstance(module, RMSNorm):
-            torch.nn.init.ones_(module.scale)
+    def reset_parameters(self):
+        def _init_weights(module):
+            """Initialize weights like in Llama, but preserve VQEmbedding initialization."""
+            if isinstance(module, nn.Linear):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+                if module.bias is not None:
+                    torch.nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Embedding):
+                torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            elif isinstance(module, RMSNorm):
+                torch.nn.init.ones_(module.scale)
+
+        self.apply(_init_weights)
+
 
     def apply_mask(self, x: Tensor, mask_percentage: Tensor) -> Tensor:
         x = x.clone()
