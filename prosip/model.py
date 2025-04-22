@@ -30,6 +30,7 @@ from pips.data import DatasetType, Example, ColorPermutation, ArrayTransform
 from pips.misc.acceleration_config import AccelerationConfig
 
 # from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
+from pips.misc.schedule import Schedule
 from prosip.latent_autoencoder import LatentAutoEncoder, LatentAutoEncoderConfig
 from prosip.repl import REPL, REPLConfig
 from prosip.utils import normalize_state_dict, load_model_weights
@@ -310,6 +311,8 @@ class ProSIPExperimentConfig:
     limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
     limit_validation_samples: int | None = 50000  # Limit the number of validation samples. None means use all samples.
     data_multiplier: int = 2  # How many times to repeat the dataset
+    mask_pct: float = 0.0
+    mask_transition_steps: int = 10000
     
     # Other parameters
     model_src: str | None = None
@@ -390,6 +393,14 @@ class ProSIPTrainingModule(pl.LightningModule):
         self.compile_model = compile_model
         self.tokenizer = tokenizer
         self.save_hyperparameters()
+
+        self.max_mask_pct_schedule = Schedule.get_schedule(
+            initial_value=0.0,
+            target_value=self.experiment_config.mask_pct,
+            transition_steps=self.experiment_config.mask_transition_steps,
+            warmup_steps=0,
+            schedule_type="cosine"
+        )
 
 
     def configure_model(self):
@@ -523,10 +534,11 @@ class ProSIPTrainingModule(pl.LightningModule):
                 beta_reconstruction: Tensor = torch.tensor(1.0), 
                 beta_prediction: Tensor = torch.tensor(1.0),
                 beta_trajectory: Tensor = torch.tensor(1.0),
-                beta_alignment: Tensor = torch.tensor(0.0)):
+                beta_alignment: Tensor = torch.tensor(0.0),
+                mask_pct: Tensor = torch.tensor(0.0)):
         
         # Forward pass with provided scheduled parameters.
-        predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids)
+        predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids, mask_pct)
         input_token_accuracy, input_sample_accuracy = self.compute_accuracies(predictions["input"], input_grids)
         output_token_accuracy, output_sample_accuracy = self.compute_accuracies(predictions["output"], output_grids)
         prediction_token_accuracy, prediction_sample_accuracy = self.compute_accuracies(predictions["predicted"], output_grids) 
@@ -571,6 +583,10 @@ class ProSIPTrainingModule(pl.LightningModule):
         beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
         beta_alignment = torch.tensor(self.experiment_config.beta_alignment, device=input_grids.device)
 
+        max_mask_pct = self.max_mask_pct_schedule(self.trainer.global_step)
+        mask_pct = torch.empty(1, device=input_grids.device).uniform_(0.0, max_mask_pct)[0]
+
+
         predictions, output_dict = self(
             input_grids=input_grids,
             output_grids=output_grids,
@@ -578,14 +594,15 @@ class ProSIPTrainingModule(pl.LightningModule):
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
             beta_trajectory=beta_trajectory,
-            beta_alignment=beta_alignment
+            beta_alignment=beta_alignment,
+            mask_pct=mask_pct
         )
 
         output_dict['beta(Reconstruction)'] = beta_reconstruction
         output_dict['beta(Prediction)'] = beta_prediction
         output_dict['beta(Trajectory)'] = beta_trajectory
         output_dict['beta(Alignment)'] = beta_alignment
-
+        output_dict['percent(MASK)'] = mask_pct
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
         # Calculate and log dataset-specific accuracies
@@ -610,7 +627,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
             beta_trajectory=beta_trajectory,
-            beta_alignment=beta_alignment
+            beta_alignment=beta_alignment,
+            mask_pct=torch.tensor(0.0, device=input_grids.device)
         )
 
         self.log_metrics(output_dict, 'val', batch[0].size(0))

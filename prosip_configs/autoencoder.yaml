@@ -11,7 +11,7 @@ experiment_config:
     grid_width: 32
     dropout: 0.0
     rope_base: 10000
-  seed: 2758194162
+  seed: 2882440383
   batch_size: 44
   max_steps: 100000
   gradient_clip_val: 1.0
@@ -33,12 +33,14 @@ experiment_config:
   limit_training_samples: null
   limit_validation_samples: 50000
   data_multiplier: 2
+  mask_pct: 0.2
+  mask_transition_steps: 10000
   model_src: null
   train_only_program_embeddings: false
   freeze_autoencoder: false
   em_start_epoch: null
 project_config:
-  run_name: bold-whale-314
+  run_name: kind-bear-124
   project_name: prosip-test
   checkpoint_dir: prosip_runs
   val_check_interval: 1000
