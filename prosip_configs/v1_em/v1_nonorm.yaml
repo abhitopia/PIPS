@@ -78,7 +78,7 @@ experiment_config:
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v5_nonorm_norank # CHANGE ME to a descriptive name
+  run_name: v6_nonorm_small # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints
