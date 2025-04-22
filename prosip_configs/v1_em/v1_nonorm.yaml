@@ -33,7 +33,7 @@ experiment_config:
     # RoPE base
     rope_base: 4000
     # LoRA parameters (as discussed)
-    rank: 16
+    rank: 0
     mlp_layers: 2
     mlp_dim: 256
   # --- Training Hyperparameters ---
@@ -78,7 +78,7 @@ experiment_config:
   em_start_epoch: null               # Keep EM disabled
 # --- Project Logging & Checkpointing ---
 project_config:
-  run_name: v4_nonorm # CHANGE ME to a descriptive name
+  run_name: v5_nonorm_norank # CHANGE ME to a descriptive name
   project_name: prosip-v1-em # Your WandB project name
   checkpoint_dir: prosip_runs     # Directory to save checkpoints
   # How often to run validation and save checkpoints

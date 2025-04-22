@@ -600,9 +600,9 @@ class ArcTask:
         # Apply permutation to all examples
         for ex in clone.train + clone.test:
             if ex.is_test:
-                test_examples.append(ex.permute(color_perm, arr_transform, seed=seed))
+                test_examples.append(ex.permute(color_perm, arr_transform))
             else:
-                train_examples.append(ex.permute(color_perm, arr_transform, seed=seed))
+                train_examples.append(ex.permute(color_perm, arr_transform))
             
 
         clone.train = train_examples
