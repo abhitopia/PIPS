@@ -498,10 +498,10 @@ class Example:
 
 
 class ArcTask:
-    def __init__(self, id, prog_id, train: List[Example], test: List[Example], dataset=None, 
+    def __init__(self, task_id, program_id, train: List[Example], test: List[Example], dataset=None, 
                  color_perm: ColorPermutation = None, transform: ArrayTransform = None):
-        self.id = id
-        self.prog_id = prog_id
+        self.task_id = task_id
+        self.program_id = program_id
         self.dataset = dataset
         self.train = train
         self.test = test
@@ -510,34 +510,34 @@ class ArcTask:
         assert isinstance(color_perm, ColorPermutation) or color_perm is None, "color_perm must be a ColorPermutation or None"
         assert isinstance(transform, ArrayTransform) or transform is None, "transform must be an ArrayTransform or None"
 
-        self._color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
-        self._transform = transform if transform is not None else ArrayTransform.IDENT
+        self.color_perm = color_perm if color_perm is not None else ColorPermutation("CPID")
+        self.transform = transform if transform is not None else ArrayTransform.IDENT
 
     def __repr__(self):    
-        return f'{self.uid} : {self.dataset}/{self.prog_id}/{self._color_perm.name}/{self._transform.name}'
+        return f'{self.uid} : {self.dataset}/{self.program_id}/{self.color_perm.name}/{self.transform.name}'
 
     @property
     def uid(self):
         """Returns a unique identifier combining program ID with color permutation and transformation."""
-        return f"{self.prog_id}/{self._color_perm.name}/{self._transform.name}"
+        return f"{self.program_id}/{self.color_perm.name}/{self.transform.name}"
         
     def to_dict(self):
         result = {
-            "id": self.id,
-            "prog_id": self.prog_id,
+            "id": self.task_id,
+            "prog_id": self.program_id,
             "dataset": self.dataset,
             "train": [e.to_dict() for e in self.train],
             "test": [e.to_dict() for e in self.test],
-            "color_perm": self._color_perm.name,
-            "transform": self._transform.name
+            "color_perm": self.color_perm.name,
+            "transform": self.transform.name
         }
         return result
     
     @staticmethod
     def from_dict(task_dict):
         return ArcTask(
-            id=task_dict['id'],
-            prog_id=task_dict['prog_id'],
+            task_id=task_dict['id'],
+            program_id=task_dict['prog_id'],
             train=[Example.from_dict(e) if isinstance(e, dict) else e for e in task_dict['train']],
             test=[Example.from_dict(e) if isinstance(e, dict) else e for e in task_dict['test']],
             dataset=task_dict.get('dataset'),
@@ -557,7 +557,7 @@ class ArcTask:
         
     @property
     def is_original(self):
-        return self._color_perm.name == "CPID" and self._transform == ArrayTransform.IDENT
+        return self.color_perm.name == "CPID" and self.transform == ArrayTransform.IDENT
         
     def clone(self):
         """Create a deep copy of the task. But mark it as not original."""
@@ -568,13 +568,13 @@ class ArcTask:
         cloned_test = [ex.clone() for ex in self.test]
         
         cloned = ArcTask(
-            id=self.id,
-            prog_id=self.prog_id,
+            task_id=self.task_id,
+            program_id=self.program_id,
             train=cloned_train,
             test=cloned_test,
             dataset=self.dataset,
-            color_perm=self._color_perm,
-            transform=self._transform
+            color_perm=self.color_perm,
+            transform=self.transform
         )
         
         return cloned
@@ -609,8 +609,8 @@ class ArcTask:
         clone.test = test_examples
 
         # Store permutation information
-        clone._color_perm = color_perm
-        clone._transform = arr_transform
+        clone.color_perm = color_perm
+        clone.transform = arr_transform
         
         return clone
 
@@ -646,8 +646,8 @@ def load_task(task_json, task_id, prog_id, dataset, inverse=False):
     ]
     
     return ArcTask(
-        id=task_id,
-        prog_id=prog_id,
+        task_id=task_id,
+        program_id=prog_id,
         train=train,
         test=test,
         dataset=dataset

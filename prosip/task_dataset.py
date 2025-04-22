@@ -446,8 +446,8 @@ class TaskDataset(Dataset):
         
         # Create ArcTask object
         arc_task = ArcTask(
-            id=task['task_id'],
-            prog_id=task['program_id'],
+            task_id=task['task_id'],
+            program_id=task['program_id'],
             train=train_examples,
             test=test_examples,
             dataset=task['dataset'],
