@@ -9,14 +9,14 @@ experiment_config:
     # Autoencoder Transformer layers
     n_layer_encoder: 4
     # REPL layers (Gen deeper than Exec)
-    n_layer_interpreter_exec: 8
+    n_layer_interpreter_exec: 2
     n_layer_interpreter_gen: 2
     # Regularization
     dropout: 0.0
     # program_vocab: Will be set dynamically by tokenizer size (~100k)
     program_vocab: 100000 # Placeholder, will be overridden
     # Number of REPL steps
-    num_iterations: 1
+    num_iterations: 4
     # Autoencoder latent dimensions
     latent_height: 8
     latent_width: 8
@@ -33,8 +33,8 @@ experiment_config:
     # RoPE base
     rope_base: 4000
     # LoRA parameters (as discussed)
-    rank: 0
-    mlp_layers: 2
+    rank: 4
+    mlp_layers: 1
     mlp_dim: 256
   # --- Training Hyperparameters ---
   seed: 42 # Or null for random
@@ -45,8 +45,8 @@ experiment_config:
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
   # --- Learning Rate Schedule ---
-  learning_rate: 1.0e-3 # Base LR for main network
-  lr_min: 1.0e-5       # Minimum LR after decay
+  learning_rate: 5.0e-4 # Base LR for main network
+  lr_min: 5.0e-6       # Minimum LR after decay
   # Use 1/10th LR for program embeddings (as discussed)
   program_embedding_lr_multiplier: 0.1
   # Warmup proportional to total steps
@@ -61,8 +61,8 @@ experiment_config:
   beta_reconstruction: 0.1 # Crucial for basic grid structure
   beta_prediction: 1.0     # Crucial for predicting the output
   # Increased auxiliary loss weights for guidance with sparse data
-  beta_trajectory: 0.0
-  beta_alignment: 0.0
+  beta_trajectory: 0.00001
+  beta_alignment: 0.001
   # --- Dataset Configuration ---
   dataset: ALL # Or specify your dataset name
   # Grouping is essential given N=3 examples per program
