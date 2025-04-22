@@ -154,11 +154,11 @@ def process_task_loader(loader, output_file, num_train=3, num_test=1):
         task_dict = {}
         
         # Add metadata
-        task_dict['task_id'] = task.id
-        task_dict['program_id'] = task.prog_id
+        task_dict['task_id'] = task.task_id
+        task_dict['program_id'] = task.program_id
         task_dict['dataset'] = task.dataset
-        task_dict['color_perm'] = task._color_perm.name
-        task_dict['transform'] = task._transform.name
+        task_dict['color_perm'] = task.color_perm.name
+        task_dict['transform'] = task.transform.name
         
         # Process selected train examples (already randomly selected)
         for j in range(num_train):
