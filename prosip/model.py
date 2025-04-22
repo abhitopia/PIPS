@@ -29,7 +29,8 @@ from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.data import DatasetType, Example, ColorPermutation, ArrayTransform
 from pips.misc.acceleration_config import AccelerationConfig
 
-from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
+# from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
+from prosip.latent_autoencoder import LatentAutoEncoder, LatentAutoEncoderConfig
 from prosip.repl import REPL, REPLConfig
 from prosip.utils import normalize_state_dict, load_model_weights
 from prosip.task_dataset import ExampleDataset, TaskDataset, Tokenizer, worker_init_fn
@@ -41,67 +42,27 @@ class ProSIPConfig:
     n_head: int = 4
     activation: str = "gelu"
     n_vocab: int = 16
-    n_layer_encoder: int = 4
-    n_layer_interpreter_exec: int = 2
-    n_layer_interpreter_gen: int = 2
-    dropout: float = 0.0
-    program_vocab: int = 2048
-    num_iterations: int = 1
-
-    # Autoencoder config
-    latent_height: int = 8
-    latent_width: int = 8
-    conv_block_size: int = 2
-    n_conv_blocks: int = 2
+    n_layer_encoder_latent: int = 2
+    n_layer_encoder_grid: int = 2
+    n_latent: int = 64
     grid_height: int = 32
     grid_width: int = 32
-    encode_norm: bool = True
-    decode_norm: bool = True
-
-    # Trajectory loss config
-    margin: float = 0.0
-    rope_base: int = 4000
-
-    # LoRA parameters
-    rank: int = 8
-    mlp_layers: int = 2
-    mlp_dim: Optional[int] = None
+    dropout: float = 0.0
+    rope_base: float = 10000
 
     def __post_init__(self):
-
-        if self.mlp_dim is None:
-            self.mlp_dim = self.n_dim
-
         self.padding_idx = self.n_vocab - 1
 
-        self.autoencoder_config = GridAutoEncoderConfig(
+        self.autoencoder_config = LatentAutoEncoderConfig(
             n_vocab=self.n_vocab,
             n_dim=self.n_dim,
-            n_layer=self.n_layer_encoder,
-            n_head=self.n_head,
-            latent_height=self.latent_height,
-            latent_width=self.latent_width,
-            conv_block_size=self.conv_block_size,
-            n_conv_blocks=self.n_conv_blocks,
+            n_grid_layer=self.n_layer_encoder_grid,
+            n_latent_layer=self.n_layer_encoder_latent,
+            n_latent=self.n_latent,
             grid_height=self.grid_height,
             grid_width=self.grid_width,
-            encode_norm=self.encode_norm,
-            decode_norm=self.decode_norm,
-            activation=self.activation,
-            dropout=self.dropout
-        )
-        self.repl_config = REPLConfig(
-            n_layer_exec=self.n_layer_interpreter_exec,
-            n_layer_gen=self.n_layer_interpreter_gen,
-            n_dim=self.n_dim,
             n_head=self.n_head,
             dropout=self.dropout,
-            activation=self.activation,
-            rank=self.rank,
-            mlp_layers=self.mlp_layers,
-            mlp_dim=self.mlp_dim,
-            n_state=self.latent_height * self.latent_width,
-            num_iterations=self.num_iterations,
             rope_base=self.rope_base,
             use_rope=True
         )
@@ -117,12 +78,11 @@ class ProSIPModel(nn.Module):
     def __init__(self, config: ProSIPConfig):
         super().__init__()
         self.config = config
-        self.trajectory_margin = config.margin
 
-        self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
-        self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
-        self.autoencoder = GridAutoEncoder(config.autoencoder_config)
-        self.interpreter = REPL(config.repl_config)
+        # self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
+        # self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
+        self.autoencoder = LatentAutoEncoder(config.autoencoder_config)
+        # self.interpreter = REPL(config.repl_config)
         
         self.reset_parameters()
         
@@ -132,12 +92,11 @@ class ProSIPModel(nn.Module):
         - Also calls reset_parameters on submodules that have it
         """
         # Initialize embeddings
-        nn.init.normal_(self.token_embedding.weight, mean=0.0, std=0.02)
-        nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
+        # nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
         
         # Call reset_parameters on submodules that have their own implementations
         self.autoencoder.reset_parameters()
-        self.interpreter.reset_parameters()
+        # self.interpreter.reset_parameters()
 
     def freeze_autoencoder(self):
         for param in self.autoencoder.parameters():
@@ -159,7 +118,36 @@ class ProSIPModel(nn.Module):
         for param in self.program_embedding.parameters():
             param.requires_grad = True
 
-    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
+    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor, mask_percentage: Tensor = torch.tensor(0.0)) -> torch.Tensor:
+        encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=mask_percentage) # B, n_latent, n_dim
+        encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=mask_percentage) # B, n_latent, n_dim
+        # program_embeds = self.program_embedding(program_ids) # B, n_dim
+        
+        decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
+        decoded_output_grids = self.autoencoder.decode(encoded_output_grids) # B, H, W
+
+        input_reconstruction_loss = nn.functional.cross_entropy(decoded_input_grids.view(-1, self.config.n_vocab), input_grids.view(-1))
+        output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
+        reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
+        input_predictions = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
+        output_predictions = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+
+        predictions = {
+            "input": input_predictions,
+            "output": output_predictions,
+            "predicted": output_predictions
+        }
+
+        loss_dict = {
+            "reconstruction_loss": reconstruction_loss,
+            "prediction_loss": torch.tensor(0.0, device=input_grids.device),
+            "trajectory_loss": torch.tensor(0.0, device=input_grids.device),
+            "alignment_loss": torch.tensor(0.0, device=input_grids.device)
+        }
+
+        return predictions, loss_dict
+
+    def forward_repl(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
         # tasks is BxNx2xHxW
         encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
         encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=torch.tensor(0, device=output_grids.device)) # B, n_latent, n_dim
@@ -296,8 +284,8 @@ class ProSIPExperimentConfig:
     
     # General training parameters
     seed: int | None = None  # None means random seed
-    batch_size: int = 64
-    max_steps: int = 1_000_000
+    batch_size: int = 44
+    max_steps: int = 1_00_000
     gradient_clip_val: float = 1.0
     accumulate_grad_batches: int = 1
     
@@ -318,9 +306,9 @@ class ProSIPExperimentConfig:
     beta_alignment: float = 0.0
     # Dataset parameters
     dataset: DatasetType = DatasetType.ALL
-    group_by_program: bool = False
+    group_by_program: bool = True
     limit_training_samples: int | None = None  # Limit the number of training samples. None means use all samples.
-    limit_validation_samples: int | None = None  # Limit the number of validation samples. None means use all samples.
+    limit_validation_samples: int | None = 50000  # Limit the number of validation samples. None means use all samples.
     data_multiplier: int = 2  # How many times to repeat the dataset
     
     # Other parameters
@@ -633,20 +621,22 @@ class ProSIPTrainingModule(pl.LightningModule):
 
     def configure_optimizers(self):
         # Get parameters specifically from the program embedding module
-        program_embedding_param_ids = set(id(p) for p in self.model.program_embedding.parameters())
+        # program_embedding_param_ids = set(id(p) for p in self.model.program_embedding.parameters())
 
         # Separate other parameters into decay and no-decay groups
         decay_params_other = []
         nodecay_params_other = []
-        program_embedding_params = []
+        # program_embedding_params = []
 
         for name, param in self.model.named_parameters(): # Iterate over model parameters
             if not param.requires_grad:
                 continue
-
-            param_id = id(param)
-            if param_id in program_embedding_param_ids:
-                program_embedding_params.append(param)
+            
+            if False:
+                pass
+            # param_id = id(param)
+            # if param_id in program_embedding_param_ids:
+            #     program_embedding_params.append(param)
                 # print(f"Found program embedding param: {name}") # Optional: for debugging
             else:
                 # Apply weight decay to matrices (conv kernels, linear weights)
@@ -666,17 +656,17 @@ class ProSIPTrainingModule(pl.LightningModule):
             {'params': decay_params_other, 'lr': main_lr, 'weight_decay': self.experiment_config.weight_decay},
             {'params': nodecay_params_other, 'lr': main_lr, 'weight_decay': 0.0},
             # Group for program embeddings with specific (lower) LR and no weight decay
-            {'params': program_embedding_params, 'lr': embedding_lr, 'weight_decay': 0.0}
+            # {'params': program_embedding_params, 'lr': embedding_lr, 'weight_decay': 0.0}
         ]
 
 
         # Verify parameter counts (optional, for debugging)
-        num_prog_emb = sum(p.numel() for p in program_embedding_params)
-        num_decay = sum(p.numel() for p in decay_params_other)
-        num_nodecay = sum(p.numel() for p in nodecay_params_other)
-        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        print(f"Total Params: {total_params}, ProgEmb: {num_prog_emb}, Decay: {num_decay}, NoDecay: {num_nodecay}")
-        assert total_params == num_prog_emb + num_decay + num_nodecay, "Parameter misallocation in optimizer groups!"
+        # num_prog_emb = sum(p.numel() for p in program_embedding_params)
+        # num_decay = sum(p.numel() for p in decay_params_other)
+        # num_nodecay = sum(p.numel() for p in nodecay_params_other)
+        # total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        # print(f"Total Params: {total_params}, ProgEmb: {num_prog_emb}, Decay: {num_decay}, NoDecay: {num_nodecay}")
+        # assert total_params == num_prog_emb + num_decay + num_nodecay, "Parameter misallocation in optimizer groups!"
 
         optimizer = AdamW(
             optim_groups,

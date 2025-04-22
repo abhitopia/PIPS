@@ -1,0 +1,45 @@
+experiment_config:
+  model_config:
+    n_dim: 256
+    n_head: 4
+    activation: gelu
+    n_vocab: 16
+    n_layer_encoder_latent: 2
+    n_layer_encoder_grid: 2
+    n_latent: 64
+    grid_height: 32
+    grid_width: 32
+    dropout: 0.0
+    rope_base: 10000
+  seed: 2758194162
+  batch_size: 44
+  max_steps: 100000
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 1
+  learning_rate: 0.0001
+  lr_min: 1.0e-06
+  program_embedding_lr_multiplier: 0.1
+  warmup_steps_lr: 1000
+  decay_steps_lr: 99000
+  adamw_betas_1: 0.9
+  adamw_betas_2: 0.999
+  weight_decay: 0.0001
+  beta_reconstruction: 1.0
+  beta_prediction: 1.0
+  beta_trajectory: 1.0
+  beta_alignment: 0.0
+  dataset: ALL
+  group_by_program: true
+  limit_training_samples: null
+  limit_validation_samples: 50000
+  data_multiplier: 2
+  model_src: null
+  train_only_program_embeddings: false
+  freeze_autoencoder: false
+  em_start_epoch: null
+project_config:
+  run_name: bold-whale-314
+  project_name: prosip-test
+  checkpoint_dir: prosip_runs
+  val_check_interval: 1000
+  viz_interval: 1000
