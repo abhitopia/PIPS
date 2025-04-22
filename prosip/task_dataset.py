@@ -718,8 +718,8 @@ class ExampleDataset(Dataset):
                 'program_id': str(example.program_id),
                 'task_id': str(example.task_id),
                 'dataset': str(example.dataset),
-                'color_perm': str(example.color_perm),
-                'transform': str(example.transform),
+                'color_perm': str(example.color_perm.name),
+                'transform': str(example.transform.name),
                 'is_test': bool(example.is_test),
             })
 

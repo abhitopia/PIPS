@@ -26,7 +26,7 @@ from pytorch_lightning.callbacks import LearningRateMonitor
 
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
 from pips.misc.custom_progress_bar import CustomRichProgressBar
-from pips.data import DatasetType
+from pips.data import DatasetType, Example, ColorPermutation, ArrayTransform
 from pips.misc.acceleration_config import AccelerationConfig
 
 from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
@@ -909,28 +909,81 @@ def train(
         ckpt_path=resume_from
     )
 
+def batch_to_examples(batch: tuple) -> List[Example]:
+    """Converts a batch tuple into a list of Example objects."""
+    input_grids, output_grids, _, attributes = batch
+    examples = []
+    batch_size = input_grids.shape[0]
+    
+    for i in range(batch_size):
+        attr = attributes[i]
+        
+        # Directly use the objects from the attributes dict
+        color_perm_obj = ColorPermutation.from_name(attr['color_perm'])
+        transform_obj = ArrayTransform[attr['transform']]
+        
+        # --- Sanity check (optional, can be removed) ---
+        if not isinstance(color_perm_obj, ColorPermutation):
+            raise TypeError(f"Expected ColorPermutation object, got {type(color_perm_obj)}: {color_perm_obj}")
+        if not isinstance(transform_obj, ArrayTransform):
+            raise TypeError(f"Expected ArrayTransform object, got {type(transform_obj)}: {transform_obj}")
+        # --- End Sanity check ---
+
+        example = Example(
+            idx=attr['idx'],
+            input=input_grids[i].cpu().numpy(), 
+            output=output_grids[i].cpu().numpy(),
+            program_id=attr['program_id'],
+            task_id=attr['task_id'],
+            dataset=attr['dataset'],
+            color_perm=color_perm_obj,
+            transform=transform_obj,
+            is_test=attr['is_test']
+        )
+        examples.append(example)
+        
+    return examples
+
 if __name__ == "__main__":
 
     train_loader, val_loader, tokenizer = create_dataloaders(batch_size=64, 
-                                                  data_multiplier=1, 
+                                                  group_by_program=True,
+                                                  data_multiplier=2, 
                                                   ds_type=DatasetType.ALL, 
                                                   padding_idx=15,
                                                   max_grid_height=32, 
                                                   max_grid_width=32,
                                                   num_workers=0,
-                                                  num_val_examples=1000)
+                                                  num_val_examples=10000)
     batch = next(iter(train_loader))
 
     input_grids, output_grids, program_ids, attributes = batch
 
-    print(input_grids.shape)
-    print(output_grids.shape)
-    print(program_ids.shape)
+    print("Input grids shape:", input_grids.shape)
+    print("Output grids shape:", output_grids.shape)
+    print("Program IDs shape:", program_ids.shape) # Note: These might be tokenized IDs
+
+    # print("Length of attributes: ", len(attributes))
+    # for idx, attribute in enumerate(attributes):
+    #     print(f"Attribute {idx}: {attribute}")
+    #     if idx > 4: # Print only first 5 attributes
+    #         print("...")
+    #         break
+            
+
+
+    # Demonstrate the function
+    example_list = batch_to_examples(batch)
+    print(f"\nConverted batch to {len(example_list)} Example objects.")
+
+    from pips.visualization import visualize_example
+    for example in example_list:
+        visualize_example(example)
     # print(attributes)
 
-    prosip_config = ProSIPConfig(program_vocab=len(tokenizer))
+    # prosip_config = ProSIPConfig(program_vocab=len(tokenizer))
 
-    model = ProSIPModel(prosip_config)
+    # model = ProSIPModel(prosip_config)
     # model = torch.torch.compile(
     #             model,
     #             fullgraph=True,
@@ -938,9 +991,9 @@ if __name__ == "__main__":
     #             backend="inductor"
     #         )
 
-    for i in range(10):
-        print(f"Iteration {i}")
-        output = model(input_grids, output_grids, program_ids)
+    # for i in range(10):
+    #     print(f"Iteration {i}")
+    #     output = model(input_grids, output_grids, program_ids)
 
 
     # experiment_config = ProSIPExperimentConfig(batch_size=4)

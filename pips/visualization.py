@@ -25,6 +25,7 @@ COLOR_MAP = {
     7: '#FF851B',  # orange
     8: '#7FDBFF',  # teal
     9: '#870C25',  # brown
+    15: '#FFFFFF',  # white
 }
 
 # Add the missing color from the original ARC definition (not in user selection but standard)
