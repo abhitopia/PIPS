@@ -680,10 +680,19 @@ class LatentAutoEncoder(nn.Module):
         elif isinstance(module, RMSNorm):
             torch.nn.init.ones_(module.scale)
 
-    def encode(self, x: Tensor) -> Tensor:
+    def apply_mask(self, x: Tensor, mask_percentage: Tensor) -> Tensor:
+        x = x.clone()
+        # Create a random tensor with values in the range [0,1) for each element in x.
+        mask = (torch.rand(x.shape, device=x.device, dtype=torch.float32) < mask_percentage) & (x != self.pad_value)
+        x.masked_fill_(mask, self.mask_value)
+        return x
+    
+
+    def encode(self, x: Tensor, mask_percentage: Tensor = torch.tensor(0.0)) -> Tensor:
         # Assume x is [B, H, W]
         B = x.size(0)
         x = x.view(B, self.grid_height * self.grid_width)
+        x = self.apply_mask(x, mask_percentage=mask_percentage)
         x_embd = self.embd(x)  # [B, S, n_dim]
         grid_pos_indices = self.grid_pos_indices.expand(B, -1, -1)
         latent_pos_indices = self.latent_pos_indices.expand(B, -1)
@@ -709,8 +718,8 @@ class LatentAutoEncoder(nn.Module):
         grid_decoded_logits = grid_decoded_logits.view(B, self.grid_height, self.grid_width, -1)
         return grid_decoded_logits
     
-    def forward(self, x: Tensor) -> Tensor:
-        z_e_x = self.encode(x) # [B, n_latent, n_dim]
+    def forward(self, x: Tensor, mask_percentage: Tensor = torch.tensor(0.0)) -> Tensor:
+        z_e_x = self.encode(x, mask_percentage=mask_percentage) # [B, n_latent, n_dim]
         decoded_logits = self.decode(z_e_x)
         return decoded_logits
 
@@ -767,7 +776,7 @@ if __name__ == "__main__":
     # Demonstrate encoding and decoding separately
     with torch.no_grad():
         # Encode input to latent space
-        encoded = model.encode(dummy_input)
+        encoded = model.encode(dummy_input, mask_percentage=torch.tensor(0.1))
         print(f"Encoded latent representation shape: {encoded.shape}")
         
         # Decode latent back to tokens
