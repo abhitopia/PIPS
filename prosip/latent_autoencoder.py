@@ -237,7 +237,12 @@ class SwiGLUFFN(nn.Module):
         # Mark output projection for special scaling
         self.w2 = nn.Linear(hidden_dim, dim, bias=False)
         self.w2.RESCALE_INIT = True
+        self.reset_parameters()
 
+    def reset_parameters(self):
+        self.w1.weight.data.normal_(mean=0.0, std=0.02)
+        self.w3.weight.data.normal_(mean=0.0, std=0.02)
+        self.w2.weight.data.normal_(mean=0.0, std=0.02)
 
     def forward(self, x):
         x = self.w2(F.silu(self.w1(x)) * self.w3(x))
@@ -263,6 +268,10 @@ class RMSNorm(nn.Module):
         super().__init__()
         self.eps = eps
         self.scale = nn.Parameter(torch.ones(dim))
+
+    def reset_parameters(self):
+        # Initialize scale to 1
+        self.scale.data.fill_(1.0)
 
     def forward(self, x: Tensor) -> Tensor:
         """
@@ -302,6 +311,12 @@ class MultiHeadAttention(nn.Module):
         # output projection
         self.c_proj = nn.Linear(n_dim, n_dim, bias=False)
         self.c_proj.RESCALE_INIT = True
+
+    def reset_parameters(self):
+        self.q_proj.weight.data.normal_(mean=0.0, std=0.02)
+        self.k_proj.weight.data.normal_(mean=0.0, std=0.02)
+        self.v_proj.weight.data.normal_(mean=0.0, std=0.02)
+        self.c_proj.weight.data.normal_(mean=0.0, std=0.02)
 
     def get_resampled_positions(self, positions: Tensor, target_length: int) -> Tensor:
         """
@@ -419,6 +434,15 @@ class TransformerBlock(nn.Module):
         self.ff = SwiGLUFFN(dim=d_model, hidden_dim=dim_feedforward if dim_feedforward is not None else 4*d_model)
         self.norm_ff = RMSNorm(dim=d_model)
 
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.mha.reset_parameters()
+        self.ff.reset_parameters()
+        self.norm_context.reset_parameters()
+        self.norm_queries.reset_parameters()
+        self.norm_ff.reset_parameters()
+
     def forward(self, queries, context, positions: Optional[Tensor] = None, attn_mask: Optional[Tensor] = None, kv_cache: Optional[Tuple[Tensor, Tensor]] = None, 
             return_kv_cache: bool = False):
         """
@@ -447,6 +471,14 @@ class Transformer(nn.Module):
         ])
 
         self.rms_out = RMSNorm(d_model) if out_norm else nn.Identity()
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for block in self.blocks:
+            block.reset_parameters()
+
+        if isinstance(self.rms_out, RMSNorm):
+            self.rms_out.reset_parameters()
 
     def forward(self, x, positions=None, attn_mask=None, 
                 kv_cache: Optional[List[Tuple[Tensor, Tensor]]] = None,

@@ -22,16 +22,13 @@ from pytorch_lightning.loggers import WandbLogger
 from pytorch_lightning.tuner.tuning import Tuner
 from pytorch_lightning.callbacks import LearningRateMonitor
 
-
-
 from pips.misc.checkpoint_with_wandb_sync import ModelCheckpointWithWandbSync
 from pips.misc.custom_progress_bar import CustomRichProgressBar
 from pips.data import DatasetType, Example, ColorPermutation, ArrayTransform
 from pips.misc.acceleration_config import AccelerationConfig
 
-# from prosip.grid_autoencoder import GridAutoEncoder, GridAutoEncoderConfig
 from pips.misc.schedule import Schedule
-from prosip.latent_autoencoder import LatentAutoEncoder, LatentAutoEncoderConfig
+from prosip.latent_autoencoder import LatentAutoEncoder, LatentAutoEncoderConfig, Transformer, RotaryPositionalEmbeddings
 from prosip.repl import REPL, REPLConfig
 from prosip.utils import normalize_state_dict, load_model_weights
 from prosip.task_dataset import ExampleDataset, TaskDataset, Tokenizer, worker_init_fn
@@ -45,11 +42,14 @@ class ProSIPConfig:
     n_vocab: int = 16
     n_layer_encoder_latent: int = 2
     n_layer_encoder_grid: int = 2
+    n_layer_program: int = 2
     n_latent: int = 64
+    n_program: int = 4
     grid_height: int = 32
     grid_width: int = 32
     dropout: float = 0.0
     rope_base: float = 10000
+    max_n_latent: int = 256
 
     def __post_init__(self):
         self.padding_idx = self.n_vocab - 1
@@ -80,11 +80,20 @@ class ProSIPModel(nn.Module):
         super().__init__()
         self.config = config
 
-        # self.token_embedding = nn.Embedding(config.n_vocab, config.n_dim)
-        # self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
+        self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
+        rope = RotaryPositionalEmbeddings(config.n_dim // config.n_head, 
+                                          max_seq_len=config.max_n_latent, # I make this fixed for a reason. This is the max sequence length including latent and program embeddings.
+                                          base=config.rope_base)
+
         self.autoencoder = LatentAutoEncoder(config.autoencoder_config)
-        # self.interpreter = REPL(config.repl_config)
+        self.interpreter = Transformer(d_model=config.n_dim, 
+                                       n_layer=config.n_layer_program,
+                                       n_head=config.n_head,
+                                       rope=rope,
+                                       out_norm=False)
         
+        latent_pos_indices = torch.arange(config.max_n_latent).unsqueeze(0)
+        self.register_buffer("latent_pos_indices", latent_pos_indices, persistent=False)
         self.reset_parameters()
         
     def reset_parameters(self):
@@ -93,11 +102,11 @@ class ProSIPModel(nn.Module):
         - Also calls reset_parameters on submodules that have it
         """
         # Initialize embeddings
-        # nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
+        nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
         
         # Call reset_parameters on submodules that have their own implementations
         self.autoencoder.reset_parameters()
-        # self.interpreter.reset_parameters()
+        self.interpreter.reset_parameters()
 
     def freeze_autoencoder(self):
         for param in self.autoencoder.parameters():
@@ -119,76 +128,39 @@ class ProSIPModel(nn.Module):
         for param in self.program_embedding.parameters():
             param.requires_grad = True
 
-    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor, mask_percentage: Tensor = torch.tensor(0.0)) -> torch.Tensor:
+    def forward(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor, mask_percentage: Tensor = torch.tensor(0.0), reconstruct: bool = False, predict: bool = True) -> torch.Tensor:        
         encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=mask_percentage) # B, n_latent, n_dim
-        encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=mask_percentage) # B, n_latent, n_dim
-        # program_embeds = self.program_embedding(program_ids) # B, n_dim
-        
-        decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
-        decoded_output_grids = self.autoencoder.decode(encoded_output_grids) # B, H, W
+        predictions = {}
+        prediction_loss = torch.tensor(0.0, device=input_grids.device)
+        reconstruction_loss = torch.tensor(0.0, device=input_grids.device)
 
-        input_reconstruction_loss = nn.functional.cross_entropy(decoded_input_grids.view(-1, self.config.n_vocab), input_grids.view(-1))
-        output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
-        reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
-        input_predictions = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
-        output_predictions = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+        if predict:
+            B, n_latent, _ = encoded_input_grids.size()
+            total_n_latent = n_latent + self.config.n_program
+            latent_pos_indices = self.latent_pos_indices[:, :total_n_latent].expand(B, -1) # B, total_n_latent
+            program_embeds = self.program_embedding(program_ids).unsqueeze(1).expand(-1, self.config.n_program, -1) # B, n_program, n_dim
+            latent_embeddings = torch.cat([encoded_input_grids, program_embeds], dim=1) # B, total_n_latent, n_dim
+            interpreter_output, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
+            # Extract the last n_latent embeddings
+            last_n_latent_embeddings = interpreter_output[:, :n_latent, :] # B, n_latent, n_dim
+            predicted_output_grids = self.autoencoder.decode(last_n_latent_embeddings) # B, H, W
+            prediction = predicted_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+            prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
+            predictions["prediction"] = prediction
 
-        predictions = {
-            "input": input_predictions,
-            "output": output_predictions,
-            "predicted": output_predictions
-        }
-
-        loss_dict = {
-            "reconstruction_loss": reconstruction_loss,
-            "prediction_loss": torch.tensor(0.0, device=input_grids.device),
-            "trajectory_loss": torch.tensor(0.0, device=input_grids.device),
-            "alignment_loss": torch.tensor(0.0, device=input_grids.device)
-        }
-
-        return predictions, loss_dict
-
-    def forward_repl(self, input_grids: torch.Tensor, output_grids: torch.Tensor, program_ids: torch.Tensor) -> torch.Tensor:
-        # tasks is BxNx2xHxW
-        encoded_input_grids = self.autoencoder.encode(input_grids, mask_percentage=torch.tensor(0, device=input_grids.device)) # B, n_latent, n_dim
-        encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=torch.tensor(0, device=output_grids.device)) # B, n_latent, n_dim
-        program_embeds = self.program_embedding(program_ids) # B, n_dim
-        
-        # Now reshape them to (B, N*n_latent, n_dim)
-        intermediate_embeddings = self.interpreter.forward(encoded_input_grids, program_embeds)
-        last_embeddings = intermediate_embeddings[-1]
-
-        trajectory_loss = vectorized_monotonic_trajectory_loss(intermediate_embeddings, 
-                                                    encoded_input_grids, 
-                                                    encoded_output_grids,
-                                                    margin=self.trajectory_margin)
-
-        decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
-        decoded_output_grids = self.autoencoder.decode(encoded_output_grids) # B, H, W
-        predicted_output_grids = self.autoencoder.decode(last_embeddings)
-
-        # Calculate Cross Entropy Loss between input_grids and decoded_input_grids
-        input_reconstruction_loss = nn.functional.cross_entropy(decoded_input_grids.view(-1, self.config.n_vocab), input_grids.view(-1))
-        output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
-        reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
-        prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
-        latent_alignment_loss = nn.functional.mse_loss(last_embeddings, encoded_output_grids)
-
-        input_predictions = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
-        output_predictions = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
-        predicted_predictions = predicted_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
-
-        predictions = {
-            "input": input_predictions,
-            "output": output_predictions,
-            "predicted": predicted_predictions
-        }
-
+        if reconstruct:
+            encoded_output_grids = self.autoencoder.encode(output_grids, mask_percentage=mask_percentage) # B, n_latent, n_dim
+            decoded_input_grids = self.autoencoder.decode(encoded_input_grids)
+            decoded_output_grids = self.autoencoder.decode(encoded_output_grids)
+            input_reconstruction_loss = nn.functional.cross_entropy(decoded_input_grids.view(-1, self.config.n_vocab), input_grids.view(-1))
+            output_reconstruction_loss = nn.functional.cross_entropy(decoded_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
+            reconstruction_loss = (input_reconstruction_loss + output_reconstruction_loss) / 2
+            predictions["input"] = decoded_input_grids.argmax(dim=-1)  # Shape: [B, H, W]
+            predictions["output"] = decoded_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
+  
         loss_dict = {
             "reconstruction_loss": reconstruction_loss,
             "prediction_loss": prediction_loss,
-            "trajectory_loss": trajectory_loss,
-            "alignment_loss": latent_alignment_loss
         }
 
         return predictions, loss_dict
@@ -285,7 +257,7 @@ class ProSIPExperimentConfig:
     
     # General training parameters
     seed: int | None = None  # None means random seed
-    batch_size: int = 44
+    batch_size: int = 4
     max_steps: int = 1_00_000
     gradient_clip_val: float = 1.0
     accumulate_grad_batches: int = 1
@@ -298,13 +270,11 @@ class ProSIPExperimentConfig:
     decay_steps_lr: int | None = None
     adamw_betas_1: float = 0.9
     adamw_betas_2: float = 0.999
-    weight_decay: float = 1e-4  # Consistent with Dalle-E paper
+    weight_decay: float = 0.0  # Consistent with Dalle-E paper
     
     # Commitment loss parameters
     beta_reconstruction: float = 1.0
     beta_prediction: float = 1.0
-    beta_trajectory: float = 1.0
-    beta_alignment: float = 0.0
     # Dataset parameters
     dataset: DatasetType = DatasetType.ALL
     group_by_program: bool = True
@@ -334,6 +304,10 @@ class ProSIPExperimentConfig:
         self.warmup_steps_lr = min(self.warmup_steps_lr, self.max_steps)
         if self.decay_steps_lr is None:
             self.decay_steps_lr = self.max_steps - self.warmup_steps_lr
+
+        if self.freeze_autoencoder:
+            print("NOTE: Setting beta_reconstruction to 0.0 because autoencoder is frozen")
+            self.beta_reconstruction = 0.0
 
     def set_em_start_step(self, dataloader_length: int):
         if self.em_start_epoch is None:
@@ -424,6 +398,10 @@ class ProSIPTrainingModule(pl.LightningModule):
             )
         else:
             print("Model compilation disabled; skipping torch.compile.")
+
+        if self.experiment_config.freeze_autoencoder:
+            print("NOTE: Freezing autoencoder")
+            self.model.freeze_autoencoder()
     
     def on_train_start(self):
         super().on_train_start()
@@ -533,31 +511,31 @@ class ProSIPTrainingModule(pl.LightningModule):
     def forward(self, input_grids: Tensor, output_grids: Tensor, program_ids: Tensor,
                 beta_reconstruction: Tensor = torch.tensor(1.0), 
                 beta_prediction: Tensor = torch.tensor(1.0),
-                beta_trajectory: Tensor = torch.tensor(1.0),
-                beta_alignment: Tensor = torch.tensor(0.0),
-                mask_pct: Tensor = torch.tensor(0.0)):
+                mask_pct: Tensor = torch.tensor(0.0),
+                reconstruct: bool = True,
+                predict: bool = True):
         
         # Forward pass with provided scheduled parameters.
-        predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids, mask_pct)
-        input_token_accuracy, input_sample_accuracy = self.compute_accuracies(predictions["input"], input_grids)
-        output_token_accuracy, output_sample_accuracy = self.compute_accuracies(predictions["output"], output_grids)
-        prediction_token_accuracy, prediction_sample_accuracy = self.compute_accuracies(predictions["predicted"], output_grids) 
+        predictions, loss_dict = self.model.forward(input_grids, output_grids, program_ids, mask_pct, reconstruct=reconstruct, predict=predict)
+        accuracy_dict = {}
+
+        for pred_type, pred_tensor in predictions.items():
+            target = input_grids if pred_type == "input" else output_grids
+            token_accuracy, sample_accuracy = self.compute_accuracies(pred_tensor, target)
+            accuracy_dict[f"token_accuracy({pred_type})"] = token_accuracy
+            accuracy_dict[f"sample_accuracy({pred_type})"] = sample_accuracy
         
         # Compute total loss in a way that maintains the computational graph.
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper).
         raw_losses = {
             'loss(Reconstruction)': loss_dict['reconstruction_loss'],
             'loss(Prediction)': loss_dict['prediction_loss'],
-            'loss(Trajectory)': loss_dict['trajectory_loss'],
-            'loss(Alignment)': loss_dict['alignment_loss']
         }
         
         # Compute weighted losses for total loss.
         weighted_losses = {
             'loss(Reconstruction)': raw_losses['loss(Reconstruction)'] * beta_reconstruction,
             'loss(Prediction)': raw_losses['loss(Prediction)'] * beta_prediction,
-            'loss(Trajectory)': raw_losses['loss(Trajectory)'] * beta_trajectory,
-            'loss(Alignment)': raw_losses['loss(Alignment)'] * beta_alignment
         }
         
         total_loss = sum(weighted_losses.values())
@@ -566,12 +544,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         return predictions, {
             'loss': total_loss,
             **raw_losses,
-            'token_accuracy(Input)': input_token_accuracy,
-            'sample_accuracy(Input)': input_sample_accuracy,
-            'token_accuracy(Output)': output_token_accuracy,
-            'sample_accuracy(Output)': output_sample_accuracy,
-            'token_accuracy(Prediction)': prediction_token_accuracy,
-            'sample_accuracy(Prediction)': prediction_sample_accuracy,
+            **accuracy_dict
         }
 
     def training_step(self, batch, batch_idx):
@@ -580,9 +553,7 @@ class ProSIPTrainingModule(pl.LightningModule):
 
         beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
-        beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
-        beta_alignment = torch.tensor(self.experiment_config.beta_alignment, device=input_grids.device)
-
+     
         max_mask_pct = self.max_mask_pct_schedule(self.trainer.global_step)
         mask_pct = torch.empty(1, device=input_grids.device).uniform_(0.0, max_mask_pct)[0]
 
@@ -593,15 +564,13 @@ class ProSIPTrainingModule(pl.LightningModule):
             program_ids=program_ids,
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
-            beta_trajectory=beta_trajectory,
-            beta_alignment=beta_alignment,
-            mask_pct=mask_pct
+            mask_pct=mask_pct,
+            reconstruct=False if self.experiment_config.freeze_autoencoder else True,
+            predict=True
         )
 
         output_dict['beta(Reconstruction)'] = beta_reconstruction
         output_dict['beta(Prediction)'] = beta_prediction
-        output_dict['beta(Trajectory)'] = beta_trajectory
-        output_dict['beta(Alignment)'] = beta_alignment
         output_dict['percent(MASK)'] = mask_pct
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
@@ -617,8 +586,6 @@ class ProSIPTrainingModule(pl.LightningModule):
         # For validation, scheduled values should be passed as provided (e.g., max_pct_mask can be set to 0 for no masking).
         beta_reconstruction = torch.tensor(self.experiment_config.beta_reconstruction, device=input_grids.device)
         beta_prediction = torch.tensor(self.experiment_config.beta_prediction, device=input_grids.device)
-        beta_trajectory = torch.tensor(self.experiment_config.beta_trajectory, device=input_grids.device)
-        beta_alignment = torch.tensor(self.experiment_config.beta_alignment, device=input_grids.device)
 
         predictions,output_dict = self(
             input_grids=input_grids,
@@ -626,9 +593,9 @@ class ProSIPTrainingModule(pl.LightningModule):
             program_ids=program_ids,
             beta_reconstruction=beta_reconstruction,
             beta_prediction=beta_prediction,
-            beta_trajectory=beta_trajectory,
-            beta_alignment=beta_alignment,
-            mask_pct=torch.tensor(0.0, device=input_grids.device)
+            mask_pct=torch.tensor(0.0, device=input_grids.device),
+            reconstruct=False if self.experiment_config.freeze_autoencoder else True,
+            predict=True
         )
 
         self.log_metrics(output_dict, 'val', batch[0].size(0))
@@ -639,23 +606,21 @@ class ProSIPTrainingModule(pl.LightningModule):
 
     def configure_optimizers(self):
         # Get parameters specifically from the program embedding module
-        # program_embedding_param_ids = set(id(p) for p in self.model.program_embedding.parameters())
+        program_embedding_param_ids = set(id(p) for p in self.model.program_embedding.parameters())
 
         # Separate other parameters into decay and no-decay groups
         decay_params_other = []
         nodecay_params_other = []
-        # program_embedding_params = []
+        program_embedding_params = []
 
         for name, param in self.model.named_parameters(): # Iterate over model parameters
             if not param.requires_grad:
                 continue
             
-            if False:
-                pass
-            # param_id = id(param)
-            # if param_id in program_embedding_param_ids:
-            #     program_embedding_params.append(param)
-                # print(f"Found program embedding param: {name}") # Optional: for debugging
+            param_id = id(param)
+            if param_id in program_embedding_param_ids:
+                program_embedding_params.append(param)
+                print(f"Found program embedding param: {name}") # Optional: for debugging
             else:
                 # Apply weight decay to matrices (conv kernels, linear weights)
                 if param.dim() >= 2:
@@ -674,17 +639,17 @@ class ProSIPTrainingModule(pl.LightningModule):
             {'params': decay_params_other, 'lr': main_lr, 'weight_decay': self.experiment_config.weight_decay},
             {'params': nodecay_params_other, 'lr': main_lr, 'weight_decay': 0.0},
             # Group for program embeddings with specific (lower) LR and no weight decay
-            # {'params': program_embedding_params, 'lr': embedding_lr, 'weight_decay': 0.0}
+            {'params': program_embedding_params, 'lr': embedding_lr, 'weight_decay': 0.0}
         ]
 
 
         # Verify parameter counts (optional, for debugging)
-        # num_prog_emb = sum(p.numel() for p in program_embedding_params)
-        # num_decay = sum(p.numel() for p in decay_params_other)
-        # num_nodecay = sum(p.numel() for p in nodecay_params_other)
-        # total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
-        # print(f"Total Params: {total_params}, ProgEmb: {num_prog_emb}, Decay: {num_decay}, NoDecay: {num_nodecay}")
-        # assert total_params == num_prog_emb + num_decay + num_nodecay, "Parameter misallocation in optimizer groups!"
+        num_prog_emb = sum(p.numel() for p in program_embedding_params)
+        num_decay = sum(p.numel() for p in decay_params_other)
+        num_nodecay = sum(p.numel() for p in nodecay_params_other)
+        total_params = sum(p.numel() for p in self.model.parameters() if p.requires_grad)
+        print(f"Total Params: {total_params}, ProgEmb: {num_prog_emb}, Decay: {num_decay}, NoDecay: {num_nodecay}")
+        assert total_params == num_prog_emb + num_decay + num_nodecay, "Parameter misallocation in optimizer groups!"
 
         optimizer = AdamW(
             optim_groups,
@@ -824,6 +789,8 @@ def train(
     # Only add checkpoint callbacks if validation is enabled
     callbacks = [ CustomRichProgressBar(), lr_monitor]
 
+    prediction_mode = experiment_config.beta_prediction > 0.0
+
     # if debug_mode:
     #     gradient_check_callback = GradientCheckCallback()
     #     callbacks.append(gradient_check_callback)
@@ -832,11 +799,11 @@ def train(
         callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='Prediction/loss_val',
+                monitor='Prediction/loss_val' if prediction_mode else 'Reconstruction/loss_val',
                 save_top_k=3,
                 mode='min',
                 auto_insert_metric_name=False,
-                filename='best-step{step:07d}-Loss{Prediction/loss_val:.4f}',
+                filename='best-step{step:07d}-Loss{Prediction/loss_val:.4f}' if prediction_mode else 'best-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             ),
             ModelCheckpointWithWandbSync(
@@ -846,7 +813,7 @@ def train(
                 save_top_k=2,
                 every_n_train_steps=20 if debug_mode else val_check_interval,
                 auto_insert_metric_name=False,
-                filename='backup-step{step:07d}-Loss{Prediction/loss_val:.4f}',
+                filename='backup-step{step:07d}-Loss{Prediction/loss_val:.4f}' if prediction_mode else 'backup-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             )
         ])
