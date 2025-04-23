@@ -45,6 +45,7 @@ class ProSIPConfig:
     n_layer_program: int = 2
     n_latent: int = 64
     n_program: int = 4
+    n_iter: int = 1
     grid_height: int = 32
     grid_width: int = 32
     dropout: float = 0.0
@@ -140,9 +141,11 @@ class ProSIPModel(nn.Module):
             latent_pos_indices = self.latent_pos_indices[:, :total_n_latent].expand(B, -1) # B, total_n_latent
             program_embeds = self.program_embedding(program_ids).unsqueeze(1).expand(-1, self.config.n_program, -1) # B, n_program, n_dim
             latent_embeddings = torch.cat([encoded_input_grids, program_embeds], dim=1) # B, total_n_latent, n_dim
-            interpreter_output, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
+
+            for _ in range(self.config.n_iter):
+                latent_embeddings, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
             # Extract the last n_latent embeddings
-            last_n_latent_embeddings = interpreter_output[:, :n_latent, :] # B, n_latent, n_dim
+            last_n_latent_embeddings = latent_embeddings[:, :n_latent, :] # B, n_latent, n_dim
             predicted_output_grids = self.autoencoder.decode(last_n_latent_embeddings) # B, H, W
             prediction = predicted_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
             prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
