@@ -32,7 +32,7 @@ experiment_config:
   group_by_program: false
   limit_training_samples: null
   limit_validation_samples: null
-  data_multiplier: 3
+  data_multiplier: 4
   mask_pct: 0.0
   mask_transition_steps: 10000
   model_src: v1/backup/100000
