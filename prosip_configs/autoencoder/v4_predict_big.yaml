@@ -31,7 +31,7 @@ experiment_config:
   dataset: ALL
   group_by_program: true
   limit_training_samples: null
-  limit_validation_samples: null
+  limit_validation_samples: 50000
   data_multiplier: 2
   mask_pct: 0.0
   mask_transition_steps: 10000
@@ -40,7 +40,7 @@ experiment_config:
   freeze_autoencoder: true
   em_start_epoch: null
 project_config:
-  run_name: v3_predict_big
+  run_name: v4_predict_big
   project_name: prosip-auto
   checkpoint_dir: prosip_runs
   val_check_interval: 1000
