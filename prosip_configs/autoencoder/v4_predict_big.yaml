@@ -7,7 +7,7 @@ experiment_config:
     n_vocab: 16
     n_layer_encoder_grid: 2
     n_layer_encoder_latent: 2
-    n_layer_program: 6
+    n_layer_program: 4
     n_program: 4
     grid_height: 32
     grid_width: 32
