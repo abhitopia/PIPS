@@ -43,5 +43,5 @@ project_config:
   run_name: v2
   project_name: prosip-auto
   checkpoint_dir: prosip_runs
-  val_check_interval: 1000
-  viz_interval: 1000
+  val_check_interval: 460
+  viz_interval: 460
