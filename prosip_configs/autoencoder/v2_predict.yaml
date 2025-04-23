@@ -18,8 +18,8 @@ experiment_config:
   max_steps: 100000
   gradient_clip_val: 1.0
   accumulate_grad_batches: 1
-  learning_rate: 0.0006
-  lr_min: 6.0e-06
+  learning_rate: 0.0007
+  lr_min: 7.5e-06
   program_embedding_lr_multiplier: 1.0
   warmup_steps_lr: 1000
   decay_steps_lr: 99000
