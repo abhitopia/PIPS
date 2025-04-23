@@ -28,8 +28,6 @@ experiment_config:
   weight_decay: 0.0001
   beta_reconstruction: 0.0
   beta_prediction: 1.0
-  beta_trajectory: 0.0
-  beta_alignment: 0.0
   dataset: ALL_SMALL
   group_by_program: true
   limit_training_samples: null
