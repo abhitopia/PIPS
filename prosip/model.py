@@ -723,9 +723,9 @@ def train(
     acceleration: AccelerationConfig | None = None,
     lr_find: bool = False,
     num_workers: int = 8,
-    grad_log_interval: int = 100,
-    visualization_interval: int = 100,
-    num_grids_to_visualize: int = 4
+    # grad_log_interval: int = 100,
+    # visualization_interval: int = 100,
+    # num_grids_to_visualize: int = 4
 ) -> None:
     """Train a DVAE model with the given configuration."""
     
@@ -757,6 +757,9 @@ def train(
         max_grid_width=experiment_config.model_config.grid_width,
         num_workers=num_workers
     )
+
+    if not validation_disabled and val_check_interval > len(train_loader):
+        val_check_interval = len(train_loader)
 
     experiment_config.model_config.program_vocab = len(tokenizer)
     experiment_config.set_em_start_step(len(train_loader))

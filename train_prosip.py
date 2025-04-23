@@ -49,7 +49,6 @@ def export_default_train_args(output_path: Path = typer.Argument(..., help="Path
         'project_name': 'prosip-test',
         'checkpoint_dir': 'prosip_runs',
         'val_check_interval': 1000,
-        'viz_interval': 1000,
     }
 
     # Write to YAML file
@@ -109,11 +108,11 @@ def new_train(
         acceleration=acceleration_config,
         lr_find=lr_find,
         wandb_logging=True,
-        grad_log_interval=1000,
-        visualization_interval=project_config['viz_interval'],
-        num_grids_to_visualize=4,
         num_workers=num_workers,
         resume_from=None
+        # grad_log_interval=1000,
+        # visualization_interval=project_config['viz_interval'],
+        # num_grids_to_visualize=4,
     )
 
 if __name__ == '__main__':
