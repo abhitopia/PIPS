@@ -8,6 +8,7 @@ experiment_config:
     n_layer_encoder_grid: 2
     n_layer_encoder_latent: 2
     n_layer_program: 4
+    n_iter: 3
     n_program: 4
     grid_height: 32
     grid_width: 32
@@ -35,12 +36,12 @@ experiment_config:
   data_multiplier: 2
   mask_pct: 0.0
   mask_transition_steps: 10000
-  model_src: v2/backup/51060
+  model_src: v4_predict_big/backup/43008
   train_only_program_embeddings: false
   freeze_autoencoder: true
   em_start_epoch: null
 project_config:
-  run_name: v4_predict_big
+  run_name: v5_predict_big
   project_name: prosip-auto
   checkpoint_dir: prosip_runs
   val_check_interval: 1000
