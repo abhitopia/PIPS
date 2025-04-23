@@ -36,7 +36,7 @@ experiment_config:
   data_multiplier: 2
   mask_pct: 0.0
   mask_transition_steps: 10000
-  model_src: v4_predict_big/backup/43008
+  model_src: v4_predict_big/best/43008
   train_only_program_embeddings: false
   freeze_autoencoder: true
   em_start_epoch: null
