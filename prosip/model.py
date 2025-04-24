@@ -138,14 +138,13 @@ class ProSIPModel(nn.Module):
 
         if predict:
             B, n_latent, _ = encoded_input_grids.size()
-            total_n_latent = n_latent + self.config.n_program
             program_embeds = self.program_embedding(program_ids).unsqueeze(1).expand(-1, self.config.n_program, -1) # B, n_program, n_dim
             latent_embeddings = torch.cat([encoded_input_grids, program_embeds], dim=1) # B, total_n_latent, n_dim
 
             for iter_idx in range(self.config.n_iter):
-                latent_pos_indices = self.latent_pos_indices[:, :(total_n_latent+iter_idx+1)].expand(B, -1) # B, total_n_latent
                 iter_embed = self.iter_embedding(torch.tensor([iter_idx], device=input_grids.device)).expand(B, -1).unsqueeze(1) 
                 latent_embeddings = torch.cat([latent_embeddings, iter_embed], dim=1)
+                latent_pos_indices = self.latent_pos_indices[:, :latent_embeddings.size(1)].expand(B, -1) # B, total_n_latent
                 latent_embeddings, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
             # Extract the last n_latent embeddings
             last_n_latent_embeddings = latent_embeddings[:, :n_latent, :] # B, n_latent, n_dim
