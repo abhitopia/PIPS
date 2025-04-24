@@ -82,6 +82,7 @@ class ProSIPModel(nn.Module):
         self.config = config
 
         self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
+        self.iter_embedding = nn.Embedding(12, config.n_dim)
         rope = RotaryPositionalEmbeddings(config.n_dim // config.n_head, 
                                           max_seq_len=config.max_n_latent, # I make this fixed for a reason. This is the max sequence length including latent and program embeddings.
                                           base=config.rope_base)
@@ -104,7 +105,7 @@ class ProSIPModel(nn.Module):
         """
         # Initialize embeddings
         nn.init.normal_(self.program_embedding.weight, mean=0.0, std=0.02)
-        
+        nn.init.normal_(self.iter_embedding.weight, mean=0.0, std=0.02)
         # Call reset_parameters on submodules that have their own implementations
         self.autoencoder.reset_parameters()
         self.interpreter.reset_parameters()
@@ -142,7 +143,9 @@ class ProSIPModel(nn.Module):
             program_embeds = self.program_embedding(program_ids).unsqueeze(1).expand(-1, self.config.n_program, -1) # B, n_program, n_dim
             latent_embeddings = torch.cat([encoded_input_grids, program_embeds], dim=1) # B, total_n_latent, n_dim
 
-            for _ in range(self.config.n_iter):
+            for iter_idx in range(self.config.n_iter):
+                iter_embed = self.iter_embedding(torch.tensor([iter_idx], device=input_grids.device)).expand(B, -1).unsqueeze(1) 
+                latent_embeddings = torch.cat([latent_embeddings, iter_embed], dim=1)
                 latent_embeddings, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
             # Extract the last n_latent embeddings
             last_n_latent_embeddings = latent_embeddings[:, :n_latent, :] # B, n_latent, n_dim
