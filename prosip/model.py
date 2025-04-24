@@ -138,17 +138,27 @@ class ProSIPModel(nn.Module):
 
         if predict:
             B, n_latent, _ = encoded_input_grids.size()
-            program_embeds = self.program_embedding(program_ids).unsqueeze(1).expand(-1, self.config.n_program, -1) # B, n_program, n_dim
-            latent_embeddings = torch.cat([encoded_input_grids, program_embeds], dim=1) # B, total_n_latent, n_dim
+            program_embeds = self.program_embedding(program_ids).unsqueeze(1) # B, 1, n_dim
+            latent_embeddings = encoded_input_grids # B, n_latent, n_dim
+            latent_pos_indices = self.latent_pos_indices[:, :n_latent].expand(B, -1) # B, total_n_latent
 
             for iter_idx in range(self.config.n_iter):
-                iter_embed = self.iter_embedding(torch.tensor([iter_idx], device=input_grids.device)).expand(B, -1).unsqueeze(1) 
-                latent_embeddings = torch.cat([latent_embeddings, iter_embed], dim=1)
-                latent_pos_indices = self.latent_pos_indices[:, :latent_embeddings.size(1)].expand(B, -1) # B, total_n_latent
-                latent_embeddings, _ = self.interpreter.forward(latent_embeddings, latent_pos_indices) # B, total_n_latent, n_dim
-            # Extract the last n_latent embeddings
-            last_n_latent_embeddings = latent_embeddings[:, :n_latent, :] # B, n_latent, n_dim
-            predicted_output_grids = self.autoencoder.decode(last_n_latent_embeddings) # B, H, W
+                iter_embed = self.iter_embedding(torch.tensor([iter_idx], device=input_grids.device)).unsqueeze(0) # Shape: 1, 1, n_dim
+
+                # Create conditioning embedding: add program and iteration info
+                # Unsqueeze to allow broadcasting addition over the n_latent dimension
+                conditioning_embed = (program_embeds + iter_embed) # Shape: B, 1, n_dim
+
+                # Add conditioning to the current latent state
+                conditioned_latents = latent_embeddings + conditioning_embed # Shape: B, n_latent, n_dim
+
+                # Pass through the interpreter. Crucially, the sequence length is n_latent.
+                # Ensure the interpreter's RoPE is configured for max_seq_len >= n_latent
+                latent_embeddings, _ = self.interpreter.forward(conditioned_latents, latent_pos_indices) # Output shape: B, n_latent, n_dim
+
+            # The final state after iterations is the predicted latent state
+            predicted_output_latents = latent_embeddings # B, n_latent, n_dim
+            predicted_output_grids = self.autoencoder.decode(predicted_output_latents) # B, H, W, n_vocab
             prediction = predicted_output_grids.argmax(dim=-1)  # Shape: [B, H, W]
             prediction_loss = nn.functional.cross_entropy(predicted_output_grids.view(-1, self.config.n_vocab), output_grids.view(-1))
             predictions["prediction"] = prediction
@@ -580,7 +590,7 @@ class ProSIPTrainingModule(pl.LightningModule):
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
         # Calculate and log dataset-specific accuracies
-        self.data_accuracy(predictions, output_grids, input_grids, attributes, 'train')
+        # self.data_accuracy(predictions, output_grids, input_grids, attributes, 'train')
 
         return output_dict
 
