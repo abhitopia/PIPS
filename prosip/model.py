@@ -82,7 +82,7 @@ class ProSIPModel(nn.Module):
         self.config = config
 
         self.program_embedding = nn.Embedding(config.program_vocab, config.n_dim)
-        self.iter_embedding = nn.Embedding(12, config.n_dim)
+        self.iter_embedding = nn.Embedding(24, config.n_dim)
         rope = RotaryPositionalEmbeddings(config.n_dim // config.n_head, 
                                           max_seq_len=config.max_n_latent, # I make this fixed for a reason. This is the max sequence length including latent and program embeddings.
                                           base=config.rope_base)
