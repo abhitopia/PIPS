@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
-from torch.optim import AdamW
+from torch.optim import AdamW, Optimizer
 from torch.optim.lr_scheduler import LambdaLR
 from torch.utils.data import DataLoader
 from torch import Tensor
@@ -286,6 +286,8 @@ class ProSIPExperimentConfig:
     adamw_betas_1: float = 0.9
     adamw_betas_2: float = 0.999
     weight_decay: float = 0.0  # Consistent with Dalle-E paper
+    noise_eta: float = 0.3 # 0.01, 0.3, 1.0 are reasonable values
+    noise_gamma: float = 0.55
     
     # Commitment loss parameters
     beta_reconstruction: float = 1.0
@@ -593,6 +595,24 @@ class ProSIPTrainingModule(pl.LightningModule):
         # self.data_accuracy(predictions, output_grids, input_grids, attributes, 'train')
 
         return output_dict
+    
+
+    def on_before_optimizer_step(self, optimizer):
+        # Inject noise only for AdamW
+        if isinstance(optimizer, Optimizer):
+            # Compute annealed noise scale σ_t
+            t = self.trainer.global_step
+            sigma_t = self.experiment_config.noise_eta / ((1 + t) ** self.experiment_config.noise_gamma)  # Annealed schedule :contentReference[oaicite:5]{index=5}
+            
+            # Log the noise scale
+            self.log('Hyperparameters/noise_scale', sigma_t, on_step=True, on_epoch=False, logger=True)
+
+            for group in optimizer.param_groups:
+                for p in group['params']:
+                    if p.grad is not None:
+                        # Add Gaussian noise to gradients
+                        noise = torch.randn_like(p.grad) * sigma_t
+                        p.grad.add_(noise)
 
     def validation_step(self, batch, batch_idx):
         # torch.compiler.cudagraph_mark_step_begin()
@@ -817,11 +837,11 @@ def train(
         callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='Prediction/loss_val' if prediction_mode else 'Reconstruction/loss_val',
+                monitor='Prediction/sample_accuracy_val' if prediction_mode else 'Reconstruction/loss_val',
                 save_top_k=3,
                 mode='min',
                 auto_insert_metric_name=False,
-                filename='best-step{step:07d}-Loss{Prediction/loss_val:.4f}' if prediction_mode else 'best-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
+                filename='best-step{step:07d}-Acc{Prediction/sample_accuracy_val:.4f}' if prediction_mode else 'best-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             ),
             ModelCheckpointWithWandbSync(
@@ -831,7 +851,7 @@ def train(
                 save_top_k=2,
                 every_n_train_steps=20 if debug_mode else val_check_interval,
                 auto_insert_metric_name=False,
-                filename='backup-step{step:07d}-Loss{Prediction/loss_val:.4f}' if prediction_mode else 'backup-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
+                filename='backup-step{step:07d}-Acc{Prediction/sample_accuracy_val:.4f}' if prediction_mode else 'backup-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             )
         ])
