@@ -604,7 +604,7 @@ class ProSIPTrainingModule(pl.LightningModule):
             sigma_t = self.experiment_config.noise_eta / ((1 + t) ** self.experiment_config.noise_gamma)  # Annealed schedule :contentReference[oaicite:5]{index=5}
             
             # Log the noise scale
-            self.log('Hyperparameters/noise_scale', sigma_t, on_step=True, on_epoch=False, logger=True)
+            self.log('trainer/noise_scale', sigma_t, on_step=True, on_epoch=False, logger=True)
 
             for group in optimizer.param_groups:
                 for p in group['params']:
