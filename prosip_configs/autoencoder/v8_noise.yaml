@@ -42,7 +42,7 @@ experiment_config:
   freeze_autoencoder: true
   em_start_epoch: null
 project_config:
-  run_name: v8_noise
+  run_name: v8_noise_v1
   project_name: prosip-auto
   checkpoint_dir: prosip_runs
   val_check_interval: 1000

@@ -544,14 +544,14 @@ class ProSIPTrainingModule(pl.LightningModule):
         # Compute total loss in a way that maintains the computational graph.
         # Scale the KLD losses by the number of latents (similar to Dalle-E paper).
         raw_losses = {
-            'loss(Reconstruction)': loss_dict['reconstruction_loss'],
-            'loss(Prediction)': loss_dict['prediction_loss'],
+            'loss(reconstruction)': loss_dict['reconstruction_loss'],
+            'loss(prediction)': loss_dict['prediction_loss'],
         }
         
         # Compute weighted losses for total loss.
         weighted_losses = {
-            'loss(Reconstruction)': raw_losses['loss(Reconstruction)'] * beta_reconstruction,
-            'loss(Prediction)': raw_losses['loss(Prediction)'] * beta_prediction,
+            'loss(reconstruction)': raw_losses['loss(reconstruction)'] * beta_reconstruction,
+            'loss(prediction)': raw_losses['loss(prediction)'] * beta_prediction,
         }
         
         total_loss = sum(weighted_losses.values())
@@ -585,8 +585,8 @@ class ProSIPTrainingModule(pl.LightningModule):
             predict=True
         )
 
-        output_dict['beta(Reconstruction)'] = beta_reconstruction
-        output_dict['beta(Prediction)'] = beta_prediction
+        output_dict['beta(reconstruction)'] = beta_reconstruction
+        output_dict['beta(prediction)'] = beta_prediction
         output_dict['percent(MASK)'] = mask_pct
         self.log_metrics(output_dict, 'train', batch[0].size(0))
         
@@ -836,11 +836,11 @@ def train(
         callbacks.extend([
             ModelCheckpointWithWandbSync(
                 wandb_model_suffix="best",
-                monitor='Prediction/sample_accuracy_val' if prediction_mode else 'Reconstruction/loss_val',
+                monitor='prediction/sample_accuracy_val' if prediction_mode else 'reconstruction/loss_val',
                 save_top_k=3,
                 mode='min',
                 auto_insert_metric_name=False,
-                filename='best-step{step:07d}-Acc{Prediction/sample_accuracy_val:.4f}' if prediction_mode else 'best-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
+                filename='best-step{step:07d}-Acc{prediction/sample_accuracy_val:.4f}' if prediction_mode else 'best-step{step:07d}-Loss{reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             ),
             ModelCheckpointWithWandbSync(
@@ -850,7 +850,7 @@ def train(
                 save_top_k=2,
                 every_n_train_steps=20 if debug_mode else val_check_interval,
                 auto_insert_metric_name=False,
-                filename='backup-step{step:07d}-Acc{Prediction/sample_accuracy_val:.4f}' if prediction_mode else 'backup-step{step:07d}-Loss{Reconstruction/loss_val:.4f}',
+                filename='backup-step{step:07d}-Acc{prediction/sample_accuracy_val:.4f}' if prediction_mode else 'backup-step{step:07d}-Loss{reconstruction/loss_val:.4f}',
                 wandb_verbose=debug_mode
             )
         ])
