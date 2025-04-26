@@ -44,7 +44,6 @@ class ProSIPConfig:
     n_layer_encoder_grid: int = 2
     n_layer_program: int = 2
     n_latent: int = 64
-    n_program: int = 4
     n_iter: int = 1
     grid_height: int = 32
     grid_width: int = 32
